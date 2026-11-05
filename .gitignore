@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tsbuildinfo
+*.vsix
+.DS_Store
+artifacts/
+.scratch/
+packages/cli/test/fixtures/tmp-*/

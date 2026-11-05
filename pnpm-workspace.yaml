@@ -1,0 +1,13 @@
+packages:
+  - "packages/*"
+  - examples/basic
+
+# esbuild's install script only verifies a prebuilt binary and vsce-sign downloads a signing tool;
+# neither is needed to bundle or package, so neither build script runs.
+ignoredBuiltDependencies:
+  - "@vscode/vsce-sign"
+  - esbuild
+
+# No hidden hoisting into node_modules/.pnpm/node_modules: pnpm's bin shims put that folder on
+# NODE_PATH, which would let a test project in a temp folder resolve @stateward/* by accident.
+hoist: false

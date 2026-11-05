@@ -1,0 +1,41 @@
+{
+  "name": "@stateward/plugin-react",
+  "version": "1.0.0",
+  "description": "stateward rules for React: react effects and memoized components that do not rerun on every render.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/khoing1111/ts-stateward.git",
+    "directory": "packages/plugin-react"
+  },
+  "homepage": "https://github.com/khoing1111/ts-stateward/tree/main/packages/plugin-react#readme",
+  "bugs": {
+    "url": "https://github.com/khoing1111/ts-stateward/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/test",
+    "!dist/**/*.map",
+    "!dist/**/*.tsbuildinfo"
+  ],
+  "dependencies": {
+    "@stateward/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "react": "^19.3.1"
+  }
+}

@@ -1,0 +1,363 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`init --ci github > runs on pushes to the default branch (origin/HEAD), and on every pull request 1`] = `
+"# Written by \`stateward init --ci github\`.
+#
+# The install step needs stateward and its packs in your project's devDependencies
+# (\`npm install --save-dev stateward\`, and the packs \`init\` named).
+name: stateward
+
+on:
+  pull_request:
+  push:
+    branches: [develop]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install
+      # Stateward re-checks only the files that changed since the last run. The cache is saved
+      # under a new key each run (the commit), and the newest earlier one is restored.
+      - uses: actions/cache/restore@v4
+        with:
+          path: node_modules/.cache/stateward
+          key: stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('package.json') }}-\${{ hashFiles('stateward.config.*') }}-\${{ github.sha }}
+          restore-keys: |
+            stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('package.json') }}-\${{ hashFiles('stateward.config.*') }}-
+            stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('package.json') }}-
+      - run: npx --no stateward check --format github
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: node_modules/.cache/stateward
+          key: stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('package.json') }}-\${{ hashFiles('stateward.config.*') }}-\${{ github.sha }}
+"
+`;
+
+exports[`init --ci github > takes the Node version from engines.node, else .nvmrc, else .node-version, else 22 1`] = `
+"# Written by \`stateward init --ci github\`.
+#
+# The install step needs stateward and its packs in your project's devDependencies
+# (\`npm install --save-dev stateward\`, and the packs \`init\` named).
+name: stateward
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ">=20.11"
+          cache: npm
+      - run: npm install
+      # Stateward re-checks only the files that changed since the last run. The cache is saved
+      # under a new key each run (the commit), and the newest earlier one is restored.
+      - uses: actions/cache/restore@v4
+        with:
+          path: node_modules/.cache/stateward
+          key: stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('package.json') }}-\${{ hashFiles('stateward.config.*') }}-\${{ github.sha }}
+          restore-keys: |
+            stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('package.json') }}-\${{ hashFiles('stateward.config.*') }}-
+            stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('package.json') }}-
+      - run: npx --no stateward check --format github
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: node_modules/.cache/stateward
+          key: stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('package.json') }}-\${{ hashFiles('stateward.config.*') }}-\${{ github.sha }}
+"
+`;
+
+exports[`init --ci github > uses --frozen-lockfile for yarn 1: a v1 lockfile header, or packageManager yarn@1 1`] = `
+"# Written by \`stateward init --ci github\`.
+#
+# The install step needs stateward and its packs in your project's devDependencies
+# (\`npm install --save-dev stateward\`, and the packs \`init\` named).
+name: stateward
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      # Stateward re-checks only the files that changed since the last run. The cache is saved
+      # under a new key each run (the commit), and the newest earlier one is restored.
+      - uses: actions/cache/restore@v4
+        with:
+          path: node_modules/.cache/stateward
+          key: stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('yarn.lock') }}-\${{ hashFiles('stateward.config.*') }}-\${{ github.sha }}
+          restore-keys: |
+            stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('yarn.lock') }}-\${{ hashFiles('stateward.config.*') }}-
+            stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('yarn.lock') }}-
+      - run: npx --no stateward check --format github
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: node_modules/.cache/stateward
+          key: stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('yarn.lock') }}-\${{ hashFiles('stateward.config.*') }}-\${{ github.sha }}
+"
+`;
+
+exports[`init --ci github > uses --immutable for Yarn 2 and newer: a __metadata lockfile, or packageManager yarn@4 1`] = `
+"# Written by \`stateward init --ci github\`.
+#
+# The install step needs stateward and its packs in your project's devDependencies
+# (\`npm install --save-dev stateward\`, and the packs \`init\` named).
+name: stateward
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+      - run: yarn install --immutable
+      # Stateward re-checks only the files that changed since the last run. The cache is saved
+      # under a new key each run (the commit), and the newest earlier one is restored.
+      - uses: actions/cache/restore@v4
+        with:
+          path: node_modules/.cache/stateward
+          key: stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('yarn.lock') }}-\${{ hashFiles('stateward.config.*') }}-\${{ github.sha }}
+          restore-keys: |
+            stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('yarn.lock') }}-\${{ hashFiles('stateward.config.*') }}-
+            stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('yarn.lock') }}-
+      - run: npx --no stateward check --format github
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: node_modules/.cache/stateward
+          key: stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('yarn.lock') }}-\${{ hashFiles('stateward.config.*') }}-\${{ github.sha }}
+"
+`;
+
+exports[`init --ci github > writes the workflow for the lockfile bun.lock 1`] = `
+"# Written by \`stateward init --ci github\`.
+#
+# The install step needs stateward and its packs in your project's devDependencies
+# (\`npm install --save-dev stateward\`, and the packs \`init\` named).
+name: stateward
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      # Stateward re-checks only the files that changed since the last run. The cache is saved
+      # under a new key each run (the commit), and the newest earlier one is restored.
+      - uses: actions/cache/restore@v4
+        with:
+          path: node_modules/.cache/stateward
+          key: stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('bun.lock') }}-\${{ hashFiles('stateward.config.*') }}-\${{ github.sha }}
+          restore-keys: |
+            stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('bun.lock') }}-\${{ hashFiles('stateward.config.*') }}-
+            stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('bun.lock') }}-
+      - run: npx --no stateward check --format github
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: node_modules/.cache/stateward
+          key: stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('bun.lock') }}-\${{ hashFiles('stateward.config.*') }}-\${{ github.sha }}
+"
+`;
+
+exports[`init --ci github > writes the workflow for the lockfile package-lock.json 1`] = `
+"# Written by \`stateward init --ci github\`.
+#
+# The install step needs stateward and its packs in your project's devDependencies
+# (\`npm install --save-dev stateward\`, and the packs \`init\` named).
+name: stateward
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Stateward re-checks only the files that changed since the last run. The cache is saved
+      # under a new key each run (the commit), and the newest earlier one is restored.
+      - uses: actions/cache/restore@v4
+        with:
+          path: node_modules/.cache/stateward
+          key: stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('package-lock.json') }}-\${{ hashFiles('stateward.config.*') }}-\${{ github.sha }}
+          restore-keys: |
+            stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('package-lock.json') }}-\${{ hashFiles('stateward.config.*') }}-
+            stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('package-lock.json') }}-
+      - run: npx --no stateward check --format github
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: node_modules/.cache/stateward
+          key: stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('package-lock.json') }}-\${{ hashFiles('stateward.config.*') }}-\${{ github.sha }}
+"
+`;
+
+exports[`init --ci github > writes the workflow for the lockfile pnpm-lock.yaml 1`] = `
+"# Written by \`stateward init --ci github\`.
+#
+# The install step needs stateward and its packs in your project's devDependencies
+# (\`npm install --save-dev stateward\`, and the packs \`init\` named).
+name: stateward
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Reads the pnpm version from "packageManager" in package.json; add \`version:\` if it has none.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Stateward re-checks only the files that changed since the last run. The cache is saved
+      # under a new key each run (the commit), and the newest earlier one is restored.
+      - uses: actions/cache/restore@v4
+        with:
+          path: node_modules/.cache/stateward
+          key: stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('pnpm-lock.yaml') }}-\${{ hashFiles('stateward.config.*') }}-\${{ github.sha }}
+          restore-keys: |
+            stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('pnpm-lock.yaml') }}-\${{ hashFiles('stateward.config.*') }}-
+            stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('pnpm-lock.yaml') }}-
+      - run: npx --no stateward check --format github
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: node_modules/.cache/stateward
+          key: stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('pnpm-lock.yaml') }}-\${{ hashFiles('stateward.config.*') }}-\${{ github.sha }}
+"
+`;
+
+exports[`init --ci github > writes the workflow for the lockfile undefined 1`] = `
+"# Written by \`stateward init --ci github\`.
+#
+# The install step needs stateward and its packs in your project's devDependencies
+# (\`npm install --save-dev stateward\`, and the packs \`init\` named).
+name: stateward
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install
+      # Stateward re-checks only the files that changed since the last run. The cache is saved
+      # under a new key each run (the commit), and the newest earlier one is restored.
+      - uses: actions/cache/restore@v4
+        with:
+          path: node_modules/.cache/stateward
+          key: stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('package.json') }}-\${{ hashFiles('stateward.config.*') }}-\${{ github.sha }}
+          restore-keys: |
+            stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('package.json') }}-\${{ hashFiles('stateward.config.*') }}-
+            stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('package.json') }}-
+      - run: npx --no stateward check --format github
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: node_modules/.cache/stateward
+          key: stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('package.json') }}-\${{ hashFiles('stateward.config.*') }}-\${{ github.sha }}
+"
+`;
+
+exports[`init --ci github > writes the workflow for the lockfile yarn.lock 1`] = `
+"# Written by \`stateward init --ci github\`.
+#
+# The install step needs stateward and its packs in your project's devDependencies
+# (\`npm install --save-dev stateward\`, and the packs \`init\` named).
+name: stateward
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+      - run: yarn install --frozen-lockfile
+      # Stateward re-checks only the files that changed since the last run. The cache is saved
+      # under a new key each run (the commit), and the newest earlier one is restored.
+      - uses: actions/cache/restore@v4
+        with:
+          path: node_modules/.cache/stateward
+          key: stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('yarn.lock') }}-\${{ hashFiles('stateward.config.*') }}-\${{ github.sha }}
+          restore-keys: |
+            stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('yarn.lock') }}-\${{ hashFiles('stateward.config.*') }}-
+            stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('yarn.lock') }}-
+      - run: npx --no stateward check --format github
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: node_modules/.cache/stateward
+          key: stateward-\${{ runner.os }}-1.2.3-\${{ hashFiles('yarn.lock') }}-\${{ hashFiles('stateward.config.*') }}-\${{ github.sha }}
+"
+`;

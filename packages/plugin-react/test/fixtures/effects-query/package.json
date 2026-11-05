@@ -1,0 +1,12 @@
+{
+  "name": "effects-query",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@tanstack/react-query": "^5.0.0",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "babel-plugin-react-compiler": "^1.0.0"
+  }
+}

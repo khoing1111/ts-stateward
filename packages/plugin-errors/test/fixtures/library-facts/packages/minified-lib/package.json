@@ -1,0 +1,1 @@
+{ "name": "minified-lib", "version": "4.17.21", "type": "module", "main": "index.js", "types": "index.d.ts" }

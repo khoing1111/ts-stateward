@@ -1,0 +1,52 @@
+{
+  "name": "@stateward/language-server",
+  "version": "1.0.0",
+  "description": "The stateward language server: exclusive states and predictable code paths in any editor that speaks LSP, with findings, quick fixes and hints.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/khoing1111/ts-stateward.git",
+    "directory": "packages/language-server"
+  },
+  "homepage": "https://github.com/khoing1111/ts-stateward/tree/main/packages/language-server#readme",
+  "bugs": {
+    "url": "https://github.com/khoing1111/ts-stateward/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "stateward-language-server": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./bin": {
+      "source": "./src/bin.ts",
+      "default": "./dist/bin.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/test",
+    "!dist/**/*.map",
+    "!dist/**/*.tsbuildinfo"
+  ],
+  "dependencies": {
+    "@stateward/core": "workspace:*",
+    "vscode-languageserver": "^11.0.0",
+    "vscode-languageserver-textdocument": "^1.0.16"
+  },
+  "devDependencies": {
+    "@stateward/plugin-react-context": "workspace:*",
+    "@types/react": "^19.3.0",
+    "react": "^19.3.1",
+    "vscode-jsonrpc": "10.0.0"
+  }
+}

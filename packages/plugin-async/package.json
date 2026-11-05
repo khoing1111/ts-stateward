@@ -1,0 +1,37 @@
+{
+  "name": "@stateward/plugin-async",
+  "version": "1.0.0",
+  "description": "stateward rules for async: an async failure is never lost.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/khoing1111/ts-stateward.git",
+    "directory": "packages/plugin-async"
+  },
+  "homepage": "https://github.com/khoing1111/ts-stateward/tree/main/packages/plugin-async#readme",
+  "bugs": {
+    "url": "https://github.com/khoing1111/ts-stateward/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/test",
+    "!dist/**/*.map",
+    "!dist/**/*.tsbuildinfo"
+  ],
+  "dependencies": {
+    "@stateward/core": "workspace:*"
+  }
+}

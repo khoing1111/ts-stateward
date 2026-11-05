@@ -1,0 +1,8 @@
+**
+!dist/extension.cjs
+!dist/server.cjs
+!dist/babel.cjs
+!package.json
+!LICENSE
+!dist/THIRD-PARTY-NOTICES.txt
+!dist/lib.*.d.ts

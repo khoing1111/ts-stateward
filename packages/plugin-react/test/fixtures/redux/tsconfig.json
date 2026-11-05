@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "types": [],
+    "paths": {
+      "react-redux": ["./vendor/react-redux/index.d.ts"],
+      "react-router": ["./vendor/react-router/index.d.ts"],
+      "@reduxjs/toolkit/query/react": ["./vendor/reduxjs-toolkit/query-react.d.ts"]
+    }
+  },
+  "include": ["*.ts", "*.tsx"]
+}

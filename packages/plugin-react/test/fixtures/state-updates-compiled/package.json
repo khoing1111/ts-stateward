@@ -1,0 +1,11 @@
+{
+  "name": "state-updates-compiled",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "babel-plugin-react-compiler": "^1.0.0"
+  }
+}

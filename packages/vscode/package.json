@@ -1,0 +1,128 @@
+{
+  "name": "stateward-vscode",
+  "displayName": "Stateward",
+  "description": "Exclusive states and predictable code paths for TypeScript and React, as you type: the states your code allows but never means, with the context and the fix.",
+  "keywords": [
+    "typescript",
+    "react",
+    "exhaustive",
+    "switch",
+    "union",
+    "lint",
+    "static analysis",
+    "effects",
+    "errors"
+  ],
+  "categories": [
+    "Linters",
+    "Programming Languages"
+  ],
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/khoing1111/ts-stateward.git",
+    "directory": "packages/vscode"
+  },
+  "homepage": "https://github.com/khoing1111/ts-stateward/tree/main/packages/vscode#readme",
+  "bugs": {
+    "url": "https://github.com/khoing1111/ts-stateward/issues"
+  },
+  "publisher": "stateward",
+  "type": "module",
+  "engines": {
+    "node": ">=20",
+    "vscode": "^1.91.0"
+  },
+  "main": "./dist/extension.cjs",
+  "activationEvents": [
+    "workspaceContains:**/stateward.config.ts",
+    "workspaceContains:**/stateward.config.mts",
+    "workspaceContains:**/stateward.config.js",
+    "workspaceContains:**/stateward.config.mjs",
+    "workspaceContains:tsconfig.json"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "stateward runs the workspace's stateward config and server."
+    }
+  },
+  "scripts": {
+    "bundle": "node scripts/bundle.mjs",
+    "package": "pnpm run bundle && vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@stateward/core": "workspace:*",
+    "@types/vscode": "1.91.0",
+    "@vscode/vsce": "^4.1.0",
+    "esbuild": "^0.28.2",
+    "vscode-languageclient": "^11.0.0"
+  },
+  "contributes": {
+    "configuration": {
+      "title": "Stateward",
+      "properties": {
+        "stateward.serverPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Absolute path to a language server to run instead of the project's or the bundled one, for example `/path/to/stateward/packages/language-server/dist/bin.js` in a clone (what `pnpm try` prints). Empty: the project's `@stateward/language-server`, else the bundled copy."
+        },
+        "stateward.inlayHints.throws": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "markdownDescription": "Show `throws NotFoundError | ParseError` (and `rejects …`) after the signature of a function whose errors stateward can see."
+        },
+        "stateward.inlayHints.catchVariable": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "markdownDescription": "Show the error classes the `try` can throw after the variable of a `catch (e)`, such as `: NotFoundError | ParseError | unknown`."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "stateward.showPlan",
+        "title": "Show the rule plan",
+        "category": "Stateward"
+      },
+      {
+        "command": "stateward.turnOnNextRule",
+        "title": "Turn on the next rule",
+        "category": "Stateward"
+      },
+      {
+        "command": "stateward.explainRule",
+        "title": "Explain a rule…",
+        "category": "Stateward"
+      },
+      {
+        "command": "stateward.recheck",
+        "title": "Re-check now",
+        "category": "Stateward"
+      },
+      {
+        "command": "stateward.setUp",
+        "title": "Set up this project",
+        "category": "Stateward"
+      },
+      {
+        "command": "stateward.showActions",
+        "title": "Show actions",
+        "category": "Stateward"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "stateward.showActions",
+          "when": "false"
+        }
+      ]
+    }
+  }
+}

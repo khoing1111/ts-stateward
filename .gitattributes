@@ -1,0 +1,7 @@
+* text=auto eol=lf
+
+# Binary files are never converted.
+*.vsix binary
+*.tgz binary
+*.png binary
+*.ico binary

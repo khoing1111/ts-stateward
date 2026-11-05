@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "target": "ES2022",
+    "jsx": "preserve",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": [],
+    "paths": {
+      "react": ["../../stubs/react/index.d.ts"],
+      "react-dom/client": ["../../stubs/react-dom/client.d.ts"],
+      "react-error-boundary": ["../../stubs/react-error-boundary/index.d.ts"],
+      "react-hot-toast": ["../../stubs/react-hot-toast/index.d.ts"],
+      "react-router-dom": ["../../stubs/react-router-dom/index.d.ts"]
+    }
+  },
+  "include": ["src"]
+}

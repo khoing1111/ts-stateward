@@ -1,0 +1,80 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "packages/core"
+    },
+    {
+      "path": "packages/core/test"
+    },
+    {
+      "path": "packages/plugin-react-context"
+    },
+    {
+      "path": "packages/plugin-react-context/test"
+    },
+    {
+      "path": "packages/plugin-ownership"
+    },
+    {
+      "path": "packages/plugin-ownership/test"
+    },
+    {
+      "path": "packages/plugin-errors"
+    },
+    {
+      "path": "packages/plugin-errors/test"
+    },
+    {
+      "path": "packages/plugin-unions"
+    },
+    {
+      "path": "packages/plugin-unions/test"
+    },
+    {
+      "path": "packages/plugin-reducers"
+    },
+    {
+      "path": "packages/plugin-reducers/test"
+    },
+    {
+      "path": "packages/plugin-react"
+    },
+    {
+      "path": "packages/plugin-react/test"
+    },
+    {
+      "path": "packages/plugin-async"
+    },
+    {
+      "path": "packages/plugin-async/test"
+    },
+    {
+      "path": "packages/plugin-records"
+    },
+    {
+      "path": "packages/plugin-records/test"
+    },
+    {
+      "path": "packages/cli"
+    },
+    {
+      "path": "packages/cli/test"
+    },
+    {
+      "path": "packages/language-server"
+    },
+    {
+      "path": "packages/language-server/test"
+    },
+    {
+      "path": "packages/vscode"
+    },
+    {
+      "path": "packages/vscode/test"
+    },
+    {
+      "path": "examples/basic"
+    }
+  ]
+}

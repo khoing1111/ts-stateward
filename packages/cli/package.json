@@ -1,0 +1,52 @@
+{
+  "name": "stateward",
+  "version": "1.0.0",
+  "description": "Exclusive states and predictable code paths for TypeScript and React: finds the states your code allows but never means, and shows how to state your intent in types.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/khoing1111/ts-stateward.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/khoing1111/ts-stateward/tree/main/packages/cli#readme",
+  "bugs": {
+    "url": "https://github.com/khoing1111/ts-stateward/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "stateward": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/test",
+    "!dist/**/*.map",
+    "!dist/**/*.tsbuildinfo"
+  ],
+  "dependencies": {
+    "@stateward/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@stateward/plugin-async": "workspace:*",
+    "@stateward/plugin-errors": "workspace:*",
+    "@stateward/plugin-ownership": "workspace:*",
+    "@stateward/plugin-react": "workspace:*",
+    "@stateward/plugin-react-context": "workspace:*",
+    "@stateward/plugin-records": "workspace:*",
+    "@stateward/plugin-reducers": "workspace:*",
+    "@stateward/plugin-unions": "workspace:*",
+    "@types/react": "^19.3.0",
+    "react": "^19.3.1"
+  }
+}

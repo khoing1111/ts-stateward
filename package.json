@@ -1,0 +1,37 @@
+{
+  "name": "stateward-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "pnpm run build && vitest run",
+    "lint": "eslint --max-warnings 0 .",
+    "format": "prettier --write .",
+    "docs": "node scripts/docs.mjs",
+    "docs:check": "node scripts/docs.mjs --check",
+    "gate": "node scripts/gate.mjs",
+    "pack": "node scripts/pack.mjs",
+    "install-into": "node scripts/install-into.mjs",
+    "pack:smoke": "node scripts/pack-smoke.mjs"
+  },
+  "devDependencies": {
+    "@eslint-community/eslint-plugin-eslint-comments": "^4.8.1",
+    "@eslint/js": "^10.0.1",
+    "@stateward/core": "workspace:*",
+    "@types/node": "^22.0.0",
+    "eslint": "^10.14.0",
+    "globals": "^17.14.0",
+    "prettier": "^3.9.10",
+    "stateward": "workspace:*",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^5.0.5"
+  },
+  "packageManager": "pnpm@10.28.0"
+}

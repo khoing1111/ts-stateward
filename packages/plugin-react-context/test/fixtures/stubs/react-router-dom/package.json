@@ -1,0 +1,6 @@
+{
+  "name": "react-router-dom",
+  "version": "0.0.0-stub",
+  "private": true,
+  "types": "./index.d.ts"
+}

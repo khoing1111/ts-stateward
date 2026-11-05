@@ -1,0 +1,6 @@
+{
+  "name": "react-error-boundary",
+  "version": "0.0.0-stub",
+  "private": true,
+  "types": "./index.d.ts"
+}

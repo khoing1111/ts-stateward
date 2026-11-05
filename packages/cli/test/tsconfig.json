@@ -1,0 +1,41 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "outDir": "../dist/test"
+  },
+  "include": ["."],
+  "exclude": ["fixtures"],
+  "references": [
+    {
+      "path": ".."
+    },
+    {
+      "path": "../../core"
+    },
+    {
+      "path": "../../plugin-ownership"
+    },
+    {
+      "path": "../../plugin-errors"
+    },
+    {
+      "path": "../../plugin-unions"
+    },
+    {
+      "path": "../../plugin-reducers"
+    },
+    {
+      "path": "../../plugin-react"
+    },
+    {
+      "path": "../../plugin-react-context"
+    },
+    {
+      "path": "../../plugin-records"
+    },
+    {
+      "path": "../../plugin-async"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    "jsx": "react-jsx",
+    "noUncheckedIndexedAccess": false
+  },
+  "include": ["src", "stateward-rules", "stateward.config.ts"],
+  "references": [
+    { "path": "../../packages/core" },
+    { "path": "../../packages/plugin-react-context" },
+    { "path": "../../packages/plugin-records" },
+    { "path": "../../packages/plugin-unions" }
+  ]
+}
