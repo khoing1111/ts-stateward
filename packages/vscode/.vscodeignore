@@ -6,3 +6,6 @@
 !LICENSE
 !dist/THIRD-PARTY-NOTICES.txt
 !dist/lib.*.d.ts
+!README.md
+!CHANGELOG.md
+!images/icon.png

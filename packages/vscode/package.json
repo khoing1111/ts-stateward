@@ -8,6 +8,8 @@
     "exhaustive",
     "switch",
     "union",
+    "state",
+    "state machine",
     "lint",
     "static analysis",
     "effects",
@@ -30,6 +32,11 @@
     "url": "https://github.com/khoing1111/ts-stateward/issues"
   },
   "publisher": "stateward",
+  "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#16233a",
+    "theme": "dark"
+  },
   "type": "module",
   "engines": {
     "node": ">=20",

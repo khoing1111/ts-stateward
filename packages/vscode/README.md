@@ -5,7 +5,16 @@ code allows states your app never means (a `default` that hides a new status, a 
 key, an error nobody handles), explains what can happen, and offers the change that rules them out.
 Findings show as squiggles and in the Problems view.
 
-<!-- Screenshot to add before publishing: a squiggle on a `default` with its hover and quick fix. -->
+## What you see
+
+- Squiggles and Problems-view entries for each finding, as you type: what is wrong, the change to
+  make, and the rule id; "Explain" on the lightbulb opens the rule's page.
+- Quick fixes on the lightbulb, tried on a copy of your code first.
+- Grey hints with the errors a function can throw, and those a `catch` receives.
+- The status bar: the error count, or how far the rollout is.
+
+The rules, what each finds and its severity:
+[the rules index](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/README.md).
 
 ## Set up
 
@@ -59,4 +68,12 @@ In the command palette, type "Stateward":
 The extension runs your project's config, so it stays off in a workspace you have not trusted.
 View › Output, then "Stateward", shows which copy of stateward started and any error.
 
-Docs, every rule and the command line: https://github.com/khoing1111/ts-stateward#readme
+## Docs
+
+- [Every rule](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/README.md), grouped
+  by pack, each with its page.
+- [Quick start](https://github.com/khoing1111/ts-stateward/blob/main/docs/user/quick-start.md) and
+  [the config file](https://github.com/khoing1111/ts-stateward/blob/main/docs/user/config.md).
+- [Work through the findings](https://github.com/khoing1111/ts-stateward/blob/main/docs/user/work-through-findings.md)
+  one rule at a time.
+- [The project on GitHub](https://github.com/khoing1111/ts-stateward#readme).

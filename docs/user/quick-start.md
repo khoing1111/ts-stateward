@@ -59,6 +59,7 @@ pass the code silently. It counts those places in one line above the summary:
 
 - A big app can print hundreds of findings. Turn the rules on one at a time and accept what is
   there today: [work-through-findings.md](work-through-findings.md).
+- Every rule, grouped by pack, with what it finds and its severity: [the rules index](../rules/README.md).
 - Choose packs, rules and severities: [config.md](config.md).
 - Check every pull request: [ci.md](ci.md). Check before each commit: [pre-commit.md](pre-commit.md).
 - How often stateward is right on real projects: [real-world-results.md](real-world-results.md).

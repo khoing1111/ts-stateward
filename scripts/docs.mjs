@@ -1,12 +1,15 @@
 // Generates docs/packs/<plugin>.md and docs/rules/<plugin>/<rule>.md from the built plugins, and
-// each pack's src/rules.meta.ts (scripts/rule-meta.mjs).
+// each pack's src/rules.meta.ts (scripts/rule-meta.mjs). It also writes the sections between
+// `<!-- generated:<name> -->` and `<!-- /generated:<name> -->` in hand-written files (README.md,
+// each pack's README.md), so their rule tables never drift from the rules.
 //   node scripts/docs.mjs           writes the files
 //   node scripts/docs.mjs --check   fails, listing the files, when they differ from what is on disk
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { PRESETS, RULE_TIERS, ruleSetting } from "@stateward/core/internal";
-import { explainSectionProblems, importNameOf } from "stateward";
+import { PACK_CATALOG, explainSectionProblems, importNameOf } from "stateward";
+import { format, getFileInfo, resolveConfig } from "prettier";
 import { loadPacks, metaFiles } from "./rule-meta.mjs";
 import { ALL_ADDONS } from "./try-config.mjs";
 
@@ -19,6 +22,11 @@ const TIER_MEANING = {
   coverage: "coverage (info under `recommended`, an error under `strict`)",
   addon: "add-on (off until you list its add-on)",
 };
+
+// The CLI's help text, built: the commands table of its README is made from it.
+const { COMMAND_HELP } = await import(
+  pathToFileURL(path.join(root, "packages/cli/dist/help.js")).href
+);
 
 // The packs with every rule's code loaded: the pages need each rule's explain text.
 const packs = await loadPacks(root);
@@ -219,6 +227,309 @@ function rulePage(plugin, key, rule) {
   return lines.join("\n");
 }
 
+// The public repository: npm does not resolve relative links, so a package's README links here.
+const PUBLIC_BLOB = "https://github.com/khoing1111/ts-stateward/blob/main";
+
+function packageNameOf(plugin) {
+  const entry = PACK_CATALOG.find((pack) => pack.name === plugin.name);
+  if (entry === undefined) throw new Error(`pack ${plugin.name} is not in the CLI's catalog`);
+  return entry.packageName;
+}
+
+/** The kind column: Core, Coverage, or Add-on `name`. */
+function kindOf(meta) {
+  return meta.tier === "addon" ? `Add-on \`${meta.addon ?? ""}\`` : TIER_TITLES[meta.tier];
+}
+
+/** The pack's rules in the order of its page: by group, then core, coverage, add-on. */
+function rulesInPageOrder(plugin) {
+  return groupNames(plugin).flatMap((group) =>
+    RULE_TIERS.flatMap((tier) =>
+      ruleEntries(plugin).filter(
+        ([, rule]) => rule.meta.group === group && rule.meta.tier === tier,
+      ),
+    ),
+  );
+}
+
+/** One pack's rules table; `href(path)` turns a repository path into the link to write. */
+function rulesTable(plugin, href) {
+  const rows = rulesInPageOrder(plugin).map(([key, rule]) => {
+    const [recommended, strict] = severityCells(plugin, key, rule.meta);
+    const heuristic = rule.meta.heuristic === true ? " (heuristic)" : "";
+    const link = href(`docs/rules/${plugin.name}/${key}.md`);
+    return `| [${key}](${link}) | ${cell(rule.meta.description)}${heuristic} | ${kindOf(rule.meta)} | ${recommended} | ${strict} |`;
+  });
+  return [
+    "| Rule | What it finds | Kind | `recommended` | `strict` |",
+    "| --- | --- | --- | --- | --- |",
+    ...rows,
+  ];
+}
+
+/** A pack's heading, promise, package and rules table. */
+function packRulesBlock(plugin, href, level) {
+  return [
+    `${"#".repeat(level)} [${plugin.name}](${href(`docs/packs/${plugin.name}.md`)})`,
+    "",
+    `${plugin.description} Package: \`${packageNameOf(plugin)}\`.`,
+    "",
+    ...rulesTable(plugin, href),
+  ];
+}
+
+const KIND_LEGEND = [
+  "Kind: **Core** rules are on in every preset. **Coverage** rules ask your types to say more; they",
+  "are info under `recommended` and errors under `strict`. **Add-on** rules stay off until you list",
+  "their add-on in `addons`; the table shows their severity once it is listed. A heuristic rule",
+  "guesses, so it is never an error unless you set it.",
+];
+
+/** The packs: name, promise, package and how many rules. */
+function packsTable(href) {
+  return [
+    "| Pack | What it promises | Package | Rules |",
+    "| --- | --- | --- | --- |",
+    ...plugins.map(
+      (plugin) =>
+        `| [${plugin.name}](${href(`docs/packs/${plugin.name}.md`)}) | ${cell(plugin.description)} | \`${packageNameOf(plugin)}\` | ${String(Object.keys(plugin.rules).length)} |`,
+    ),
+  ];
+}
+
+/** A link from `fromFile` (a repository path) to `target` (another one), relative. */
+function relativeFrom(fromFile) {
+  return (target) => path.posix.relative(path.posix.dirname(fromFile), target);
+}
+
+const absolute = (target) => `${PUBLIC_BLOB}/${target}`;
+
+function rulesIndexPage() {
+  const href = relativeFrom("docs/rules/README.md");
+  return [
+    HEADER,
+    "",
+    "# Rules",
+    "",
+    `Every rule of every pack, grouped by pack. Each pack is its own package; the [packs](${href("docs/packs/README.md")}) page lists them.`,
+    "",
+    ...KIND_LEGEND,
+    "",
+    ...plugins.flatMap((plugin) => [...packRulesBlock(plugin, href, 2), ""]),
+  ].join("\n");
+}
+
+function packsIndexPage() {
+  const href = relativeFrom("docs/packs/README.md");
+  return [
+    HEADER,
+    "",
+    "# Packs",
+    "",
+    "Rules come in packs. Turn on the ones that fit your app: `npx stateward init` ticks the ones that",
+    "fit your `package.json`, or list them in `plugins` in `stateward.config.ts`.",
+    "",
+    ...packsTable(href),
+    "",
+    `Every rule, with what it finds and its severity: [the rules index](${href("docs/rules/README.md")}).`,
+    "",
+  ].join("\n");
+}
+
+/** A value as it is written in a config: `["a", "b"]`, `{ a: 1 }`. */
+function sourceOf(value) {
+  if (Array.isArray(value)) return `[${value.map(sourceOf).join(", ")}]`;
+  if (typeof value === "object" && value !== null) {
+    const entries = Object.entries(value).map(
+      ([key, item]) => `${objectKey(key)}: ${sourceOf(item)}`,
+    );
+    return entries.length === 0 ? "{}" : `{ ${entries.join(", ")} }`;
+  }
+  return JSON.stringify(value);
+}
+
+/** A JavaScript object key: bare when it can be, else quoted. */
+function objectKey(name) {
+  return /^[A-Za-z_$][\w$]*$/.test(name) ? name : JSON.stringify(name);
+}
+
+/** An empty list or object says little as an example value. */
+function isEmptyValue(value) {
+  return typeof value === "object" && value !== null && Object.keys(value).length === 0;
+}
+
+/**
+ * One option to show in a pack's setup: the first, in page order, whose default says something
+ * (not `[]` or `{}`), else one that is not a severity per kind, else the first. Undefined when no
+ * rule has options.
+ */
+function optionExample(plugin) {
+  const candidates = rulesInPageOrder(plugin).flatMap(([key, rule]) =>
+    Object.entries(rule.meta.options ?? {}).map(([name, option]) => ({ key, rule, name, option })),
+  );
+  const chosen =
+    candidates.find(({ option }) => !isEmptyValue(option.default)) ??
+    candidates.find(({ option }) => option.kind !== "severities") ??
+    candidates[0];
+  if (chosen === undefined) return undefined;
+  const [recommended] = severityCells(plugin, chosen.key, chosen.rule.meta);
+  return {
+    key: chosen.key,
+    name: chosen.name,
+    value: chosen.option.default,
+    severity: recommended === "off" ? "error" : recommended,
+  };
+}
+
+/** How to install a pack, turn it on, set one rule, and turn on its add-ons. */
+function packSetup(plugin) {
+  const importName = importNameOf(plugin);
+  const packageName = packageNameOf(plugin);
+  const example = optionExample(plugin);
+  // A different rule for the severity line, so the example does not set one rule twice.
+  const [severityKey] = rulesInPageOrder(plugin).find(([key]) => key !== example?.key) ?? [];
+  const addons = [...new Set(Object.values(plugin.rules).flatMap(addonsOf))].sort();
+  const lines = [
+    "## Turn it on",
+    "",
+    "```bash",
+    `npm install --save-dev stateward ${packageName}`,
+    "```",
+    "",
+    "```ts",
+    "// stateward.config.ts",
+    'import { defineConfig } from "stateward";',
+    `import { ${importName} } from "${packageName}";`,
+    "",
+    "export default defineConfig({",
+    `  plugins: [${importName}()],`,
+    '  preset: "recommended", // or "strict"',
+    "});",
+    "```",
+    "",
+    "`npx stateward init` writes this for you. A preset turns on the core and coverage rules; without one",
+    "no rule is on.",
+    "",
+    "One rule's severity (`error`, `warning`, `info` or `off`), and its options, go under `rules`:",
+    "",
+    "```ts",
+    "rules: {",
+    ...(severityKey === undefined ? [] : [`  "${plugin.name}/${severityKey}": "warning",`]),
+    ...(example === undefined
+      ? []
+      : [
+          "  // a severity and options; this option is at its default, the rule's page lists them all",
+          `  "${plugin.name}/${example.key}": ["${example.severity}", { ${objectKey(example.name)}: ${sourceOf(example.value)} }],`,
+        ]),
+    "},",
+    "```",
+    "",
+  ];
+  if (addons.length > 0) {
+    lines.push(
+      "Add-on rules stay off until you list their add-on:",
+      "",
+      "```ts",
+      `addons: [${addons.map((name) => JSON.stringify(`${plugin.name}/${name}`)).join(", ")}],`,
+      "```",
+      "",
+      ...addonLines(plugin),
+      "",
+    );
+  }
+  lines.push(`Every key of the config: [config.md](${absolute("docs/user/config.md")}).`);
+  return lines.join("\n");
+}
+
+function packRulesSection(plugin) {
+  return [
+    "## Rules",
+    "",
+    ...rulesTable(plugin, absolute),
+    "",
+    ...KIND_LEGEND,
+    "",
+    `Each rule's page says why it matters, what it catches and misses, how to fix what it finds, and its options. The pack's page: [docs/packs/${plugin.name}.md](${absolute(`docs/packs/${plugin.name}.md`)}). Every pack's rules: [the rules index](${absolute("docs/rules/README.md")}).`,
+  ].join("\n");
+}
+
+function readmeRulesSection() {
+  const href = relativeFrom("README.md");
+  return [
+    ...KIND_LEGEND,
+    "",
+    ...plugins.flatMap((plugin) => [...packRulesBlock(plugin, href, 3), ""]),
+  ]
+    .join("\n")
+    .trimEnd();
+}
+
+/** Every command of the CLI with what it does: the same text as `stateward --help`. */
+function commandsTable() {
+  return [
+    "| Command | What it does |",
+    "| --- | --- |",
+    ...Object.entries(COMMAND_HELP).map(
+      ([name, help]) => `| \`stateward ${name}\` | ${cell(help.summary)} |`,
+    ),
+  ].join("\n");
+}
+
+/** The generated sections of hand-written files: file, then section name and its text. */
+function sectionsByFile() {
+  const sections = new Map([
+    [
+      "README.md",
+      new Map([
+        ["packs", packsTable(relativeFrom("README.md")).join("\n")],
+        ["rules", readmeRulesSection()],
+      ]),
+    ],
+  ]);
+  sections.set(
+    "packages/cli/README.md",
+    new Map([
+      ["commands", commandsTable()],
+      ["packs", packsTable(absolute).join("\n")],
+    ]),
+  );
+  for (const { folder, plugin } of packs) {
+    sections.set(
+      `packages/${folder}/README.md`,
+      new Map([
+        ["setup", packSetup(plugin)],
+        ["rules", packRulesSection(plugin)],
+      ]),
+    );
+  }
+  return sections;
+}
+
+/** The file's text with each named section replaced; a missing marker is an error. */
+function withSections(file, text, sections) {
+  let result = text;
+  for (const [name, body] of sections) {
+    const start = `<!-- generated:${name} -->`;
+    const end = `<!-- /generated:${name} -->`;
+    const from = result.indexOf(start);
+    const to = result.indexOf(end);
+    if (from === -1 || to === -1 || to < from) {
+      throw new Error(`${file}: the markers ${start} … ${end} are missing`);
+    }
+    result = `${result.slice(0, from + start.length)}\n\n${body}\n\n${result.slice(to)}`;
+  }
+  return result;
+}
+
+/** Formatted as prettier would, unless .prettierignore leaves the file out (the gate checks it). */
+async function formatted(file, text) {
+  const full = path.join(root, file);
+  const info = await getFileInfo(full, { ignorePath: path.join(root, ".prettierignore") });
+  if (info.ignored) return text;
+  const options = (await resolveConfig(full)) ?? {};
+  return format(text, { ...options, filepath: full });
+}
+
 /** Every generated file: path relative to the repo root, and its text. */
 async function generate() {
   const files = await metaFiles(root, packs);
@@ -227,6 +538,12 @@ async function generate() {
     for (const [key, rule] of ruleEntries(plugin)) {
       files.set(`docs/rules/${plugin.name}/${key}.md`, rulePage(plugin, key, rule));
     }
+  }
+  files.set("docs/rules/README.md", rulesIndexPage());
+  files.set("docs/packs/README.md", packsIndexPage());
+  for (const [file, sections] of sectionsByFile()) {
+    const text = readFileSync(path.join(root, file), "utf8");
+    files.set(file, await formatted(file, withSections(file, text, sections)));
   }
   return files;
 }
@@ -301,6 +618,6 @@ if (process.argv.includes("--check")) {
     writeFileSync(full, text);
   }
   console.log(
-    `Wrote ${String(generated.size)} files under docs/packs, docs/rules and packages/*/src/rules.meta.ts.`,
+    `Wrote ${String(generated.size)} files: docs/packs, docs/rules, packages/*/src/rules.meta.ts, and the generated sections of README.md and packages/*/README.md.`,
   );
 }

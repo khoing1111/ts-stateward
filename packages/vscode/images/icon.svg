@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <rect width="256" height="256" rx="56" fill="#16233a"/>
+  <!-- One state in, a fork into cases, each case closed: exclusive states, predictable paths. -->
+  <g fill="none" stroke="#e8eef8" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M128 52 V96"/>
+    <path d="M128 96 L72 140 V172"/>
+    <path d="M128 96 V172"/>
+    <path d="M128 96 L184 140 V172"/>
+  </g>
+  <circle cx="128" cy="52" r="16" fill="#e8eef8"/>
+  <circle cx="72" cy="190" r="18" fill="#4fd1a5"/>
+  <circle cx="128" cy="190" r="18" fill="#4fd1a5"/>
+  <circle cx="184" cy="190" r="18" fill="#4fd1a5"/>
+</svg>
