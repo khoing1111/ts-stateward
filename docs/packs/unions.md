@@ -4,59 +4,88 @@
 
 Every case of a union is handled, and its tag tells the cases apart.
 
-## Rules
+## Turn it on
 
-Rules sit under their group. Set a whole group in the config, `groups: { "unions/cases": "warning" }`, or one rule under `rules`; a rule's own entry wins.
-
-### cases
-
-| Rule | Kind | recommended | strict | What it checks |
-| --- | --- | --- | --- | --- |
-| [default-hides-cases](../rules/unions/default-hides-cases.md) | Core | error | error | A switch over a union handles every case, so a value added later fails to compile instead of falling into the default. |
-| [if-chain-misses-case](../rules/unions/if-chain-misses-case.md) | Core | error | error | An if / else if chain over a union handles every case, so a value added later fails to compile. |
-| [tag-does-not-discriminate](../rules/unions/tag-does-not-discriminate.md) | Coverage | info | error | A property like kind that tells a union's members apart is a literal in every member, not string or number in one. |
-
-## Options
-
-Set in the config as `rules: { "<rule>": [severity, { option: value }] }`.
-
-### default-hides-cases
-
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `maxHidden` | number, whole number, min 0 | `5` | A `default` that hides more cases than this is reported as info: it often means "everything else". |
-| `ignore` | list of strings | `[]` | Union type names (globs like *Event) whose switches are not checked: matched against the type of the value tested, or of the object whose tag is tested. |
-| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of finding. Kinds: `complete`: every case is listed, and the default has no check; `hidden`: the default hides up to maxHidden cases; `many-hidden`: the default hides more than maxHidden cases (info unless set here). |
-| `projectTypesOnly` | boolean | `true` | Check only unions declared in the project, not in packages or TypeScript's lib: a member a library adds later is not a state the app designed. |
-
-### if-chain-misses-case
-
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `report` | string, one of "likely-mistakes", "all" | `"likely-mistakes"` | "likely-mistakes": only chains that look meant to handle every case. "all": every chain that leaves a case out. |
-| `maxHidden` | number, whole number, min 0 | `5` | An `else` that hides more cases than this is reported as info: it often means "everything else". |
-| `ignore` | list of strings | `[]` | Union type names (globs like *Event) whose chains are not checked: matched against the type of the value tested, or of the object whose tag is tested. |
-| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of finding. Kinds: `complete`: every case is handled, and the else has no check; `missing`: a chain without an else misses cases; `hidden`: the else hides up to maxHidden cases; `many-hidden`: the else hides more than maxHidden cases (info unless set here). |
-| `projectTypesOnly` | boolean | `true` | Check only unions declared in the project, not in packages or TypeScript's lib: a member a library adds later is not a state the app designed. |
-
-### tag-does-not-discriminate
-
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `ignore` | list of strings | `[]` | Union type names (globs like *Response) whose catch-all member is deliberate, such as API types. |
-
-## Add-ons
-
-None yet.
-
-## Settings
-
-Presets and add-ons are set in the config, not on the plugin:
+Install `@stateward/plugin-unions` and add `unions()` to `plugins` in `stateward.config.ts`, with a `preset` (`npx stateward init` does both):
 
 ```ts
-export default defineConfig({
-  plugins: [unions()],
-  preset: "strict",
-  // addons: ["unions/<addon>"],
-});
+plugins: [unions()], preset: "recommended", // or "strict"
 ```
+
+Each rule's page has its options and what it does not catch. One rule or a whole group is set under `rules` or `groups`: `rules: { "unions/<rule>": "warning" }`.
+
+## Rules
+
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [default-hides-cases](../rules/unions/default-hides-cases.md) | a `default` that handles cases the switch does not list, or that has no `never` check | A case added to the union later goes to the `default` with no compile error; listing the cases makes each switch fail to compile until it handles the new case. | Core | error | error |
+| [if-chain-misses-case](../rules/unions/if-chain-misses-case.md) | an `if` / `else if` chain over a union that misses a case or has no `never` check | A case added to the union later goes to the last `else` with no compile error; testing every case and checking the rest with `never` makes the chain fail to compile. | Core | error | error |
+| [tag-does-not-discriminate](../rules/unions/tag-does-not-discriminate.md) | a tag like `kind` that is `string` in one member, so a test on it does not pick a member | When `kind` is `string` in one member, testing `kind` does not narrow the union, so TypeScript cannot check which properties each branch reads. | Coverage | info | error |
+
+## [default-hides-cases](../rules/unions/default-hides-cases.md)
+
+A case added to the union later goes to the `default` with no compile error; listing the cases makes each switch fail to compile until it handles the new case.
+
+```ts
+type UploadStatus = "idle" | "uploading" | "failed";
+
+export function label(status: UploadStatus): string {
+  switch (status) {
+    case "idle":
+      return "Choose a file";
+    default:
+      return "Uploading…";
+  }
+}
+```
+
+```text
+error[unions/default-hides-cases]: "failed" and "uploading" of `status` are not listed; `default` handles them
+```
+
+Fix: give each case its own branch, and put `status satisfies never;` in the `default` so a case added later stops the build here.
+
+Core rule: error under `recommended` and `strict`. Group: `unions/cases`.
+
+## [if-chain-misses-case](../rules/unions/if-chain-misses-case.md)
+
+A case added to the union later goes to the last `else` with no compile error; testing every case and checking the rest with `never` makes the chain fail to compile.
+
+```ts
+// …
+export function describe(job: Job): string {
+  if (job.kind === "idle") {
+    return "Waiting";
+  } else if (job.kind === "running") {
+    return `${String(job.progress)}%`;
+  } else {
+    return "Done";
+  }
+}
+```
+
+```text
+warning[unions/if-chain-misses-case]: "failed" of `job.kind` is not tested; `else` handles it
+```
+
+Fix: test every case, and end the chain with an `else` that checks for `never`.
+
+Core rule: error under `recommended` and `strict`. Group: `unions/cases`.
+
+## [tag-does-not-discriminate](../rules/unions/tag-does-not-discriminate.md)
+
+When `kind` is `string` in one member, testing `kind` does not narrow the union, so TypeScript cannot check which properties each branch reads.
+
+```ts
+export type Message =
+  | { kind: "chat"; text: string }
+  | { kind: string; payload: unknown };
+```
+
+```text
+info[unions/tag-does-not-discriminate]: `kind` does not tell the members of `Message` apart: one member has "chat", another `string`
+```
+
+Fix: give every member its own literal, and keep the catch-all apart from the union.
+
+Coverage rule (it points at code whose types do not say enough to check it): info under `recommended`, error under `strict`. Group: `unions/cases`.

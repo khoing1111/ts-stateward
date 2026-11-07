@@ -277,7 +277,7 @@ describe("toIgnoreAction", () => {
   it("writes the comment on the line above, indented like the finding", () => {
     for (const finding of [at("problem"), at("unknown")]) {
       const action = toIgnoreAction(finding, toDiagnostic(finding, mapper), mapper);
-      expect(action?.title).toBe("Ignore this case here");
+      expect(action?.title).toBe("Add an ignore comment");
       expect(action?.kind).toBe(CodeActionKind.QuickFix);
       expect(action?.edit?.changes).toEqual({
         "file:///a.ts": [

@@ -2,92 +2,92 @@
 
 # errors/must-handle-error
 
-An error class marked @mustHandle is named in a catch or passed on with @throws by every call that can throw it.
-
-- Group: errors/callers
-- Tier: core (on in every preset)
-- Add-on: none
-- Heuristic: no
-- Severity under `recommended`: error
-- Severity under `strict`: error
-
-An error class marked `@mustHandle` is named in a `catch` or passed on with `@throws` by every call that can throw it.
-
-## Why
-
-Some errors need a decision from the code that meets them. A declined card is not a crash: the user should be told and offered another card. If `checkout` lets `PaymentDeclinedError` fall into a generic `catch` that shows "Something went wrong", the user never learns why, and tries the same card again. TypeScript cannot say which errors a call can throw, so nothing reminds the author of `checkout` that this one needs handling.
-
-Write the decision once, on the class:
+An error marked `@mustHandle` needs a decision at each call, such as a message to the user; a call that neither catches it nor passes it on lets it reach the top.
 
 ```ts
 /** @mustHandle Tell the user the card was declined and let them pick another card. */
 export class PaymentDeclinedError extends Error {}
-```
 
-and stateward checks every call that can throw it, in any file, and shows your sentence where it is missed.
+function pay(amount: number): string {
+  if (amount > 100) throw new PaymentDeclinedError("insufficient funds");
+  return "receipt-1";
+}
 
-## When to use it
-
-For the few errors that callers must act on: a declined payment, an expired session, a conflict the user must resolve. It is a core rule, an error in every preset, and reports nothing until you mark a class: you choose, error by error, what is checked. For new code, returning the failure as a value (a `Result` or a union) makes TypeScript itself check it; `@mustHandle` is for errors that are already thrown.
-
-## What it catches
-
-A call that can throw or reject with a marked class (or a class that extends it), when nothing between the call and the function's callers handles it on purpose:
-
-- **handled on purpose:** a `catch` around the call has a branch `e instanceof PaymentDeclinedError` (or a marked class it extends) that does not rethrow it; a guard `if (!(e instanceof PaymentDeclinedError)) throw e;` followed by the handling, a `?:` or `&&` that tests `e instanceof PaymentDeclinedError`, and a `switch (true)` case count the same;
-- **handed to a helper that handles it:** the `catch` passes its error to a function of yours whose first statement is `if (error instanceof PaymentDeclinedError) …` (or a marked class it extends) and does not rethrow it there, like `showPaymentError(e)`; only that function is read, not the ones it calls;
-- **handled where it is called:** a helper declared inside a function and called only inside a handling `try` is judged at those calls, not in its own body;
-- **passed on on purpose:** the function's JSDoc has `@throws {PaymentDeclinedError}` (or a marked class it extends); then its own callers must handle it, and are checked the same way. An `await`ed promise counts as a call.
-
-Everything else is reported at the call: no `try`, a `catch` that treats every error alike (no branch, or only `instanceof Error`), a `catch` that rethrows everything (`report(e); throw e;`) in a function without `@throws`. The message gives your sentence from `@mustHandle` and links to the tag.
-
-### Bad
-
-```ts
-export async function reorder(order: Order, card: Card): Promise<Receipt> {
-  return await pay(order, card); // pay can throw PaymentDeclinedError
+export function reorder(amount: number): string {
+  return pay(amount);
 }
 ```
 
-### Good
+`stateward check` prints:
+
+```text
+error[errors/must-handle-error]: `pay(…)` can throw `PaymentDeclinedError`, which must be handled
+  --> example.ts:10:10
+   |
+10 |   return pay(amount);
+   |          ^^^
+   = fix: name it in a `catch`, pass it on with `@throws {PaymentDeclinedError}` on `reorder`, or return it as a failure instead of throwing:
+         if (e instanceof PaymentDeclinedError) {
+           // Tell the user the card was declined and let them pick another card.
+         }
+   = note: example.ts:1: `PaymentDeclinedError` must be handled: Tell the user the card was declined and let them pick another card.
+   = docs: stateward explain errors/must-handle-error
+```
+
+Name the class in a `catch` and do what its sentence says:
 
 ```ts
-export async function reorder(order: Order, card: Card): Promise<ReorderResult> {
+/** @mustHandle Tell the user the card was declined and let them pick another card. */
+export class PaymentDeclinedError extends Error {}
+
+function pay(amount: number): string {
+  if (amount > 100) throw new PaymentDeclinedError("insufficient funds");
+  return "receipt-1";
+}
+
+export function reorder(amount: number): { kind: "paid"; receipt: string } | { kind: "declined" } {
   try {
-    return { kind: "paid", receipt: await pay(order, card) };
+    return { kind: "paid", receipt: pay(amount) };
   } catch (e) {
-    if (e instanceof PaymentDeclinedError) return { kind: "declined", reason: e.reason };
+    if (e instanceof PaymentDeclinedError) return { kind: "declined" };
     throw e;
   }
 }
 ```
 
-or pass it on, so the caller of `reorder` decides:
+Or pass it on with `/** @throws {PaymentDeclinedError} */` on `reorder`, so its callers decide (and are checked the same way); the quick fix "Pass it on" adds that tag, creating the JSDoc when there is none. What to do in a `catch` branch is your call, so no fix writes one. Or change the throwing function to return the failure as a value.
 
-```ts
-/** @throws {PaymentDeclinedError} */
-export async function reorder(order: Order, card: Card): Promise<Receipt> {
-  return await pay(order, card);
-}
-```
+## Why it matters
 
-### Fix
+Some errors need a decision from the code that meets them. A declined card is not a crash: the user should be told and offered another card. If `reorder` lets `PaymentDeclinedError` fall into a generic `catch` that shows "Something went wrong", the user never learns why, and tries the same card again. TypeScript cannot say which errors a call can throw, so nothing reminds the author of `reorder` that this one needs handling. With `@mustHandle`, you write the decision once, on the class; stateward checks every call that can throw it, in any file, and shows your sentence where it is missed.
 
-Name the class in the `catch` and do what the sentence says, pass it on with `@throws`, or change the throwing function to return the failure as a value. The quick fix "Pass it on" adds `@throws` to the function's JSDoc (and creates the JSDoc when there is none); what to do in a `catch` branch is your call, so there is no fix that writes one.
+## When it says “not checked”
+
+Where it cannot follow the error, it says so, and `stateward check` lists these places (not only counts them), since you asked for this error: a callback whose caller it cannot see (an event handler, a function passed to another), a `catch` that tests a class whose `extends` it cannot follow, a test inside the called function it cannot read. A `@mustHandle` on a type alias or an interface (plain-object errors such as `{ kind: "declined" }`) is not checked yet, and is reported the same way.
 
 ## What it does not catch
 
-- Where stateward cannot follow the error, it says so, and these places are listed by `stateward check` (not only counted), since you asked for this error: a callback whose caller it cannot see (an event handler, a function passed to another), a `catch` that tests a class whose `extends` it cannot follow, a test inside the called function it cannot read.
-- `promise.catch(handler)`: the handler is taken to handle every rejection.
-- A `@mustHandle` on a type alias or an interface (plain-object errors such as `{ kind: "declined" }`): not checked yet, and reported as a place not checked. That is the next step.
-- Errors from packages: only classes of your project can be marked.
-- A `throw new PaymentDeclinedError()` itself: the function that throws it is where it starts; its callers are checked.
+A call that can throw or reject with a marked class (or one that extends it) is fine when it is:
+
+- **handled on purpose**: a `catch` around it has a branch `e instanceof PaymentDeclinedError` (or a marked class it extends) that does not rethrow it. A guard `if (!(e instanceof PaymentDeclinedError)) throw e;` followed by the handling, a `?:` or `&&` that tests it, and a `switch (true)` case count the same;
+- **handed to a helper that handles it**: the `catch` passes its error to a function of yours whose first statement is `if (error instanceof PaymentDeclinedError) …` and does not rethrow it there (only that function is read, not the ones it calls);
+- **handled where it is called**: a helper declared inside a function and called only inside a handling `try` is judged at those calls;
+- **passed on on purpose**: the function's JSDoc has `@throws {PaymentDeclinedError}`. An awaited promise counts as a call.
+
+Everything else is reported at the call: no `try`, a `catch` that treats every error alike (no branch, or only `instanceof Error`), or one that rethrows everything (`report(e); throw e;`) in a function without `@throws`. The rule is silent on:
+
+- `promise.catch(handler)`: the handler is taken to handle every rejection;
+- errors from packages: only classes of your project can be marked;
+- the `throw new PaymentDeclinedError()` itself: that is where it starts; its callers are checked.
+
+## Getting the best from it
+
+Mark only the few errors that callers must act on: a declined payment, an expired session, a conflict the user must resolve. The rule reports nothing until you mark a class, so you choose, error by error, what is checked. Write the sentence for the person who meets the error: it is what the finding shows. For new code, returning the failure as a value (a `Result` or a union) lets TypeScript itself check it; `@mustHandle` is for errors that are already thrown.
 
 ## Turn it on or off
 
-In `stateward.config.ts`:
-
 ```ts
 rules: { "errors/must-handle-error": "off" } // or "warning"
-groups: { "errors/catch": "off" } // the whole group
 ```
+
+Core rule: error under `recommended` and `strict`. Group: `errors/callers`.

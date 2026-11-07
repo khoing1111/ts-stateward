@@ -4,18 +4,18 @@ import ts from "typescript";
 import type { ResultCache } from "../cache.js";
 import {
   computeFingerprints,
+  declarationTextHash,
   packageDependencies,
   packageEntries,
   packageManifests,
   packageNames,
-  textHash,
 } from "./fingerprints.js";
 import { markedComments } from "./comments.js";
 import type { MarkedComment } from "./comments.js";
 import type { DependenciesOf, IsPackageEntry, PackageOf } from "./fingerprints.js";
 import { recordInputs, recordingHost, replays } from "./program-record.js";
 import type { HostQuery, ProgramRecord } from "./program-record.js";
-import { declarationPath } from "./qualified-ids.js";
+import { declarationAtPath, declarationPath } from "./qualified-ids.js";
 import { displayPath } from "../display-path.js";
 import { expandTsconfigs } from "../tsconfigs.js";
 import type {
@@ -108,19 +108,26 @@ export type ProjectUnit = {
    */
   fingerprint(file: string): string | undefined;
   /**
-   * The queries for the rules of one run on one of `files`: `types`, except that each other file
-   * whose node `declarationOf` hands out is noted as read for `file` (`readsOf`). A new object per
-   * call, so a plugin's memo kept by queries (a `WeakMap` on them) lasts one file's rules: what it
-   * remembers was read, and noted, for that file.
+   * The queries for the rules of one run on one of `files`: `types`, except that each node of
+   * another file that `declarationOf` hands out is noted as read for `file` (`readsOf`). A new
+   * object per call, so a plugin's memo kept by queries (a `WeakMap` on them) lasts one file's
+   * rules: what it remembers was read, and noted, for that file.
    */
   typesFor(file: string): TypeQueries;
-  /** The files other than `file` whose syntax a rule on `file` was handed in this program, sorted. */
-  readsOf(file: string): readonly string[];
   /**
-   * The hash of the text of any file of the program: a result that read the file's syntax holds
-   * while it is the same.
+   * What a rule on `file` was handed of other files in this program, as read ids, sorted: the
+   * qualified id of each declaration of an own file (`src/a.ts#load`), or the file's own id
+   * (`src/a.ts#`, its whole text) for any other file, a module, a declaration whose id is placed by
+   * offset, and a file `mentioned` says the results name (they keep its offsets: a comment added
+   * above would move them).
    */
-  readFingerprint(file: string): string | undefined;
+  readsOf(file: string, mentioned: (readFile: string) => boolean): readonly string[];
+  /**
+   * The hash of what a read id stands for in this program (`declarationTextHash`, or the whole
+   * text for a file's own id); undefined when the program has no such declaration (renamed, moved,
+   * removed). A result that read it holds while it is the same.
+   */
+  readFingerprint(read: string): string | undefined;
   /** The first syntax error of one of `files`, or undefined when it parses cleanly. */
   syntaxError(file: string): SyntaxError | undefined;
   /**
@@ -129,6 +136,16 @@ export type ProjectUnit = {
    * no types and is not listed.
    */
   unresolvedImports(file: string): readonly UnresolvedImport[];
+  /**
+   * Whether the project checks with `strictNullChecks` (its own setting, else `strict`, else
+   * TypeScript 6's default, on). Read from the tsconfig: no program is built for it.
+   */
+  readonly strictNullChecks: boolean;
+  /**
+   * Whether `module` resolves to declarations (types) from the project's folder, by its options:
+   * `react` does when `@types/react` or a typed `react` is installed. No program is built for it.
+   */
+  typesResolve(module: string): boolean;
   /**
    * Binds the program (creating its type checker), which gives every node its parent: call it
    * before a rule or a plugin sees a node of `files`. Parsing does not set parents.
@@ -447,9 +464,16 @@ function tryEditsOn(
   const ranges = new Map<string, { candidate: number; start: number; end: number }[]>();
   /** Per edited file, the edits placed in it and how an offset of the old text moves. */
   const moves = new Map<string, { placed: PlacedEdit[]; toAfter: (offset: number) => number }>();
+  /** Files a fix creates: edits at the start of a file that does not exist yet. */
+  const created = new Set<string>();
   for (const [file, placed] of byFile) {
     const sourceFile = program.getSourceFile(file);
-    const text = sourceFile?.text;
+    const creates =
+      sourceFile === undefined &&
+      !host.fileExists(file) &&
+      placed.every(({ edit: { location } }) => location.start === 0 && location.end === 0);
+    if (creates) created.add(file);
+    const text = creates ? "" : sourceFile?.text;
     const fits = placed.every(
       ({ edit: { location } }) =>
         text !== undefined &&
@@ -529,6 +553,17 @@ function tryEditsOn(
   for (const [file, spans] of ranges) {
     const before = program.getSourceFile(file);
     const after = copy.getSourceFile(file);
+    if (created.has(file) && after !== undefined) {
+      // Every error in a file the fix writes is the fix's own.
+      const [error] = errorsOf(copy, after);
+      if (error === undefined) continue;
+      for (const { candidate } of spans) {
+        if (verdicts[candidate]?.kind === "compiles") {
+          verdicts[candidate] = { kind: "breaks", error: firstLine(error) };
+        }
+      }
+      continue;
+    }
     if (before === undefined || after === undefined) continue;
     // A fix that changes a declaration's type answers for every line of the files it edits.
     const lines = spans.map((span) =>
@@ -654,6 +689,36 @@ function unresolvedImportsOf(program: ts.Program, file: string): readonly Unreso
     }
   }
   return found;
+}
+
+/** Whether a project with these options checks with `strictNullChecks` (TypeScript 6: on unless turned off). */
+export function checksNulls(options: ts.CompilerOptions): boolean {
+  return options.strictNullChecks ?? options.strict ?? true;
+}
+
+const TYPED_EXTENSIONS: ReadonlySet<string> = new Set([
+  ts.Extension.Dts,
+  ts.Extension.Dmts,
+  ts.Extension.Dcts,
+  ts.Extension.Ts,
+  ts.Extension.Tsx,
+  ts.Extension.Mts,
+  ts.Extension.Cts,
+]);
+
+/** `ProjectUnit.typesResolve` for a project, remembered by module name. */
+function typesResolver(tsconfig: string, options: ts.CompilerOptions): (module: string) => boolean {
+  const known = new Map<string, boolean>();
+  // A file that need not exist: resolution only looks at its folder and above.
+  const from = path.join(path.dirname(tsconfig), "__stateward_types__.ts");
+  return (module) => {
+    const before = known.get(module);
+    if (before !== undefined) return before;
+    const resolved = ts.resolveModuleName(module, from, options, ts.sys).resolvedModule;
+    const typed = resolved !== undefined && TYPED_EXTENSIONS.has(resolved.extension);
+    known.set(module, typed);
+    return typed;
+  };
 }
 
 function firstSyntaxError(program: ts.Program, file: string): SyntaxError | undefined {
@@ -851,6 +916,24 @@ export function hostWithOverlays(
   };
 }
 
+/**
+ * The host a recorded program is replayed against: the disk, with `overlays` in front of it as
+ * `hostWithOverlays` serves them (an overlay exists, and its text is what is read), so a replay
+ * answers as the build it stands for would have.
+ */
+function replayHost(
+  options: ts.CompilerOptions,
+  overlays: ReadonlyMap<string, string>,
+): ts.CompilerHost {
+  const base = ts.createCompilerHost(options, false);
+  if (overlays.size === 0) return base;
+  return {
+    ...base,
+    fileExists: (fileName) => overlays.has(fileName) || base.fileExists(fileName),
+    readFile: (fileName) => overlays.get(fileName) ?? base.readFile(fileName),
+  };
+}
+
 function matcher(patterns: readonly string[]): (relativePath: string) => boolean {
   if (patterns.length === 0) return () => false;
   return picomatch([...patterns], { dot: true });
@@ -960,6 +1043,55 @@ function isPromiseType(checker: ts.TypeChecker, type: ts.Type): boolean {
 }
 
 const NULLISH = ts.TypeFlags.Null | ts.TypeFlags.Undefined;
+
+/** The property a stated guarantee is written in (`TypeQueries.guaranteesOf`). */
+const GUARANTEE_PROPERTY = "__guarantee";
+
+/** The guarantee names of one type that is not a union: its optional `__guarantee` literals. */
+function memberGuarantees(checker: ts.TypeChecker, type: ts.Type): readonly string[] {
+  const property = checker.getPropertyOfType(type, GUARANTEE_PROPERTY);
+  if (property === undefined || !(property.flags & ts.SymbolFlags.Optional)) return [];
+  const value = checker.getTypeOfSymbol(property);
+  const names: string[] = [];
+  for (const part of value.isUnion() ? value.types : [value]) {
+    if (part.flags & NULLISH) continue;
+    if (!part.isStringLiteral()) return [];
+    names.push(part.value);
+  }
+  return names;
+}
+
+/**
+ * The guarantees every member of `type` states (`null` and `undefined` left out), sorted. A
+ * member that states none makes the whole type state none.
+ */
+function guaranteesOfType(checker: ts.TypeChecker, found: ts.Type): readonly string[] {
+  const type = widened(checker, found);
+  if (type === undefined) return [];
+  const members = (type.isUnion() ? type.types : [type]).filter(
+    (member) => (member.flags & NULLISH) === 0,
+  );
+  let shared: string[] | undefined;
+  for (const member of members) {
+    const names = memberGuarantees(checker, member);
+    shared = shared === undefined ? [...names] : shared.filter((name) => names.includes(name));
+    if (shared.length === 0) return [];
+  }
+  return [...new Set(shared ?? [])].sort();
+}
+
+/** The declared type of a declaration: a variable's or property's type, or a type alias's. */
+function declaredTypeOf(checker: ts.TypeChecker, declaration: ts.Node): ts.Type | undefined {
+  const name =
+    ts.isDeclarationStatement(declaration) || ts.isVariableDeclaration(declaration)
+      ? ts.getNameOfDeclaration(declaration)
+      : undefined;
+  const symbol = name === undefined ? undefined : checker.getSymbolAtLocation(name);
+  if (symbol === undefined) return checker.getTypeAtLocation(declaration);
+  return symbol.flags & ts.SymbolFlags.Value
+    ? checker.getTypeOfSymbol(symbol)
+    : checker.getDeclaredTypeOfSymbol(symbol);
+}
 
 /** A string, number or boolean literal, or an enum member: a type with exactly one value. */
 function isUnitLiteral(type: ts.Type): boolean {
@@ -1254,6 +1386,54 @@ function isReadonlyProperty(owner: ts.Type, property: ts.Symbol): boolean {
       (declaration) => (ts.getCombinedModifierFlags(declaration) & ts.ModifierFlags.Readonly) !== 0,
     )
   );
+}
+
+/** An object type with an `aborted: boolean` property: `AbortSignal`, or a library's own signal type. */
+function isSignal(checker: ts.TypeChecker, type: ts.Type): boolean {
+  const members = withoutNullish(type);
+  return (
+    members.length > 0 &&
+    members.every((member) => {
+      if (!(member.flags & ts.TypeFlags.Object)) return false;
+      const aborted = checker.getPropertyOfType(member, "aborted");
+      if (aborted === undefined) return false;
+      const value = checker.getTypeOfSymbol(aborted);
+      return withoutNullish(value).every((part) => (part.flags & ts.TypeFlags.BooleanLike) !== 0);
+    })
+  );
+}
+
+/** Where the callee takes a signal: a parameter that is one, or an options object holding one. */
+function signalParameter(
+  checker: ts.TypeChecker,
+  call: ts.CallExpression,
+): { index: number; property: "signal" | undefined } | undefined {
+  const signature = checker.getResolvedSignature(call);
+  if (signature === undefined) return undefined;
+  for (const [index, parameter] of signature.parameters.entries()) {
+    const declared = parameter.valueDeclaration;
+    if (
+      declared !== undefined &&
+      ts.isParameter(declared) &&
+      declared.dotDotDotToken !== undefined
+    ) {
+      return undefined;
+    }
+    const type = widened(checker, checker.getTypeOfSymbol(parameter));
+    if (type === undefined) continue;
+    if (isSignal(checker, type)) return { index, property: undefined };
+    // An options object you fill in; a `Request`, which carries its own readonly signal, is not one.
+    const holds = withoutNullish(type).some((member) => {
+      const signal = checker.getPropertyOfType(member, "signal");
+      return (
+        signal !== undefined &&
+        !isReadonlyProperty(member, signal) &&
+        isSignal(checker, checker.getTypeOfSymbol(signal))
+      );
+    });
+    if (holds) return { index, property: "signal" };
+  }
+  return undefined;
 }
 
 function withoutNullish(type: ts.Type): readonly ts.Type[] {
@@ -1588,6 +1768,13 @@ export function createTypeQueries(
       }
       return [...files].sort();
     },
+    guaranteesOf(target) {
+      const checker = typeChecker();
+      if ("kind" in target) return guaranteesOfType(checker, checker.getTypeAtLocation(target));
+      const declaration = declarations.get(target.id);
+      const type = declaration === undefined ? undefined : declaredTypeOf(checker, declaration);
+      return type === undefined ? [] : guaranteesOfType(checker, type);
+    },
     awaitedAliasOf(node) {
       return aliasOfType(typeChecker(), typeChecker().getTypeAtLocation(node));
     },
@@ -1737,6 +1924,9 @@ export function createTypeQueries(
     },
     calleeTags(call) {
       return calleeTags(typeChecker(), call);
+    },
+    signalParameterOf(call) {
+      return signalParameter(typeChecker(), call);
     },
     narrowedBy(reference, test) {
       return narrowedMembers(program, typeChecker(), reference, test);
@@ -1895,9 +2085,11 @@ export function createBackend({
     const missingLib = missingDefaultLib(parsed.options, (file) => ts.sys.fileExists(file));
     if (missingLib !== undefined) throw new TypeScriptLibMissingError(missingLib);
     // Only a program built from nothing asks the host every question; one built on an old
-    // program, or on unsaved text, is not recorded.
+    // program is not recorded. One built on unsaved text is: its answers are the overlays', and a
+    // replay serves the overlays of its own run the same way (`replayHost`), so the record holds
+    // exactly while the open documents have that text (an editor's next start).
     const queries =
-      cache !== undefined && oldProgram === undefined && overlays.size === 0 && !trustCache
+      cache !== undefined && oldProgram === undefined && !trustCache
         ? new Map<string, HostQuery>()
         : undefined;
     const plainHost = hostWithOverlays(parsed.options, overlays, sources, trustCache, jsDoc);
@@ -1945,9 +2137,25 @@ export function createBackend({
       }
       return fingerprints;
     };
-    /** What each file's rules were handed, by file. */
-    const reads = new Map<string, Set<string>>();
+    /** What each file's rules were handed, by file: read ids, with the file each one is in. */
+    const reads = new Map<string, Map<string, string>>();
     const types = createTypeQueries(program, claimed, cwd, packageOf, isEntry, dependenciesOf);
+    const idFileName = idFileNames(cwd);
+    const fileId = (fileName: string): string => `${idFileName(fileName)}#`;
+    /** The read id of a declaration handed out: its own id when that finds it again, else its file's. */
+    const readId = (symbol: SymbolRef, found: { file: string; node: ts.Node }): string => {
+      if (!types.isOwnFile(found.file) || ts.isSourceFile(found.node)) return fileId(found.file);
+      const sourceFile = program.getSourceFile(found.file);
+      const at = symbol.id.indexOf("#");
+      return sourceFile !== undefined &&
+        at >= 0 &&
+        symbol.id.slice(0, at + 1) === fileId(found.file) &&
+        declarationAtPath(sourceFile, symbol.id.slice(at + 1)) === found.node
+        ? symbol.id
+        : fileId(found.file);
+    };
+    /** Read prints computed in this program, by read id. */
+    const prints = new Map<string, string | undefined>();
     const unit: ProjectUnit = {
       tsconfig: tsconfigPath,
       files,
@@ -1956,27 +2164,47 @@ export function createBackend({
       types,
       fingerprint: (file) => fingerprintsOf().get(file),
       typesFor: (file) => {
-        const read = reads.get(file) ?? new Set<string>();
+        const read = reads.get(file) ?? new Map<string, string>();
         reads.set(file, read);
         return {
           ...types,
           declarationOf(symbol) {
             const found = types.declarationOf(symbol);
-            if (found !== undefined && found.file !== file) read.add(found.file);
+            if (found !== undefined && found.file !== file) {
+              read.set(readId(symbol, found), found.file);
+            }
             return found;
           },
         };
       },
-      readsOf: (file) => [...(reads.get(file) ?? [])].sort(),
-      readFingerprint: (file) => {
-        const sourceFile = program.getSourceFile(file);
-        if (sourceFile === undefined) return undefined;
-        const print = textHash(sourceFile);
-        readPrints[file] = print;
+      readsOf: (file, mentioned) => {
+        const ids = new Set<string>();
+        for (const [id, readFile] of reads.get(file) ?? []) {
+          ids.add(mentioned(readFile) ? fileId(readFile) : id);
+        }
+        return [...ids].sort();
+      },
+      readFingerprint: (read) => {
+        if (prints.has(read)) return prints.get(read);
+        const at = read.indexOf("#");
+        const sourceFile =
+          at < 0
+            ? undefined
+            : program.getSourceFile(toTypeScriptPath(path.resolve(cwd, read.slice(0, at))));
+        const node =
+          sourceFile === undefined ? undefined : declarationAtPath(sourceFile, read.slice(at + 1));
+        const print =
+          sourceFile === undefined || node === undefined
+            ? undefined
+            : declarationTextHash(sourceFile, node);
+        prints.set(read, print);
+        if (print !== undefined) readPrints[read] = print;
         return print;
       },
       syntaxError: (file) => firstSyntaxError(program, file),
       unresolvedImports: (file) => unresolvedImportsOf(program, file),
+      strictNullChecks: checksNulls(parsed.options),
+      typesResolve: typesResolver(tsconfigPath, parsed.options),
       bind: () => {
         program.getTypeChecker();
       },
@@ -2001,9 +2229,10 @@ export function createBackend({
     project: Project,
     claimed: ReadonlySet<string>,
     record: ProgramRecord,
+    overlays: ReadonlyMap<string, string>,
   ): ProjectUnit => {
     let built: ProjectUnit | undefined;
-    const real = (): ProjectUnit => (built ??= buildUnit(project, claimed, new Map(), false));
+    const real = (): ProjectUnit => (built ??= buildUnit(project, claimed, overlays, false));
     return {
       tsconfig: project.tsconfigPath,
       files: record.files,
@@ -2014,11 +2243,13 @@ export function createBackend({
       },
       fingerprint: (file) => record.fingerprints[file],
       typesFor: (file) => real().typesFor(file),
-      readsOf: (file) => (built === undefined ? [] : built.readsOf(file)),
+      readsOf: (file, mentioned) => (built === undefined ? [] : built.readsOf(file, mentioned)),
       // The program is the recorded one: a text hash it recorded is the answer.
       readFingerprint: (file) => record.reads[file] ?? real().readFingerprint(file),
       syntaxError: (file) => real().syntaxError(file),
       unresolvedImports: (file) => real().unresolvedImports(file),
+      strictNullChecks: checksNulls(project.parsed.options),
+      typesResolve: typesResolver(project.tsconfigPath, project.parsed.options),
       bind: () => {
         real().bind();
       },
@@ -2043,13 +2274,12 @@ export function createBackend({
         const replayable =
           record !== undefined &&
           !previous.has(project.tsconfigPath) &&
-          normalized.size === 0 &&
           !trustCache &&
           record.inputs ===
             recordInputs(programInputs(project.parsed, claimed), project.parsed.options) &&
-          replays(record.queries, ts.createCompilerHost(project.parsed.options, false));
+          replays(record.queries, replayHost(project.parsed.options, normalized));
         return replayable
-          ? recordedUnit(project, claimed, record)
+          ? recordedUnit(project, claimed, record, normalized)
           : buildUnit(project, claimed, normalized, trustCache);
       });
   };

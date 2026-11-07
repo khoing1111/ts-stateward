@@ -30,3 +30,15 @@ export function negated(): string {
   if (!(status in labels)) return labels[status];
   return "";
 }
+
+/** The entry made is another one, or it is made after the read. */
+export function otherEntry(other: string): number {
+  labels[other] = labels[other] ?? "";
+  return labels[status].length;
+}
+
+export function madeAfter(): number {
+  const length = labels[status].length;
+  labels[status] ??= "";
+  return length;
+}

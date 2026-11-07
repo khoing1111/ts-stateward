@@ -2,81 +2,96 @@
 
 # reducers/state-cannot-leave
 
-A state a reducer reaches but never leaves is marked final, so a missing way out does not go unnoticed.
+A reducer state with no way out keeps the user there for good, such as a failed payment with no retry; marking it final records that this is intended.
 
-- Group: reducers/graph
-- Tier: core (on in every preset)
-- Add-on: none
-- Heuristic: no
-- Severity under `recommended`: warning
-- Severity under `strict`: warning
+```ts
+import { useReducer } from "react";
 
-## Why
+/** @final "paid" */
+type PaymentState = { status: "paying" } | { status: "failed" } | { status: "paid" };
+type PaymentEvent = { type: "succeeded" } | { type: "declined" };
 
-A state nothing leaves is where the user stays for good: a payment that failed with no retry and no cancel, an upload that errored with no way to start again. Sometimes that is meant (a paid order is done); then say so with a `FINAL_STATES` constant, or `@final` on the state type. When it is not meant, an event is missing, and this rule finds it.
+function payment(state: PaymentState, event: PaymentEvent): PaymentState {
+  if (state.status !== "paying") return state;
+  return event.type === "succeeded" ? { status: "paid" } : { status: "failed" };
+}
 
-## When to use it
+export function usePayment() {
+  return useReducer(payment, { status: "paying" });
+}
+```
 
-Use it for reducers whose state is a union with a tag like `status` or `kind`, passed to `useReducer` or marked `@initial`. It is a warning in every preset, since a dead end may be on purpose until `@final` says so.
+`stateward check` prints:
 
-## What it catches
+```text
+warning[reducers/state-cannot-leave]: `payment` reaches "failed" but never leaves it
+ --> example.ts:7:10
+  |
+7 | function payment(state: PaymentState, event: PaymentEvent): PaymentState {
+  |          ^^^^^^^
+  = fix: handle an event that leaves "failed", or mark it final (quick fix available)
+  = note: example.ts:13: starts at "paying"
+  = note: example.ts:9: "paying" goes to "failed"
+  = docs: stateward explain reducers/state-cannot-leave
+```
 
-- A state the reducer reaches and never leaves, not listed in `@final`. The message shows the path that reaches it.
-- A name in `@final` that is not a state of the type (`@final "payed"`).
-- A state in `@final` that the reducer does leave, from a branch that checks the state (`switch (state.status)`, an `if` on it).
+Add the event that leaves the state (a retry, a cancel):
 
-### Say it in code: a `FINAL_STATES` constant
+```ts
+import { useReducer } from "react";
 
-A top-level `const` in the reducer's module whose name ends with `FINAL_STATES` or `FINAL_STATUSES`, typed `as const satisfies readonly State["tag"][]`, marks its states final. TypeScript checks the names against the union, so a misspelt state does not compile:
+/** @final "paid" */
+type PaymentState = { status: "paying" } | { status: "failed" } | { status: "paid" };
+type PaymentEvent = { type: "succeeded" } | { type: "declined" } | { type: "retry" };
+
+function payment(state: PaymentState, event: PaymentEvent): PaymentState {
+  if (event.type === "retry") return state.status === "failed" ? { status: "paying" } : state;
+  if (state.status !== "paying") return state;
+  return event.type === "succeeded" ? { status: "paid" } : { status: "failed" };
+}
+
+export function usePayment() {
+  return useReducer(payment, { status: "paying" });
+}
+```
+
+Or, when the dead end is meant, mark it final: `/** @final "paid" | "failed" */`. A quick fix does that: it adds the state to the module's `FINAL_STATES` constant when there is one (one name a line, if the others are), else to `@final`, or adds the `@final` comment above the type. It changes nothing at run time; use it only when the dead end is meant.
+
+## Why it matters
+
+A state nothing leaves is where the user stays for good: a payment that failed with no retry and no cancel, an upload that errored with no way to start again. Sometimes that is meant (a paid order is done), and then the code should say so. When it is not meant, an event is missing, and this rule finds it.
+
+## What it does not catch
+
+It reports a state the reducer reaches and never leaves, not marked final (the message shows the path that reaches it); a name in `@final` that is not a state of the type (`@final "payed"`); and a state in `@final` that the reducer does leave, from a branch that checks the state (`switch (state.status)`, an `if` on it). It does not see:
+
+- a reducer with no `useReducer` call and no `@initial`;
+- a way out that depends on data (`if (state.attempt < 3)`): both branches count as possible;
+- a final state left by a return that does not check which state it is in: that return counts as leaving every state, so it is not held against `@final`;
+- state in `useState` or class fields, and nested or parallel states.
+
+## Getting the best from it
+
+Say which states are final in code TypeScript checks: a top-level `const` in the reducer's module whose name ends with `FINAL_STATES` or `FINAL_STATUSES`, typed `as const satisfies readonly State["tag"][]`. A misspelt state then does not compile:
 
 ```ts
 export const CHECKOUT_FINAL_STATES = ["paid", "cancelled"] as const satisfies readonly CheckoutState["status"][];
 ```
 
-A constant without the `satisfies` is not read: nothing would check its names. `@final` keeps working (JSDoc, which TypeScript does not check; stateward does); the two add up.
-
-### Bad
-
-```ts
-/** @final "paid" | "cancelled" */
-type CheckoutState =
-  | { status: "cart" }
-  | { status: "paying" }
-  | { status: "paymentFailed" } // reached on `paymentFailed`, nothing leaves it
-  | { status: "paid" }
-  | { status: "cancelled" };
-```
-
-### Good
-
-Handle an event that leaves `"paymentFailed"` (a retry, a cancel), or list it: `/** @final "paid" | "cancelled" | "paymentFailed" */`.
-
-### Fix
-
-A quick fix adds the state to the `FINAL_STATES` constant when the reducer's module has one (one name a line, if the others are), else to `@final`, or adds the `@final` comment above the type. It changes nothing at run time; use it only when the dead end is meant.
-
-## What it does not catch
-
-- A reducer with no `useReducer` call and no `@initial`.
-- A way out that depends on data (`if (state.attempt < 3)`): both branches count as possible.
-- A final state left by a return that does not check which state it is in: that return counts as leaving every state, so it is not held against `@final`.
-- State in `useState` or class fields, and nested or parallel states.
+A constant without the `satisfies` is not read, since nothing would check its names. `@final` on the state type keeps working (TypeScript does not check JSDoc; stateward does), and the two add up. Write states in quotes, separated by `|`, commas or spaces.
 
 ## Turn it on or off
 
-In `stateward.config.ts`:
-
 ```ts
 rules: { "reducers/state-cannot-leave": "off" } // or "error"
-groups: { "machines/graph": "off" } // the whole group
 rules: { "reducers/state-cannot-leave": ["warning", { finalStates: ["done", "cancelled"] }] } // final in every reducer
 ```
 
-### Options
-
-Set as `rules: { "reducers/state-cannot-leave": ["warning", { … }] }`.
+Options, set as `rules: { "reducers/state-cannot-leave": ["warning", { … }] }`:
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `finalStates` | list of strings | `[]` | State names that are final in every reducer, as if listed in `@final` (done, cancelled, closed*). |
 | `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of finding. Kinds: `never-left`: a state the reducer reaches and never leaves, not marked final; `final-left`: a state marked `@final` that the reducer does leave; `unknown-final`: a name in `@final` that is not a state of the type. |
+
+Core rule: warning under `recommended` and `strict`. Group: `reducers/graph`.

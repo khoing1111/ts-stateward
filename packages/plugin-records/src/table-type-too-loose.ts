@@ -17,15 +17,48 @@ import {
 
 const EXPLAIN = `# records/table-type-too-loose
 
-A lookup table typed \`Record<string, V>\` says neither "these are all the keys" nor "keys come from outside"; say which in its type.
+A table typed \`Record<string, V>\` lets a misspelt or missing key compile; typing its keys, or its reads as possibly missing, lets TypeScript check each read.
 
-## Why
+\`\`\`ts example-bad
+const labels: Record<string, string> = { idle: "Idle", done: "Done" };
 
-\`const labels: Record<string, string> = { idle: "Idle", done: "Done" }\` could mean two things. If it is a fixed table, every key is known, but the type accepts any string: \`labels[status]\` compiles with a misspelt or missing key and the page shows "undefined". If it is an open dictionary whose keys come from outside, the type should say that a lookup can find nothing, so each read handles it. TypeScript has a spelling for each; the rule asks you to pick one and then trusts it.
+export function label(status: string): string {
+  return labels[status];
+}
+\`\`\`
 
-## When to use it
+Say which table it is. A fixed table, read with keys of a known type:
 
-Write the table's intent in its type. Each of these is silent:
+\`\`\`ts example-good
+type Status = "idle" | "done";
+
+const labels = { idle: "Idle", done: "Done" } satisfies Record<Status, string>;
+
+export function label(status: Status): string {
+  return labels[status];
+}
+\`\`\`
+
+Or an open dictionary, whose type says a lookup can find nothing: \`const labels: Partial<Record<string, string>> = { … }\`, read as \`labels[key] ?? key\`.
+
+The editor offers a quick fix for each. "Use satisfies: the keys are fixed" moves the type behind the table as \`satisfies Record<Status, string>\`, where \`Status\` is the type the reads look it up with (imported when the file does not import it yet), or a union type in scope with exactly the table's keys. With no such type it writes the keys out (\`Record<"idle" | "done", string>\`) and says so: that checks only the keys written there, not the ones your code needs. "Use Partial<Record<string, …>>: keys come from outside" types it \`Partial<Record<string, string>>\`. Each is offered only when the code still compiles after it; an import a fix leaves unused is removed with it. For a \`Map\`, use an object with \`satisfies\` instead; there is no quick fix.
+
+## Why it matters
+
+\`Record<string, string>\` could mean two things. If it is a fixed table, every key is known, but the type accepts any string: \`labels[status]\` compiles with a misspelt or missing key, and the page shows "undefined". If it is an open dictionary whose keys come from outside, the type should say that a lookup can find nothing, so each read handles it. TypeScript has a spelling for each; once you pick one, TypeScript checks the reads and the rule trusts it.
+
+## What it does not catch
+
+It reports only a variable built from an object literal typed \`Record<string, V>\` (or \`{ [key: string]: V }\`), or a \`new Map\` of literal pairs, that your code reads and never changes or hands on. So it does not report:
+
+- a table that states its intent in its type (the spellings below);
+- a table that is changed, or may be: written from another file, passed to a function that could change it, spread or copied into another object (\`{ ...views, extra }\`, \`Object.assign\`), or handed on somewhere stateward cannot follow;
+- a table where every read with a wider key handles a missing entry (\`roleLabels[role] ?? role\`, \`labels[key]?.trim()\`, \`if (key in labels)\`, \`Object.hasOwn(labels, key)\`, or \`if (!label)\` after the read): an open dictionary used correctly. The same holds for a \`Map\` (\`reasons.get(reason) ?? reason\`, \`if (shortcuts.has(key))\`);
+- a table exported to code outside the checked files, a table never read, tables from packages, and names listed in \`ignore\`.
+
+## Getting the best from it
+
+Each of these states the intent, so the rule does not report it and TypeScript checks the reads:
 
 | You mean | Write |
 | --- | --- |
@@ -34,54 +67,12 @@ Write the table's intent in its type. Each of these is silent:
 | an open dictionary, keys from outside | \`const labels: Partial<Record<string, string>> = { … }\` (or \`{ [key: string]: string \\| undefined }\`) |
 | a fixed table read with a key from outside | \`satisfies Record<Status, string>\`, and test the key first: \`key in labels\`, \`Object.hasOwn(labels, key)\` or a guard \`isStatus(key)\` |
 
-It is on as an error in every preset. It reports a table only when it can see that nothing in your code changes it or hands it on.
-
-## What it catches
-
-A variable built from an object literal typed \`Record<string, V>\` (or \`{ [key: string]: V }\`), or a \`new Map\` of literal pairs, that your code reads and never adds to, changes, deletes from or hands on.
-
-### Bad
-
-\`\`\`ts
-const labels: Record<string, string> = { idle: "Idle", done: "Done", failed: "Failed" };
-const text = labels[status]; // a fixed table or an open dictionary? Any string is accepted.
-\`\`\`
-
-### Good
-
-\`\`\`ts
-type Status = "idle" | "done" | "failed";
-const labels = { idle: "Idle", done: "Done", failed: "Failed" } satisfies Record<Status, string>;
-const text = labels[status]; // \`status\` must be a Status; a missing label fails to compile
-\`\`\`
-
-or, when the keys come from outside:
-
-\`\`\`ts
-const labels: Partial<Record<string, string>> = { idle: "Idle", done: "Done" };
-const text = labels[key] ?? key; // the type says a lookup can find nothing
-\`\`\`
-
-### Fix
-
-Two quick fixes, one per intent: "It is a fixed table: use satisfies" moves the type behind the table as \`satisfies Record<Status, string>\`, where \`Status\` is the type the reads look the table up with (\`labels[touchpointStatus()]\` gives \`TouchpointStatus\`, imported when the file does not import it yet), or a union type in scope with exactly the table's keys. With no such type the keys are written out (\`Record<"idle" | "done", string>\`), and the fix says so: it checks only the keys written there, not the ones your code needs. "It is an open dictionary" types it \`Partial<Record<string, string>>\`. Each is offered only when the code still compiles after it; an import a fix leaves unused is removed with it.
-
-When some read uses a wider key (\`pageTitles[pathname]\` with a \`string\` from the router) and does not handle a missing entry, the message leads with the open dictionary; a fixed table needs the key typed first (\`keyof typeof pageTitles\`). When the keys come from \`Object.keys(labels)\`, read key and value together with \`Object.entries(labels)\`. For a \`Map\`, use an object with \`satisfies\` instead; there is no quick fix.
-
-## What it does not catch
-
-- A table that states its intent in its type (the four spellings above).
-- A table that is changed, or may be: written from another file, passed to a function that could change it, spread or copied into another object (\`{ ...views, extra }\`, \`Object.assign\`), or handed on somewhere stateward cannot follow.
-- A table where every read with a wider key handles a missing entry (\`roleLabels[role] ?? role\`, \`labels[key]?.trim()\`, \`if (key in labels)\`, \`Object.hasOwn(labels, key)\`, or \`if (!label)\` after the read): an open dictionary used correctly. The same holds for a \`Map\` (\`reasons.get(reason) ?? reason\`, \`if (shortcuts.has(key))\`).
-- A table exported to code outside the checked files, a table never read, tables from packages, and names listed in \`ignore\`.
+When some read uses a wider key (\`pageTitles[pathname]\` with a \`string\` from the router) and does not handle a missing entry, the message leads with the open dictionary; a fixed table needs the key typed first (\`keyof typeof pageTitles\`). When the keys come from \`Object.keys(labels)\`, read key and value together with \`Object.entries(labels)\`.
 
 ## Turn it on or off
 
-In \`stateward.config.ts\`:
-
 \`\`\`ts
 rules: { "records/table-type-too-loose": "off" } // or "warning"
-groups: { "states/records": "off" } // the whole group
 rules: { "records/table-type-too-loose": ["error", { ignore: ["*_MESSAGES"] }] } // keep some names open
 \`\`\`
 `;
@@ -244,10 +235,9 @@ function isPlainForm(candidate: Candidate): boolean {
   return /^(?:Record<|\{ ?\[)/.test(candidate.typeText);
 }
 
-const FIXED_TITLE = "It is a fixed table: use satisfies";
+const FIXED_TITLE = "Use satisfies: the keys are fixed";
 /** With no type naming the keys, `satisfies` checks the keys as written, not the ones the code needs. */
-const FIXED_AS_WRITTEN_TITLE =
-  "It is a fixed table: use satisfies (fixes only the keys written here)";
+const FIXED_AS_WRITTEN_TITLE = "Use satisfies with the keys as written: the keys are fixed";
 
 /**
  * The two fixes, one per intent. Each changes the table's type, so core offers it only when
@@ -282,7 +272,7 @@ function fixesOf(
   // Core checks the files a fix edits; an exported table is read in files it does not check.
   if (candidate.declares.startsWith("export ")) return fixes;
   fixes.push({
-    title: `It is an open dictionary: Partial<Record<${candidate.keyKind}, …>>`,
+    title: `Use Partial<Record<${candidate.keyKind}, …>>: keys come from outside`,
     changesType: true,
     edits: [
       {
@@ -319,13 +309,13 @@ function adviceFor(candidate: Candidate, use: UseSummary | undefined): Advice {
 }
 
 /**
- * The headline asks one way everywhere: is the annotation a fixed table or an open
- * dictionary? Names are never cut, so a long name makes the line longer.
+ * The headline says the same everywhere: the type takes any key, so a misspelt or missing key
+ * still compiles. Names are never cut, so a long name makes the line longer.
  */
 function headlineOf(candidate: Candidate): string {
   return fitted(
     (cut) =>
-      `\`${cut(candidate.name)}\` is typed \`${cut(candidate.typeText)}\`: a fixed table or an open dictionary?`,
+      `\`${cut(candidate.name)}\` accepts any ${candidate.keyKind} key, so a misspelt or missing key still compiles`,
   );
 }
 
@@ -334,14 +324,14 @@ function hintOf(candidate: Candidate, advice: Advice): string {
   const keysText = candidate.keysType ?? candidate.labels.join(" | ");
   const build = (keys: string, name: string, value: string): string => {
     const fixed = `\`satisfies Record<${keys}, ${value}>\``;
-    const open = `keys from outside: \`Partial<Record<${candidate.keyKind}, ${value}>>\``;
+    const open = `\`Partial<Record<${candidate.keyKind}, ${value}>>\` for keys from outside`;
     switch (advice) {
       case "satisfies":
-        return `every key known: ${fixed}; ${open}`;
+        return `use ${fixed} for fixed keys, ${open}`;
       case "type-the-keys":
-        return `${open}; every key known: look keys up as \`${candidate.keysType ?? `keyof typeof ${name}`}\`, then use \`satisfies\``;
+        return `use ${open}; for fixed keys, look keys up as \`${candidate.keysType ?? `keyof typeof ${name}`}\` and use \`satisfies\``;
       case "use-entries":
-        return `every key known: read \`Object.entries(${name})\`, then use \`satisfies\`; ${open}`;
+        return `read \`Object.entries(${name})\` and use \`satisfies\` for fixed keys; ${open}`;
       default: {
         const unreachable: never = advice;
         return unreachable;
@@ -368,7 +358,7 @@ function recordMessage(candidate: Candidate, advice: Advice): { message: string;
 
 function mapMessage(candidate: Candidate): { message: string; hint: string } {
   return {
-    message: `\`${shorten(candidate.name)}\` is a Map with a fixed set of keys that is never changed`,
+    message: `\`${shorten(candidate.name)}\` is a Map whose keys are fixed and never change`,
     hint: "use an object `{ … } satisfies Record<…>`, so a missing key fails to compile",
   };
 }
@@ -377,10 +367,13 @@ export const tableTypeTooLoose = defineRule({
   kind: "project",
   meta: {
     description:
-      'A lookup table typed `Record<string, V>` says neither "these are all the keys" nor "keys come from outside"; say which in its type.',
+      "A table typed `Record<string, V>` lets a misspelt or missing key compile; typing its keys, or its reads as possibly missing, lets TypeScript check each read.",
+    summary:
+      'a lookup table typed `Record<string, V>` that says neither "all keys" nor "keys from outside"',
     defaultSeverity: "error",
     tier: "core",
     group: "keys",
+    fixNeedsStrictNulls: true,
     options: {
       ignore: option.strings({
         default: [],

@@ -27,6 +27,7 @@ import type {
   Json,
   LibraryUse,
   Location,
+  StatedGuarantee,
   RuleSelection,
   TokenType,
   TypeQueries,
@@ -101,8 +102,18 @@ export type Checker = {
    * The fast pass: runs only the file rules, only on `files` (own files; others are ignored), on
    * programs that reuse the previous ones. Findings are for those files only; project rules do not
    * run, so their findings are the last `check`'s.
+   *
+   * The rules run on each file, unless it is in `reusable` and the checker's cache holds its
+   * results under its current dependency fingerprint and reads (as a full check would reuse them):
+   * then they are taken from there. The fast pass never writes the cache. Name only files that are
+   * likely unchanged (an editor's document just opened): the first such question computes the
+   * fingerprints of the whole program, which the next full check reuses.
    */
-  checkFiles(files: readonly string[], overlays?: ReadonlyMap<string, string>): CheckResult;
+  checkFiles(
+    files: readonly string[],
+    overlays?: ReadonlyMap<string, string>,
+    reusable?: readonly string[],
+  ): CheckResult;
   /** Ids of the active project rules, whose findings only `check` produces. */
   readonly projectRuleIds: ReadonlySet<string>;
   /**
@@ -128,6 +139,12 @@ export type Checker = {
    * from the last full check: `stateward deps`. Empty before a check.
    */
   libraryFacts(): readonly LibraryUse[];
+  /**
+   * The guarantees stated in the project, as the plugins that prove them read them
+   * (`EditorContributions.guarantees`), from the last full check: no new type checking. Empty
+   * before a check. Pair them with that check's findings with `proveGuarantees`.
+   */
+  guarantees(): readonly StatedGuarantee[];
   /**
    * Tries each fix of `findings` on a copy of the code of the last run (fixes.ts) and returns the
    * findings in the same order, each with only the fixes that compile. Verdicts are kept in the
@@ -299,7 +316,7 @@ export function createChecker({
         sliceStarted = performance.now();
       }
     },
-    checkFiles(files, overlays = new Map()) {
+    checkFiles(files, overlays = new Map(), reusable = []) {
       const started = performance.now();
       const units = backend.reopen(overlays);
       lastUnits = units;
@@ -312,6 +329,9 @@ export function createChecker({
         started,
         uncapped === undefined,
         ignores !== false,
+        cache === false || reusable.length === 0
+          ? undefined
+          : { cache, files: new Set(reusable.map(toTypeScriptPath)) },
       );
     },
     // Read on demand: it consults the rollout file, which a run that ignores rollout
@@ -339,6 +359,14 @@ export function createChecker({
       return config.plugins.flatMap(
         (plugin) =>
           plugin.editor?.libraryFacts?.({
+            projectSummaries: (ruleId) => summaries.get(ruleId)?.(),
+          }) ?? [],
+      );
+    },
+    guarantees() {
+      return config.plugins.flatMap(
+        (plugin) =>
+          plugin.editor?.guarantees?.({
             projectSummaries: (ruleId) => summaries.get(ruleId)?.(),
           }) ?? [],
       );
@@ -380,13 +408,24 @@ export function createChecker({
         hint: action.title,
         location: { file, start, end },
         related: [],
-        fixes: [{ title: action.title, edits: action.edits }],
+        fixes: [
+          {
+            title: action.title,
+            edits: action.edits,
+            alternatives: (action.alternatives ?? []).map((form) => ({
+              title: action.title,
+              edits: form.edits,
+            })),
+          },
+        ],
       }));
       const units = (lastUnits ??= backend.open(new Map()));
       const reviews = reviewFixes(findings, units, cache === false ? localVerdicts : cache);
-      return offered.filter((_, i) => {
+      // Each action as the first of its forms that compiles.
+      return offered.flatMap((action, i): EditorAction[] => {
         const reviewed = reviews[i]?.finding;
-        return reviewed?.kind === "problem" && reviewed.fixes.length > 0;
+        const form = reviewed?.kind === "problem" ? reviewed.fixes[0] : undefined;
+        return form === undefined ? [] : [{ title: action.title, edits: form.edits }];
       });
     },
     inlayHints(file, enabled = () => true) {
@@ -407,6 +446,9 @@ export function createChecker({
         );
     },
     tokens(file) {
+      // No plugin colours anything: answered without building or binding a program (an editor
+      // asks for tokens as soon as a file opens, before the first check has built one).
+      if (!config.plugins.some((plugin) => plugin.editor?.tokens !== undefined)) return [];
       const found = lookup(file);
       if (found === undefined) return [];
       return config.plugins.flatMap((plugin) => plugin.editor?.tokens?.({ file, ...found }) ?? []);

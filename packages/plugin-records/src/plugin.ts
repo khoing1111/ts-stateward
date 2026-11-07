@@ -6,7 +6,6 @@ const load = {
   lookupMissesKey: moduleLoader(() => import("./lookup-misses-key.js")),
   tableTypeTooLoose: moduleLoader(() => import("./table-type-too-loose.js")),
   duplicateKey: moduleLoader(() => import("./duplicate-key.js")),
-  keyedMapsOutOfSync: moduleLoader(() => import("./keyed-maps-out-of-sync.js")),
 };
 
 export function records() {
@@ -29,11 +28,6 @@ export function records() {
         RULES["duplicate-key"],
         load.duplicateKey,
         (module) => module.duplicateKey,
-      ),
-      "keyed-maps-out-of-sync": lazyRule(
-        RULES["keyed-maps-out-of-sync"],
-        load.keyedMapsOutOfSync,
-        (module) => module.keyedMapsOutOfSync,
       ),
     },
   });

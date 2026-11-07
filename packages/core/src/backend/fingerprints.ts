@@ -28,9 +28,9 @@ import { stronglyConnectedComponents } from "../graph.js";
  * fingerprint.
  *
  * A rule can also be handed another file's syntax (`TypeQueries.declarationOf`) and read beyond
- * its shape: a function's body, a `const`'s initializer. Each file a rule on a file was handed is
- * recorded with the hash of its text (`ProjectUnit.readsOf`), and a result is reused only while
- * each of those is the same (docs/architecture.md, "Incremental runs").
+ * its shape: a function's body, a `const`'s initializer. Each declaration a rule on a file was
+ * handed is recorded by its qualified id with `declarationTextHash` (`ProjectUnit.readsOf`), and a
+ * result is reused only while each of those is the same (docs/architecture.md, "Incremental runs").
  */
 
 const textHashes = new WeakMap<ts.SourceFile, string>();
@@ -46,6 +46,166 @@ export function textHash(sourceFile: ts.SourceFile): string {
     hash = sha1(sourceFile.text);
     textHashes.set(sourceFile, hash);
   }
+  return hash;
+}
+
+/** A top-level statement, as `declarationTextHash` relates it to the others. */
+type StatementNames = {
+  /** The names it declares in the module's scope (an import binds names too). */
+  readonly declares: readonly string[];
+  /** Every identifier in it, declared or used (a superset of the names it depends on). */
+  readonly mentions: ReadonlySet<string>;
+  /** Whether what it mentions can change what the names it relates to mean: not a re-export. */
+  readonly expands: boolean;
+};
+
+/** The names each top-level statement declares and mentions, per parsed file. */
+const statementNames = new WeakMap<ts.SourceFile, readonly StatementNames[]>();
+
+function bindingNames(name: ts.BindingName, into: string[]): void {
+  if (ts.isIdentifier(name)) {
+    into.push(name.text);
+    return;
+  }
+  for (const element of name.elements) {
+    if (ts.isBindingElement(element)) bindingNames(element.name, into);
+  }
+}
+
+/** The names a top-level statement declares, exported or not; empty for one that declares none. */
+function declaredNames(statement: ts.Statement): readonly string[] {
+  if (ts.isVariableStatement(statement)) {
+    const names: string[] = [];
+    for (const declaration of statement.declarationList.declarations) {
+      bindingNames(declaration.name, names);
+    }
+    return names;
+  }
+  if (ts.isImportDeclaration(statement)) {
+    const clause = statement.importClause;
+    const names: string[] = [];
+    if (clause?.name !== undefined) names.push(clause.name.text);
+    const bindings = clause?.namedBindings;
+    if (bindings !== undefined && ts.isNamespaceImport(bindings)) names.push(bindings.name.text);
+    if (bindings !== undefined && ts.isNamedImports(bindings)) {
+      for (const element of bindings.elements) names.push(element.name.text);
+    }
+    return names;
+  }
+  if (
+    (ts.isFunctionDeclaration(statement) ||
+      ts.isClassDeclaration(statement) ||
+      ts.isInterfaceDeclaration(statement) ||
+      ts.isTypeAliasDeclaration(statement) ||
+      ts.isEnumDeclaration(statement) ||
+      ts.isImportEqualsDeclaration(statement) ||
+      ts.isModuleDeclaration(statement)) &&
+    statement.name !== undefined &&
+    ts.isIdentifier(statement.name)
+  ) {
+    return [statement.name.text];
+  }
+  return [];
+}
+
+function namesOfStatements(sourceFile: ts.SourceFile): readonly StatementNames[] {
+  let found = statementNames.get(sourceFile);
+  if (found !== undefined) return found;
+  found = sourceFile.statements.map((statement) => {
+    const mentions = new Set<string>();
+    const visit = (node: ts.Node): void => {
+      if (ts.isIdentifier(node)) mentions.add(node.text);
+      else ts.forEachChild(node, visit);
+    };
+    visit(statement);
+    return {
+      declares: declaredNames(statement),
+      mentions,
+      expands: !ts.isExportDeclaration(statement) && !ts.isExportAssignment(statement),
+    };
+  });
+  statementNames.set(sourceFile, found);
+  return found;
+}
+
+/** The hash of each top-level statement's related text, per parsed file, by statement index. */
+const declarationHashes = new WeakMap<ts.SourceFile, Map<number, string>>();
+
+/**
+ * The hash of what a rule handed `node` (`TypeQueries.declarationOf`) can learn from its file,
+ * short of the file's whole text: a cache entry that read `node` holds while this is the same.
+ *
+ * - The top-level statement `node` is in, as written, with the comments before it (JSDoc tags are
+ *   read: `calleeTags`). A rule walks up from a declaration (a `const`'s keyword, a method's class,
+ *   a parameter's function), so the whole statement counts, not the node alone.
+ * - Every other top-level statement related to it by name, transitively: one that declares a name
+ *   it mentions (a helper it calls, a constant whose literal type is read, an import, the overloads
+ *   and merged declarations of its own name, a declaration added that shadows a global), and one
+ *   that mentions a name of the set without declaring any (`X.y = …`, `export default X`,
+ *   `export { X }`; a re-export adds no names of its own). Names are matched by text, not
+ *   by scope: more is included than is needed, never less.
+ *
+ * Positions are not part of it (a comment added above shifts them): a rule that keeps another
+ * file's offsets in what it returns is noted as reading that whole file (engine `readsAfter`).
+ * Syntax only, no parent pointers needed (`node` is found by position). A JavaScript file's types
+ * come from JSDoc, whose names are not matched: its hash is its whole text.
+ */
+export function declarationTextHash(sourceFile: ts.SourceFile, node: ts.Node): string {
+  // JavaScript types come from JSDoc, whose names `mentions` does not see: the whole text.
+  if (ts.isSourceFile(node) || !TYPESCRIPT_SOURCE.test(sourceFile.fileName)) {
+    return textHash(sourceFile);
+  }
+  const { statements, text } = sourceFile;
+  const index = statements.findIndex(
+    (statement) => statement.pos <= node.pos && node.end <= statement.end,
+  );
+  if (index < 0) return textHash(sourceFile);
+  let byIndex = declarationHashes.get(sourceFile);
+  if (byIndex === undefined) {
+    byIndex = new Map();
+    declarationHashes.set(sourceFile, byIndex);
+  }
+  const known = byIndex.get(index);
+  if (known !== undefined) return known;
+
+  const names = namesOfStatements(sourceFile);
+  const declaredBy = new Map<string, number[]>();
+  const mentionedBy = new Map<string, number[]>();
+  names.forEach((statement, at) => {
+    const into = statement.declares.length > 0 ? declaredBy : mentionedBy;
+    const keys = statement.declares.length > 0 ? statement.declares : statement.mentions;
+    for (const key of keys) {
+      const list = into.get(key) ?? [];
+      list.push(at);
+      into.set(key, list);
+    }
+  });
+  const included = new Set<number>();
+  const seen = new Set<string>();
+  const pending: string[] = [];
+  const include = (at: number, expand: boolean): void => {
+    if (included.has(at)) return;
+    included.add(at);
+    const statement = names[at];
+    if (statement === undefined || !expand) return;
+    for (const name of statement.declares) pending.push(name);
+    for (const name of statement.mentions) pending.push(name);
+  };
+  include(index, true);
+  for (let name = pending.pop(); name !== undefined; name = pending.pop()) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    for (const at of declaredBy.get(name) ?? []) include(at, true);
+    for (const at of mentionedBy.get(name) ?? []) include(at, names[at]?.expands === true);
+  }
+  const parts = [...included]
+    .sort((a, b) => a - b)
+    .map((at) => {
+      const statement = statements[at];
+      return statement === undefined ? "" : text.slice(statement.pos, statement.end);
+    });
+  const hash = sha1(`declaration\u0000${parts.join("\u0000")}`);
+  byIndex.set(index, hash);
   return hash;
 }
 
@@ -111,18 +271,6 @@ function localNames(statement: ts.Statement): readonly string[] | undefined {
   return undefined;
 }
 
-/** `X.y = …` at the top of a module: TypeScript declares `y` on `X` there (an expando). */
-function isExpandoAssignment(statement: ts.Statement): boolean {
-  if (!ts.isExpressionStatement(statement)) return false;
-  const { expression } = statement;
-  return (
-    ts.isBinaryExpression(expression) &&
-    expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-    (ts.isPropertyAccessExpression(expression.left) ||
-      ts.isElementAccessExpression(expression.left))
-  );
-}
-
 /** The text of each parsed JSDoc comment on `node` (parsed only in the modes that read it). */
 function jsDocTexts(node: ts.Node, text: string, into: string[]): void {
   const docs: unknown = Reflect.get(node, "jsDoc");
@@ -152,8 +300,8 @@ function jsDocTexts(node: ts.Node, text: string, into: string[]): void {
  *
  * Kept as well: every parsed JSDoc comment on what is kept (`TypeQueries.calleeTags` reads its
  * tags), the comments at the top of the file that hold a pragma or a directive (`@jsx…`,
- * `/// <reference …/>`), and the offset of each top-level `X.y = …` (the qualified id of `y`
- * counts from the top of the file: qualified-ids.ts).
+ * `/// <reference …/>`). The offset of a top-level `X.y = …` is not kept: the qualified id of `y`
+ * counts the same-named ones before it (qualified-ids.ts), which the statements' tokens show.
  *
  * A function without a declared return type keeps its body: its type is inferred from it.
  */
@@ -246,9 +394,6 @@ export function shapeText(sourceFile: ts.SourceFile): string | undefined {
     const statement = statements[index];
     if (statement === undefined || kept.has(index)) return;
     kept.add(index);
-    if (isExpandoAssignment(statement)) {
-      notes.push(`expando at ${String(statement.getStart(sourceFile))}`);
-    }
     tokens = "";
     visit(statement);
     printed[index] = tokens;

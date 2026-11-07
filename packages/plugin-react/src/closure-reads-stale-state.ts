@@ -16,63 +16,63 @@ import { fitted } from "./text.js";
 
 const EXPLAIN = `# react/closure-reads-stale-state
 
-A state setter called from a timer, a listener or a callback that outlives its render passes an updater function, not a value computed from the state.
+A timer or listener created in an earlier render reads the state of that render; setting state from it overwrites newer values, which an updater avoids.
 
-## Why
+\`\`\`tsx example-bad
+import { useEffect, useState } from "react";
 
-\`useEffect(() => { setInterval(() => setCount(count + 1), 1000); }, [])\` reads \`count\` once, from the first render, and the interval keeps that function for as long as it runs. \`count\` is 0 every time the interval fires, so it sets 1 again and again and the counter stops at 1. The same happens to a chat listener that does \`setMessages([...messages, message])\`: every message replaces the list with the first render's messages plus one. Nothing is reported at runtime, and the code reads correctly.
-
-## When to use it
-
-Use it in any React app. It is a warning in every preset. It stays on with the React Compiler: the compiler memoizes values, but it does not change which render's value a timer or listener captured. A plain event handler written in JSX (\`onClick={() => setCount(count + 1)}\`) is not reported: React makes a new one on every render.
-
-## What it catches
-
-A setter called with an expression that reads its own state (\`setCount(count + 1)\`, \`setItems([...items, item])\`, \`setFilters({ ...filters, page })\`), inside a function that keeps running after its render:
-
-- the callback of \`setInterval\` or \`setTimeout\` started in an effect whose dependencies do not list the state (\`[]\` or other values), or an interval started anywhere else;
-- a listener added in an effect with \`addEventListener\`, \`on\`, \`once\`, \`subscribe\` or \`addListener\`, when the effect's dependencies do not list the state;
-- a \`useCallback\` whose dependencies do not list the state.
-
-### Bad
-
-\`\`\`tsx
-useEffect(() => {
-  const id = setInterval(() => setCount(count + 1), 1000);
-  return () => clearInterval(id);
-}, []);
+export function Counter() {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setCount(count + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <p>{count}</p>;
+}
 \`\`\`
 
-### Good
+Pass an updater function, which React calls with the latest value:
 
-\`\`\`tsx
-useEffect(() => {
-  const id = setInterval(() => setCount((count) => count + 1), 1000);
-  return () => clearInterval(id);
-}, []);
+\`\`\`tsx example-good
+import { useEffect, useState } from "react";
+
+export function Counter() {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setCount((current) => current + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <p>{count}</p>;
+}
 \`\`\`
 
-### Fix
+The quick fix writes it for you. \`check --fix\` does not apply it, because the callback can read other values from the old render too, which only you can judge.
 
-Pass a function: \`setCount((count) => count + 1)\`. React calls it with the latest value. The quick fix writes it for you; it is not applied by \`check --fix\`, because the new function can read other values from the old render too, which only you can judge.
+## Why it matters
+
+The interval keeps the function it was given for as long as it runs, and that function read \`count\` once, from the first render. \`count\` is 0 every time the interval fires, so it sets 1 again and again and the counter stops at 1. The same happens to a chat listener that does \`setMessages([...messages, message])\`: every message replaces the list with the first render's messages plus one. Nothing fails at run time, and the code reads correctly.
+
+## When it says “not checked”
+
+When the effect's or callback's dependencies are not written as an array in the call, which render's value the function keeps is not known, and the rule lists the place as not checked. Write the array in the call.
 
 ## What it does not catch
 
-- A value computed first and set after (\`const next = count + 1; setCount(next)\`).
-- A setter that reads the state inside an updater function (\`setCount((c) => c + count)\`).
-- A state set after an \`await\` in an effect: the late response is the \`react/effect-response-race\` add-on's case.
-- A timer or listener started in a function the effect only calls, or one whose dependencies are not written as an array in the call (stateward says it cannot tell).
-- A \`setTimeout\` started in an event handler: it runs once, soon after the click.
+It reports a setter called with an expression that reads its own state (\`setCount(count + 1)\`, \`setItems([...items, item])\`, \`setFilters({ ...filters, page })\`), inside a function that outlives its render: the callback of \`setInterval\` or \`setTimeout\` started in an effect whose dependencies do not list the state (or an interval started anywhere else); a listener added in such an effect with \`addEventListener\`, \`on\`, \`once\`, \`subscribe\` or \`addListener\`; or a \`useCallback\` whose dependencies do not list the state. It is silent on:
 
-When the rule cannot read the dependency array, it reports an info finding with how to make it checkable.
+- a plain event handler written in JSX (\`onClick={() => setCount(count + 1)}\`): React makes a new one on every render;
+- a \`setTimeout\` started in an event handler: it runs once, soon after the click;
+- a value computed first and set after (\`const next = count + 1; setCount(next)\`);
+- a setter that reads the state inside an updater function (\`setCount((c) => c + count)\`);
+- a state set after an \`await\` in an effect: a late response is the case of the \`react/effect-response-race\` add-on;
+- a timer or listener started in a function the effect only calls.
+
+It stays on with the React Compiler: the compiler memoizes values, but it does not change which render's value a timer or listener keeps.
 
 ## Turn it on or off
 
-In \`stateward.config.ts\`:
-
 \`\`\`ts
 rules: { "react/closure-reads-stale-state": "off" } // or "error"
-groups: { "react/state-updates": "off" } // the whole group
 rules: { "react/closure-reads-stale-state": ["warning", { listenerMethods: ["addEventListener", "on", "listen"] }] } // your event bus
 \`\`\`
 `;
@@ -257,7 +257,7 @@ const NOUN: Readonly<Record<Kind, string>> = {
   interval: "the interval",
   timeout: "the timeout",
   listener: "the listener",
-  callback: "this callback",
+  callback: "the callback",
 };
 
 function whenOf(holder: Holder): string {
@@ -290,10 +290,12 @@ export const closureReadsStaleState = defineRule({
   kind: "file",
   meta: {
     description:
-      "A state setter called from a timer, a listener or a callback that outlives its render passes an updater function, not a value computed from the state.",
+      "A timer or listener created in an earlier render reads the state of that render; setting state from it overwrites newer values, which an updater avoids.",
+    summary: "a timer, listener or callback that sets state from a value captured in an old render",
     defaultSeverity: "warning",
     tier: "core",
     group: "state",
+    needsTypes: { library: "React", modules: ["react"] },
     options: OPTIONS,
     explain: EXPLAIN,
   },
@@ -317,9 +319,9 @@ export const closureReadsStaleState = defineRule({
             ctx.unknown({
               message: fitted(
                 (cut) =>
-                  `stateward cannot tell whether \`${cut.name(binding.state)}\` here is a value from an old render`,
+                  `not checked: whether \`${cut.name(binding.state)}\` is a value from an old render: the call has no dependency array to read`,
               ),
-              hint: `write the dependency array in the call (\`[${binding.state}]\`) to make it checkable`,
+              hint: `write the dependency array in the call (\`[${binding.state}]\`), so it can be checked`,
               node: call,
             });
           } else if (holder.deps === "outside" || !listsState(types, holder.deps, binding)) {
@@ -329,11 +331,10 @@ export const closureReadsStaleState = defineRule({
             const body = ts.isObjectLiteralExpression(unwrapped(argument)) ? `(${shown})` : shown;
             const code = `${setter}((${state}) => ${body})`;
             ctx.report({
-              message: fitted(
-                (cut) =>
-                  `\`${cut.name(state)}\` here is the value from ${whenOf(holder)}, so ${NOUN[holder.kind]} ${
-                    always === undefined ? "keeps using it" : `always sets ${String(always)}`
-                  }`,
+              message: fitted((cut) =>
+                always === undefined
+                  ? `${NOUN[holder.kind]} reads a stale \`${cut.name(state)}\`: the value from ${whenOf(holder)}`
+                  : `${NOUN[holder.kind]} always sets ${String(always)}: \`${cut.name(state)}\` is the value from ${whenOf(holder)}`,
               ),
               hint: fitted((cut) =>
                 code.length <= 60

@@ -1,7 +1,7 @@
 # Run it in CI
 
-Run `stateward check` on every pull request, and each finding shows on the line it is about.
-stateward must be in your app's `devDependencies` ([install.md](install.md)).
+`stateward check` can run on every pull request and report each finding on the line it is about.
+stateward must be in the app's `devDependencies` ([install.md](install.md)).
 
 ## GitHub Actions
 
@@ -24,7 +24,7 @@ npx --no stateward check --format github
 plugin or token:
 
 ```text
-::error file=src/status.ts,line=14,col=7,endLine=14,endColumn=13,title=records/table-type-too-loose::`labels` is typed `Record<string, string>`: a fixed table or an open dictionary? — keys from outside: `Partial<Record<string, string>>`; every key known: look keys up as `keyof typeof labels`, then use `satisfies`
+::error file=src/status.ts,line=14,col=7,endLine=14,endColumn=13,title=records/table-type-too-loose::`labels` accepts any string key, so a misspelt or missing key still compiles — use `Partial<Record<string, string>>` for keys from outside; for fixed keys, look keys up as `keyof typeof labels` and use `satisfies`
 ```
 
 Errors show red, warnings yellow. Baselined and ignored findings are not shown. `npx --no` uses the
@@ -38,7 +38,8 @@ If another workflow already runs `stateward check`, directly or through a `packa
 
 ## Only the files of a pull request
 
-On a big app, report only the findings in the files a pull request changes:
+On an app with a baseline or with findings left in old code, `--changed` reports only the findings
+in the files a pull request changes, so the pull request fails only on its own changes:
 
 ```bash
 npx stateward init --ci github --changed
@@ -57,12 +58,24 @@ into one. The exit code follows what is reported.
 1 error in 3 changed files (12 problems elsewhere not shown, 2.1 s).
 ```
 
-`--changed` needs the branch's history: set `fetch-depth: 0` on `actions/checkout` (the generated
-workflow does).
+`--changed` needs the branch's history. Set `fetch-depth: 0` on `actions/checkout`; the generated
+workflow does.
+
+## Check the guarantees
+
+If the code states guarantees ([guarantees.md](guarantees.md)), add a step that lists them. It fails
+when one is not proven, including by a baselined error, because a guarantee does not hold until that
+error is fixed:
+
+```bash
+npx --no stateward guarantees
+```
 
 ## Other CI systems
 
-Run `npx --no stateward check`. The default output reads fine in any log, and the exit code fails
+Install the app's packages first, as the generated workflow does. Without React's types the React
+rules cannot run, and `check` reports them as not checked instead of passing them. Then run
+`npx --no stateward check`. The default output is plain text for any log, and the exit code fails
 the job:
 
 | Code | Meaning                                                                                                   |
@@ -94,9 +107,13 @@ npx stateward baseline
 
 ## The cache
 
-stateward remembers what it found in each file and next time looks again only at changed files. It
-keeps this in `node_modules/.cache/stateward` (or `STATEWARD_CACHE_DIR`). The generated workflow
-saves that folder under a key made from your lockfile, config and stateward version.
+stateward caches the findings of each file and on the next run checks only the files that changed.
+The cache is in `node_modules/.cache/stateward`, or `STATEWARD_CACHE_DIR` when set. A project with no
+`node_modules` uses a folder named after its path in your user cache folder (`~/.cache/stateward/results`
+on Linux, `~/Library/Caches/stateward/results` on macOS, `%LOCALAPPDATA%\stateward\results` on
+Windows), or `.stateward-cache` in the project when there is none. `check --verbose` says which.
+The generated workflow saves `node_modules/.cache/stateward` under a key made from your lockfile,
+config and stateward version.
 
 What libraries throw is cached once per package version, for all your projects, in
 `~/.cache/stateward/packages` (or `STATEWARD_PACKAGE_CACHE_DIR`). Each cache keeps under 200 MB
@@ -111,7 +128,7 @@ npx stateward cache stats
 ## Big projects
 
 stateward raises Node's memory limit itself, to 4 GB or three quarters of the machine's memory if
-that is less. If it still runs out, it says so and exits with 2. Give it more:
+that is less. If it still runs out, it says so and exits with 2. To give it more:
 
 ```bash
 npx --no stateward check --format github --max-memory 6144
@@ -139,6 +156,6 @@ Timing (the check took 24,213 ms; peak memory 1840.5 MB):
 - **allocated** is memory allocated while the rule ran, mostly freed again. **peak memory** is the
   most the process held.
 
-A large share in building programs means many files: look at `include` and `exclude`. A rule slow
+A large share in building programs means many files; check `include` and `exclude`. A rule slow
 without much type time is slow in its own code; please
 [report it](https://github.com/khoing1111/ts-stateward/issues) with this output.

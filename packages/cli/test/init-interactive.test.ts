@@ -5,7 +5,7 @@ import { PassThrough, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PACK_CATALOG } from "../src/index.js";
 import { PACK_FACTORIES } from "./packs.js";
-import { main } from "../src/main.js";
+import { NEXT_FIRST_RULE, main } from "../src/main.js";
 import type { CliEnv, ExitCode } from "../src/main.js";
 
 let dir = "";
@@ -129,7 +129,7 @@ describe("stateward init, on a terminal", () => {
     expect(result.stdout).toContain("preset  recommended");
     expect(result.stdout).toContain("add-ons react-context/react-router");
     expect(result.stdout).toContain("rollout on: rules are turned on one at a time");
-    expect(result.stdout).toContain("Then run: stateward plan");
+    expect(result.stdout).toContain(NEXT_FIRST_RULE);
     expect(result.stdout).not.toContain("Then run: stateward check");
   });
 
@@ -207,7 +207,7 @@ describe("stateward init, on a terminal", () => {
     expect(config()).not.toContain("rollout");
     expect(result.stdout).not.toContain("rollout on");
     expect(result.stdout).toContain("Then run: stateward check");
-    expect(result.stdout).not.toContain("Then run: stateward plan");
+    expect(result.stdout).not.toContain(NEXT_FIRST_RULE);
   });
 
   it("counts a .tsx under src and a file listed in tsconfig as code, and .d.ts or node_modules as not", async () => {
@@ -327,7 +327,7 @@ describe("stateward init, without a terminal or with --yes", () => {
     expect(result.stdout).toContain(
       "packs   unions, records, async, react-context, errors, react (detected from package.json)",
     );
-    expect(result.stdout).toContain("Then run: stateward plan");
+    expect(result.stdout).toContain(NEXT_FIRST_RULE);
   });
 
   it("--yes without a terminal works, and flags still override", async () => {
@@ -352,7 +352,7 @@ describe("a recorded session", () => {
         2. [x] records        Lookup tables and records keyed by a union have every key, once, under a type that names them.
         3. [x] async          An async failure is never lost: handlers catch their own, and state set before an await is set again when it fails.
         4. [x] react-context  A component that needs a context is always rendered under its Provider.
-        5. [x] errors         Errors are handled where they can happen: nothing swallowed, nothing lost in finally, no Result dropped.
+        5. [x] errors         Errors are handled where they can happen: none ignored, none replaced in \`finally\`, no \`Result\` dropped.
         6. [ ] ownership      One owner per piece of shared state and per brand: others call the owner's functions.
         7. [ ] reducers       A reducer reaches every state it declares and can leave every state it enters.
         8. [x] react          Values that effects and memoized components depend on keep their identity; effects do not copy state, loop, leak or race; state updates see the latest state; flags do not stand in for one state.
@@ -378,7 +378,7 @@ describe("a recorded session", () => {
       Install what it imports (npm, from your lockfile; stateward does not run it):
         npm install --save-dev stateward @stateward/plugin-unions @stateward/plugin-records @stateward/plugin-async @stateward/plugin-react-context @stateward/plugin-react
 
-      Then run: stateward plan
+      next: run \`npx stateward next\` to turn on the first rule
 
       "
     `);

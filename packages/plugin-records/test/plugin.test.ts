@@ -12,10 +12,8 @@ describe("records", () => {
       "lookup-misses-key",
       "table-type-too-loose",
       "duplicate-key",
-      "keyed-maps-out-of-sync",
     ]);
     expect(Object.values(plugin.rules).map((rule) => rule.meta.group)).toEqual([
-      "keys",
       "keys",
       "keys",
       "keys",
@@ -53,8 +51,8 @@ describe("records", () => {
     expect(rule.meta.description.length).toBeGreaterThan(0);
     const explain = rule.meta.explain;
     expect(explain).toContain("# records/table-type-too-loose");
-    expect(explain).toContain("## Bad");
-    expect(explain).toContain("## Good");
+    expect(explain).toContain("example-bad");
+    expect(explain).toContain("example-good");
     expect(explain).toContain('rules: { "records/table-type-too-loose": "off" }');
   });
 

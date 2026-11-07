@@ -38,11 +38,11 @@ describe("react render-stability options", () => {
       severities: { "from-function": "info" },
     });
     expect(mixed.filter((line) => line.startsWith("info"))).toEqual([
-      "info: `columns` from `getColumns(…)` is a new array every render, so this effect runs after every render",
-      "info: `columns` from `getColumns(…)` is a new array every render, so `<Table>` re-renders every time",
-      "info: `columns` from `buildColumns(…)` is a new array every render, so this effect runs after every render",
+      "info: effect runs after every render: `columns` from `getColumns(…)` is a new array each time",
+      "info: `<Table>` re-renders every time: `columns` from `getColumns(…)` is a new array each time",
+      "info: effect runs after every render: `columns` from `buildColumns(…)` is a new array each time",
       // `useColumns` returns what a plain function inside it builds.
-      "info: `columns` from `useColumns(…)` is a new array every render, so this effect runs after every render",
+      "info: effect runs after every render: `columns` from `useColumns(…)` is a new array each time",
     ]);
   });
 
@@ -77,16 +77,18 @@ describe("react effects options", () => {
       severities: { "inline-handler": "error", "missing-cleanup": "info" },
     });
     expect(mixed.filter((line) => line.startsWith("error"))).toEqual([
-      "error: the `resize` listener on `window` is an inline function, so no cleanup can remove it",
+      "error: `resize` listener on `window` is an inline function: no cleanup can remove it",
     ]);
     expect(mixed.filter((line) => line.startsWith("info"))).toHaveLength(7);
   });
 
-  it("effect-response-race: `notRequests`", () => {
-    expect(count("effects", "effect-response-race")).toBe(2);
-    expect(lines("effects", "effect-response-race", { notRequests: ["searchUsers"] })).toEqual([
-      "warning: a slow response for an old `userId` can overwrite a newer one",
-    ]);
+  it("effect-response-race: `notRequests` (the add-on's guesses)", () => {
+    const guesses = (options: Readonly<Record<string, OptionValue>> = {}): string[] =>
+      lines("latest-wins", "effect-response-race", options).filter((line) =>
+        line.includes("response race"),
+      );
+    expect(guesses()).toHaveLength(2);
+    expect(guesses({ notRequests: ["loadUser"] })).toEqual([]);
   });
 });
 

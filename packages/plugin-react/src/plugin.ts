@@ -15,7 +15,6 @@ const load = {
   timerRunsAfterUnmount: moduleLoader(() => import("./timer-runs-after-unmount.js")),
   closureReadsStaleState: moduleLoader(() => import("./closure-reads-stale-state.js")),
   indexKeyOnReorderedList: moduleLoader(() => import("./index-key-on-reordered-list.js")),
-  flagsAllowImpossibleCombos: moduleLoader(() => import("./flags-allow-impossible-combos.js")),
 };
 
 export function react() {
@@ -73,11 +72,6 @@ export function react() {
         RULES["index-key-on-reordered-list"],
         load.indexKeyOnReorderedList,
         (module) => module.indexKeyOnReorderedList,
-      ),
-      "flags-allow-impossible-combos": lazyRule(
-        RULES["flags-allow-impossible-combos"],
-        load.flagsAllowImpossibleCombos,
-        (module) => module.flagsAllowImpossibleCombos,
       ),
     },
   });

@@ -4,67 +4,67 @@ import { defineRule, matchesFile, option, type FileContext, type OptionsOf } fro
 
 const EXPLAIN = `# ownership/brand-built-outside-owner
 
-A branded value that has a check is built only by that check, in the file that declares the brand.
+A cast to a checked brand like \`Positive\` outside its check skips the validation the brand stands for, so the type promises more than the value holds.
 
-## Why
+\`values.ts\` declares the brand and its check:
 
-A branded type like \`type UserId = string & { readonly __brand: "UserId" }\` promises that every value of it passed a check. A cast skips the check: \`input.qty as Positive\` compiles for \`-5\`, and \`charge(qty)\` then bills a negative amount. After one such cast, the brand no longer tells anyone anything.
-
-## When to use it
-
-Use it if you brand checked values: ids, amounts, non-empty names. It is on as an error in every preset. A brand is only worth having if it cannot be faked, so keep it on; if your brands have no checks, it never fires.
-
-## What it catches
-
-A cast to a branded type outside the file that declares it: \`x as Positive\`, \`<Positive>x\`, \`x as unknown as Positive\`, also inside a type (\`Positive | undefined\`, \`Positive[]\`, \`[string, Positive]\`, \`{ qty: Positive }\`) and through a local alias (\`type Qty = Positive\`). Also a type predicate or assertion function (\`(x): x is Positive\`, \`asserts x is Positive\`) outside the owner, since it tells every caller a value was checked.
-
-A brand is recognised by its shape, so no library is needed: a type alias of your project that is an intersection with a tag property, either a string literal on a property whose name starts with \`_\` (\`T & { readonly __brand: "UserId" }\`) or a key that is a \`unique symbol\` (\`T & { readonly [brand]: "UserId" }\`), or that applies a generic helper of that shape (\`type Sku = Brand<string, "Sku">\` with \`type Brand<T, Name> = T & { readonly [brand]: Name }\`). The helper itself is a building block, not a brand. A brand is checked when the file that declares it exports its check: a function that builds the brand from another type (\`positive(value: number): Positive | undefined\`), or a type predicate or assertion function (\`isPositive(value: number): value is Positive\`). That file owns the brand: casts are allowed there, and only there, and the message names the check to call instead.
-
-A brand whose file exports no check (\`type SocketId = string & { _brand: "SocketId" }\`, cast wherever an id arrives) is a label: there is no check to skip, so casting to it is not reported. Declare a constructor next to the brand to make the brand checked, or name the files that may build it under \`owners\`.
-
-### Bad
-
-\`\`\`ts
-import type { Positive } from "./values";
-
-const qty = input.qty as Positive;
-\`\`\`
-
-### Good
-
-\`\`\`ts
-// values.ts: the brand and its check, together
+\`\`\`ts example-bad file=values.ts
 export type Positive = number & { readonly __brand: "Positive" };
+
 export function positive(value: number): Positive | undefined {
   return value > 0 ? (value as Positive) : undefined;
 }
-
-// cart.ts
-const qty = positive(input.qty);
-if (qty === undefined) return;
-charge(qty);
 \`\`\`
 
-### Fix
+\`cart.ts\` builds one with a cast:
 
-Call the brand's check, which the message names, or move the cast into the file that declares the brand. There is no quick fix.
+\`\`\`ts example-bad file=cart.ts
+import type { Positive } from "./values.js";
+
+export function quantity(input: { qty: number }): Positive {
+  return input.qty as Positive;
+}
+\`\`\`
+
+In \`cart.ts\`, call the brand's check instead, and handle the value it rejects:
+
+\`\`\`ts example-good file=cart.ts
+import { positive, type Positive } from "./values.js";
+
+export function quantity(input: { qty: number }): Positive | undefined {
+  return positive(input.qty);
+}
+\`\`\`
+
+Or move the cast into the file that declares the brand. There is no quick fix.
+
+## Why it matters
+
+A branded type promises that every value of it passed a check. A cast skips the check: \`input.qty as Positive\` compiles for \`-5\`, and \`charge(qty)\` then bills a negative amount. After one such cast, the brand no longer tells anyone anything.
 
 ## What it does not catch
+
+It reports a cast to a branded type outside the file that declares it (\`x as Positive\`, \`<Positive>x\`, \`x as unknown as Positive\`, also inside a type such as \`Positive | undefined\`, \`Positive[]\` or \`{ qty: Positive }\`, and through a local alias), and a type predicate or assertion function (\`(x): x is Positive\`, \`asserts x is Positive\`) outside that file, since it tells every caller a value was checked. It does not see:
 
 - \`x as any\`, or any other \`any\` value: TypeScript lets \`any\` become \`Positive\` without a cast (\`const qty: Positive = JSON.parse(text)\`). Use typescript-eslint's \`no-explicit-any\` and \`no-unsafe-assignment\` for that.
 - A cast that only removes \`undefined\` or \`null\` from a value that is already the brand (\`map.get(key) as Positive\`): it is allowed.
 - A brand declared in a package, an interface, or written inline in the cast (\`x as string & { __brand: "Id" }\`): there is no owner file to name.
-- A brand whose file exports no check, unless \`owners\` names it: declare a constructor to make the brand checked. A function made from nothing (\`newSessionId(): SessionId\`) or one that only takes the brand is not a check.
+- A brand whose file exports no check (\`type SocketId = string & { _brand: "SocketId" }\`, cast wherever an id arrives): it is a label, with no check to skip. A function made from nothing (\`newSessionId(): SessionId\`) or one that only takes the brand is not a check.
 - Arithmetic on brands: \`a + b\` is a plain \`number\`, not a brand.
+
+## Getting the best from it
+
+A brand is recognised by its shape, so no library is needed: a type alias of your project that is an intersection with a tag, either a string literal on a property whose name starts with \`_\` (\`T & { readonly __brand: "UserId" }\`) or a key that is a \`unique symbol\` (\`T & { readonly [brand]: "UserId" }\`), or that applies a generic helper of that shape (\`type Sku = Brand<string, "Sku">\`). The helper itself is a building block, not a brand.
+
+The brand is checked when the file that declares it exports its check: a function that builds the brand from another type (\`positive(value: number): Positive | undefined\`), or a type predicate or assertion function (\`isPositive(value: number): value is Positive\`). That file owns the brand: casts are allowed there, and only there, and the message names the check to call. To make a label brand checked, declare a constructor next to it, or name the files that may build it under \`owners\`.
 
 ## Turn it on or off
 
-In \`stateward.config.ts\`:
+A brand is only worth having if it cannot be faked, so keep it on; if your brands have no checks, it never fires.
 
 \`\`\`ts
 rules: { "ownership/brand-built-outside-owner": "off" } // or "warning"
 rules: { "ownership/brand-built-outside-owner": ["error", { owners: { Sku: ["src/codecs/**"] } }] } // more files may build Sku; Sku is checked even with no constructor
-groups: { "values/brands": "off" } // the whole group
 \`\`\`
 `;
 
@@ -102,7 +102,7 @@ function relativeTo(from: string, to: string): string {
 }
 
 function headline(brand: BuiltBrand): string {
-  return `\`${brand.name}\` is built here without its check`;
+  return `\`${brand.name}\` is built without its check`;
 }
 
 function hint(brand: CheckedBrand, file: string): string {
@@ -154,9 +154,16 @@ function isUniqueSymbolKey(name: ts.PropertyName, ctx: FileContext): boolean {
   );
 }
 
-/** `__brand`, `_tag`: a property name that says it is not data. */
+/**
+ * `__brand`, `_tag`: a property name that says it is not data. `__guarantee` is not one: it states
+ * a guarantee (`RequiredContext<T>`), which is optional and builds no checked value.
+ */
 function isTagName(name: ts.PropertyName): boolean {
-  return (ts.isIdentifier(name) || ts.isStringLiteral(name)) && name.text.startsWith("_");
+  return (
+    (ts.isIdentifier(name) || ts.isStringLiteral(name)) &&
+    name.text.startsWith("_") &&
+    name.text !== "__guarantee"
+  );
 }
 
 /** What a tag property's type is: a literal (a brand), a type parameter (a helper), or neither. */
@@ -471,7 +478,7 @@ function functionName(predicate: ts.TypePredicateNode, ctx: FileContext): string
 
 function predicateHeadline(name: string | undefined, brand: BuiltBrand): string {
   return name === undefined
-    ? `An unnamed function says a value is \`${brand.name}\` without its check`
+    ? `an unnamed function says a value is \`${brand.name}\` without its check`
     : `\`${name}\` says a value is \`${brand.name}\` without its check`;
 }
 
@@ -479,7 +486,8 @@ export const brandBuiltOutsideOwner = defineRule({
   kind: "file",
   meta: {
     description:
-      "A branded value that has a check is built only by that check, in the file that declares the brand.",
+      "A cast to a checked brand like `Positive` outside its check skips the validation the brand stands for, so the type promises more than the value holds.",
+    summary: "a cast to a checked brand like `as Positive` outside the file that owns its check",
     defaultSeverity: "error",
     tier: "core",
     group: "owners",

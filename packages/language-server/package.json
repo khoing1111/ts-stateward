@@ -1,6 +1,6 @@
 {
   "name": "@stateward/language-server",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "The stateward language server: exclusive states and predictable code paths in any editor that speaks LSP, with findings, quick fixes and hints.",
   "license": "MIT",
   "repository": {
@@ -44,6 +44,7 @@
     "vscode-languageserver-textdocument": "^1.0.16"
   },
   "devDependencies": {
+    "@stateward/plugin-ownership": "workspace:*",
     "@stateward/plugin-react-context": "workspace:*",
     "@types/react": "^19.3.0",
     "react": "^19.3.1",

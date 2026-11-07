@@ -204,7 +204,7 @@ describe("ignore comments", () => {
       ].join("\n"),
     });
     expect(summary(run(cwd))).toEqual([
-      "stateward/ignore: this ignore is not needed: `p/flag` finds nothing here",
+      "stateward/ignore: ignore comment is not needed: `p/flag` finds nothing in the code it covers",
       "p/flag: `bad2` is bad",
     ]);
   });
@@ -223,9 +223,9 @@ describe("ignore comments", () => {
     });
     const result = run(cwd);
     expect(summary(result)).toEqual([
-      "stateward/ignore: this ignore is not needed: `p/flag` finds nothing here",
+      "stateward/ignore: ignore comment is not needed: `p/flag` finds nothing in the code it covers",
       "p/flag: `bad1` is bad",
-      "stateward/ignore: this ignore is not needed: `p/flag` finds nothing here",
+      "stateward/ignore: ignore comment is not needed: `p/flag` finds nothing in the code it covers",
       "p/flag: `bad2` is bad",
     ]);
   });
@@ -294,7 +294,7 @@ describe("ignore comments", () => {
     const cwd = project({ "a.ts": "// stateward-ignore p/flag\nconst bad1 = 1;\n" });
     const result = run(cwd);
     expect(summary(result)).toEqual([
-      "stateward/ignore: this ignore does not say why the case is fine",
+      "stateward/ignore: ignore comment does not say why the case is fine",
     ]);
     expect(result.ignored?.map((entry) => entry.reason)).toEqual([""]);
     expectMessageStandard(result.findings);
@@ -307,7 +307,7 @@ describe("ignore comments", () => {
     const cwd = project({ "a.ts": text });
     const result = run(cwd);
     expect(summary(result)).toEqual([
-      "stateward/ignore: this ignore is not needed: `p/flag` finds nothing here",
+      "stateward/ignore: ignore comment is not needed: `p/flag` finds nothing in the code it covers",
     ]);
     expectMessageStandard(result.findings);
     const [finding] = result.findings;
@@ -327,7 +327,9 @@ describe("ignore comments", () => {
     const second = run(partly);
     const [finding] = second.findings;
     if (finding?.kind !== "problem") throw new Error("expected a problem");
-    expect(finding.message).toBe("this ignore is not needed: `p/maybe` finds nothing here");
+    expect(finding.message).toBe(
+      "ignore comment is not needed: `p/maybe` finds nothing in the code it covers",
+    );
     expect(finding.fixes[0]?.edits[0]?.newText).toBe("// stateward-ignore p/flag: why");
   });
 
@@ -350,7 +352,7 @@ describe("ignore comments", () => {
     if (finding?.kind !== "problem") throw new Error("expected a problem");
     expect(finding.severity).toBe("error");
     expect(finding.hint).toBe(
-      "did you mean `p/flag`? this ignore does nothing until the id is right",
+      "write `p/flag`, the rule with the nearest name; until then the comment ignores nothing",
     );
     expect(finding.fixes[0]?.edits[0]?.newText).toBe("p/flag");
   });
@@ -363,7 +365,7 @@ describe("ignore comments", () => {
     const result = run(cwd);
     expect(summary(result)).toEqual([
       "stateward/ignore: `stateward/ignore` findings cannot be ignored",
-      "stateward/ignore: this ignore does not say why the case is fine",
+      "stateward/ignore: ignore comment does not say why the case is fine",
     ]);
     const crash: Rule = {
       kind: "file",
@@ -424,7 +426,7 @@ describe("ignore comments", () => {
 
   it("has an explain page and messages in the standard", () => {
     const result = run(project({ "a.ts": "// stateward-ignore\nconst a = 1;\n" }));
-    expect(summary(result)).toEqual(["stateward/ignore: this ignore does not name a rule"]);
+    expect(summary(result)).toEqual(["stateward/ignore: ignore comment does not name a rule"]);
     expectMessageStandard(result.findings);
     expect(IGNORE_RULE_ID).toBe("stateward/ignore");
   });
@@ -488,8 +490,8 @@ describe("ignore comments and the cache", () => {
     expect(cold.findings).toEqual(plain.findings);
     expect(summary(cold)).toEqual([
       "p/flag: `bad2` is bad",
-      "stateward/ignore: this ignore does not say why the case is fine",
-      "stateward/ignore: this ignore is not needed: `p/flag` finds nothing here",
+      "stateward/ignore: ignore comment does not say why the case is fine",
+      "stateward/ignore: ignore comment is not needed: `p/flag` finds nothing in the code it covers",
     ]);
     const second = warm(cache);
     expect(second.result.findings).toEqual(cold.findings);
@@ -504,7 +506,7 @@ describe("ignore comments and the cache", () => {
     const cache = emptyCache();
     const cold = createChecker({ config: configOf(cwd), cwd, cache }).check();
     expect(summary(cold)).toEqual([
-      "stateward/ignore: this ignore does not say why the case is fine",
+      "stateward/ignore: ignore comment does not say why the case is fine",
       "p/flag: `bad2` is bad",
     ]);
     writeFileSync(path.join(cwd, "a.ts"), text(": now with a reason"));

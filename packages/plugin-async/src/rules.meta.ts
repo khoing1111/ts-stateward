@@ -7,7 +7,8 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "State set before an await and set again after it is also set again when the await fails, so a failure does not leave it pending.",
+        'When the awaited call fails, a state set to "loading" before it stays set and the spinner shows until reload; resetting it in `finally` prevents that.',
+      summary: 'a "loading" state set before an `await` that stays set when the call fails',
       defaultSeverity: "warning",
       tier: "core",
       group: "failures",
@@ -27,7 +28,8 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "An async event handler, listener or timer callback catches its own failures, since nothing awaits it.",
+        "No code awaits an event handler or a timer callback, so its failure is an unhandled rejection the user never sees; a `catch` inside it can show the error.",
+      summary: "an async `onClick`, listener or timer callback whose failure is never caught",
       defaultSeverity: "error",
       tier: "core",
       group: "failures",
@@ -36,7 +38,7 @@ export const RULES = {
           kind: "strings",
           default: ["setTimeout", "setInterval", "queueMicrotask"],
           description:
-            "Functions whose first argument is a callback nobody awaits (add requestAnimationFrame, setImmediate…).",
+            "Functions whose first argument is a callback no code awaits (add requestAnimationFrame, setImmediate…).",
         },
         ignoreProps: {
           kind: "strings",

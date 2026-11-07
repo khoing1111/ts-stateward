@@ -21,7 +21,17 @@ import {
   parseStatus,
   type Plan,
 } from "./protocol.js";
+import {
+  SHOW_COVERS_COMMAND,
+  SHOW_PROOF_PATH_COMMAND,
+  placeListFrom,
+  whereOf,
+  type Place,
+} from "./places.js";
+import { PythonServers } from "./python-clients.js";
+import { PYPROJECT, PYTHON_RESTART_COMMAND } from "./python-folders.js";
 import { COMMANDS, actionItems, planItems, ruleItems } from "./quick-pick.js";
+import { routeFor, type ActiveDocument } from "./routing.js";
 import { locateServer } from "./server-location.js";
 import {
   answerKey,
@@ -31,11 +41,27 @@ import {
   readAnswer,
   type SetupAnswer,
 } from "./setup.js";
-import { STATUS_COMMAND, WAITING_VIEW, checkingView, statusFor, statusViewFor } from "./status.js";
+import {
+  STATUS_COMMAND,
+  WAITING_VIEW,
+  checkingView,
+  statusFor,
+  statusViewFor,
+  type StatusView,
+} from "./status.js";
 import type { Status } from "./protocol.js";
 import { WATCH_GLOBS, folderWithConfig, hasStatewardConfig } from "./workspace-config.js";
 
 let client: LanguageClient | undefined;
+/** The Python servers, one per Python folder; set while the extension is active. */
+let python: PythonServers | undefined;
+let statusBar: vscode.StatusBarItem | undefined;
+/** What the TypeScript server last said: the status of each config, the last one, and the configs being checked. */
+const typeScriptStatus: {
+  statuses: Map<string, Status>;
+  last: Status | undefined;
+  checking: Set<string>;
+} = { statuses: new Map(), last: undefined, checking: new Set() };
 /** A start is looking for a config: a second call returns, so two clients never start. */
 let starting = false;
 
@@ -43,17 +69,23 @@ export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("Stateward", { log: true });
   context.subscriptions.push(output);
 
-  const statusBar = vscode.window.createStatusBarItem(
+  const bar = vscode.window.createStatusBarItem(
     "stateward.status",
     vscode.StatusBarAlignment.Left,
     -100,
   );
-  statusBar.name = "Stateward";
-  statusBar.command = STATUS_COMMAND;
-  context.subscriptions.push(statusBar);
+  bar.name = "Stateward";
+  bar.command = STATUS_COMMAND;
+  statusBar = bar;
+  context.subscriptions.push(bar, vscode.window.onDidChangeActiveTextEditor(refreshStatus));
+
+  const servers = new PythonServers(output, refreshStatus);
+  python = servers;
+  context.subscriptions.push(servers, ...registerPython(servers));
 
   context.subscriptions.push(
     ...registerExplain(output),
+    ...registerPlaces(),
     ...registerAdoptionCommands(output),
     ...registerSetup(context, output),
   );
@@ -63,11 +95,12 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     configWatcher,
     configWatcher.onDidCreate(() => {
-      void startClient(context, output, statusBar);
+      void startClient(context, output);
     }),
   );
 
-  void startClient(context, output, statusBar);
+  void startClient(context, output);
+  void servers.refreshAll();
   void offerSetup(context, output);
 }
 
@@ -96,7 +129,6 @@ function workspaceFolderPaths(): string[] {
 async function startClient(
   context: vscode.ExtensionContext,
   output: vscode.LogOutputChannel,
-  statusBar: vscode.StatusBarItem,
 ): Promise<void> {
   if (client !== undefined || starting) return;
   const folders = workspaceFolderPaths();
@@ -148,31 +180,8 @@ async function startClient(
     },
   );
   client = started;
-  const show = (view: { text: string; tooltip: string }): void => {
-    statusBar.text = view.text;
-    statusBar.tooltip = view.tooltip;
-  };
-  show(WAITING_VIEW);
-  statusBar.show();
-  /** The last status of each config, and the last one received: the active file picks one. */
-  const statuses = new Map<string, Status>();
-  let last: Status | undefined;
-  /** The configs whose whole-project check is running. */
-  const checking = new Set<string>();
-  const refresh = (): void => {
-    const editor = vscode.window.activeTextEditor;
-    const active = editor?.document.uri.scheme === "file" ? editor.document.uri.fsPath : undefined;
-    const status = statusFor(active, statuses, last);
-    const label =
-      statuses.size > 1 && status?.configFile !== undefined
-        ? vscode.workspace.asRelativePath(status.configFile)
-        : undefined;
-    const view = statusViewFor(status, label);
-    // Before the first status the config is unknown: any running check is the one shown.
-    const running =
-      status?.configFile === undefined ? checking.size > 0 : checking.has(status.configFile);
-    show(running ? checkingView(view) : view);
-  };
+  const { statuses, checking } = typeScriptStatus;
+  refreshStatus();
   started.onNotification(STATUS_NOTIFICATION, (params: unknown) => {
     const status = parseStatus(params);
     if (status === undefined) {
@@ -180,8 +189,8 @@ async function startClient(
       return;
     }
     if (status.configFile !== undefined) statuses.set(status.configFile, status);
-    last = status;
-    refresh();
+    typeScriptStatus.last = status;
+    refreshStatus();
   });
   started.onNotification(CHECKING_NOTIFICATION, (params: unknown) => {
     const update = parseChecking(params);
@@ -191,10 +200,102 @@ async function startClient(
     }
     if (update.checking) checking.add(update.configFile);
     else checking.delete(update.configFile);
-    refresh();
+    refreshStatus();
   });
-  context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(refresh));
   void started.start();
+}
+
+function activeDocument(): ActiveDocument | undefined {
+  const document = vscode.window.activeTextEditor?.document;
+  return document?.uri.scheme === "file"
+    ? { fsPath: document.uri.fsPath, languageId: document.languageId }
+    : undefined;
+}
+
+/** The TypeScript server's view for the active file: the status of the nearest config. */
+function typeScriptView(active: string | undefined): StatusView {
+  const { statuses, last, checking } = typeScriptStatus;
+  const status = statusFor(active, statuses, last);
+  const label =
+    statuses.size > 1 && status?.configFile !== undefined
+      ? vscode.workspace.asRelativePath(status.configFile)
+      : undefined;
+  const view = statusViewFor(status, label);
+  // Before the first status the config is unknown: any running check is the one shown.
+  const running =
+    status?.configFile === undefined ? checking.size > 0 : checking.has(status.configFile);
+  return running ? checkingView(view) : view;
+}
+
+/** A Python folder's view; the tooltip names the folder when another server runs beside it. */
+function pythonView(servers: PythonServers, folder: string): StatusView {
+  const view = servers.view(folder);
+  if (view === undefined) return WAITING_VIEW;
+  const others = servers.folders().length > 1 || client !== undefined;
+  const status = statusViewFor(
+    view.status,
+    others ? `Python: ${path.basename(folder)}` : undefined,
+  );
+  return view.checking ? checkingView(status) : status;
+}
+
+/** One status item: the server of the active editor's folder and language says what it shows. */
+function refreshStatus(): void {
+  if (statusBar === undefined) return;
+  const active = activeDocument();
+  const route = routeFor(active, python?.folders() ?? [], client !== undefined);
+  if (route === undefined) {
+    statusBar.hide();
+    return;
+  }
+  const view =
+    route.kind === "typescript"
+      ? typeScriptView(active?.fsPath)
+      : python === undefined
+        ? WAITING_VIEW
+        : pythonView(python, route.folder);
+  statusBar.text = view.text;
+  statusBar.tooltip = view.tooltip;
+  statusBar.show();
+}
+
+/** The server that explains a rule: the active document's (Python or TypeScript). */
+function explainingServer(): LanguageClient | undefined {
+  const route = routeFor(activeDocument(), python?.folders() ?? [], client !== undefined);
+  if (route === undefined) return undefined;
+  return route.kind === "typescript" ? client : python?.client(route.folder);
+}
+
+/**
+ * The Python servers follow the workspace: a folder added or removed, its pyproject.toml written
+ * or changed, or a `stateward.python.*` setting changed (that folder's server restarts).
+ */
+function registerPython(servers: PythonServers): vscode.Disposable[] {
+  const pyprojects = vscode.workspace.createFileSystemWatcher(`**/${PYPROJECT}`);
+  const onPyproject = (uri: vscode.Uri): void => {
+    const folder = vscode.workspace.getWorkspaceFolder(uri);
+    // Only the folder's own pyproject.toml decides; a nested project's does not.
+    if (folder?.uri.fsPath === path.dirname(uri.fsPath)) {
+      void servers.refresh(folder);
+    }
+  };
+  return [
+    pyprojects,
+    pyprojects.onDidCreate(onPyproject),
+    pyprojects.onDidChange(onPyproject),
+    pyprojects.onDidDelete(onPyproject),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      void servers.refreshAll();
+    }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      for (const folder of vscode.workspace.workspaceFolders ?? []) {
+        if (event.affectsConfiguration("stateward.python", folder.uri)) {
+          void servers.refresh(folder);
+        }
+      }
+    }),
+    vscode.commands.registerCommand(PYTHON_RESTART_COMMAND, () => servers.refreshAll(true)),
+  ];
 }
 
 /**
@@ -211,9 +312,10 @@ function registerExplain(output: vscode.LogOutputChannel): vscode.Disposable[] {
   });
   const command = vscode.commands.registerCommand(EXPLAIN_COMMAND, async (argument: unknown) => {
     const ruleId = ruleIdFromArgument(argument);
-    if (ruleId === undefined || client === undefined) return;
+    const server = explainingServer();
+    if (ruleId === undefined || server === undefined) return;
     try {
-      const markdown = await client.sendRequest<string | null>(EXPLAIN_REQUEST, { ruleId });
+      const markdown = await server.sendRequest<string | null>(EXPLAIN_REQUEST, { ruleId });
       if (markdown === null) {
         void vscode.window.showInformationMessage(`Stateward has no explanation for ${ruleId}.`);
         return;
@@ -232,8 +334,54 @@ function registerExplain(output: vscode.LogOutputChannel): vscode.Disposable[] {
   return [changed, provider, command];
 }
 
+/**
+ * The guarantee lens ("2 readers proven · show") and "Show proof path": a list of places to jump
+ * through. Moving through the list shows each place without leaving the list; choosing one opens it.
+ */
+function registerPlaces(): vscode.Disposable[] {
+  const reveal = async (place: Place, preview: boolean): Promise<void> => {
+    const { start, end } = place.range;
+    const range = new vscode.Range(start.line, start.character, end.line, end.character);
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(place.uri));
+    await vscode.window.showTextDocument(document, {
+      selection: range,
+      preview: true,
+      preserveFocus: preview,
+    });
+  };
+  const show = (argument: unknown): void => {
+    const list = placeListFrom(argument);
+    if (list === undefined || list.places.length === 0) return;
+    type Item = vscode.QuickPickItem & { place: Place };
+    const items = list.places.map((place): Item => {
+      const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.parse(place.uri));
+      return { label: place.label, description: whereOf(place, folder?.uri.toString()), place };
+    });
+    const pick = vscode.window.createQuickPick<Item>();
+    pick.title = list.title;
+    pick.items = items;
+    pick.matchOnDescription = true;
+    pick.onDidChangeActive(([active]) => {
+      if (active !== undefined) void reveal(active.place, true);
+    });
+    pick.onDidAccept(() => {
+      const [chosen] = pick.selectedItems;
+      pick.hide();
+      if (chosen !== undefined) void reveal(chosen.place, false);
+    });
+    pick.onDidHide(() => {
+      pick.dispose();
+    });
+    pick.show();
+  };
+  return [
+    vscode.commands.registerCommand(SHOW_COVERS_COMMAND, show),
+    vscode.commands.registerCommand(SHOW_PROOF_PATH_COMMAND, show),
+  ];
+}
+
 const NOT_CHECKING =
-  'Stateward is not checking this folder: it has no stateward config. Run "Stateward: Set up this project".';
+  'Stateward is not checking this folder: it has no stateward config. Run "Stateward: Set up the project".';
 
 /** Runs `work` with the client, or says there is none; a failure becomes one message, never a silent command. */
 /** The active editor's file, so a command acts on that file's config in a monorepo. */
@@ -284,6 +432,9 @@ async function turnOnNext(active: LanguageClient, anyway: boolean): Promise<void
     case "rollout-off":
       void vscode.window.showInformationMessage(answer.message);
       return;
+    case "not-checked":
+      void vscode.window.showWarningMessage(answer.message);
+      return;
     case "blocked": {
       const anywayLabel = "Turn it on anyway";
       const chosen = await vscode.window.showWarningMessage(answer.message, anywayLabel);
@@ -312,7 +463,7 @@ function registerAdoptionCommands(output: vscode.LogOutputChannel): vscode.Dispo
           title: plan.rollout
             ? `Rule plan (on: ${plan.enabled.length === 0 ? "none yet" : plan.enabled.join(", ")})`
             : "Rule plan (rollout is off, so every rule runs)",
-          placeHolder: "Choose a rule to read what it protects",
+          placeHolder: "Choose a rule to read why it matters",
           matchOnDetail: true,
         });
         if (picked !== undefined) await explain(picked.ruleId);
@@ -433,6 +584,6 @@ function registerSetup(
   ];
 }
 
-export function deactivate(): Promise<void> | undefined {
-  return client?.stop();
+export async function deactivate(): Promise<void> {
+  await Promise.all([client?.stop(), python?.stopAll()]);
 }

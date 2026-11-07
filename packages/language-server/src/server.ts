@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   CodeActionKind,
+  CodeLensRefreshRequest,
   DidChangeConfigurationNotification,
   DidChangeWatchedFilesNotification,
   MarkupKind,
@@ -31,6 +32,7 @@ import {
   defaultCacheDir,
   displayPath,
   loadConfigFile,
+  proveGuarantees,
   openDiskCache,
   reloadsLocalImports,
   resultsCacheLimit,
@@ -76,6 +78,14 @@ import {
   type FixSite,
   type VerifyFixSet,
 } from "./fix-all.js";
+import {
+  NO_PROOFS,
+  guaranteeHover,
+  guaranteeLenses,
+  proofPathActions,
+  proofView,
+  type ProofView,
+} from "./guarantees.js";
 import { mergeFastPass } from "./merge.js";
 import { SILENT_PROGRESS, withProgress, type ProgressReporter } from "./progress.js";
 import { fastPassLine, fullPassLine, longestStepLine } from "./report.js";
@@ -85,7 +95,6 @@ import {
   encodeTokens,
   offsetAt,
   rangesIntersect,
-  toRange,
   toCodeActions,
   toLspChanges,
   toDiagnostic,
@@ -174,6 +183,8 @@ type Engine = {
   saveTimer: NodeJS.Timeout | undefined;
   /** When `disk` was last written (`performance.now()`); undefined before the first write. */
   savedAt: number | undefined;
+  /** The stated guarantees and their proofs, from the last full pass: hover, code lens, proof paths. */
+  proofs: ProofView;
 };
 
 /** "1,200 of 3,000 files", or "project rules 3 of 13": where a full pass stands. */
@@ -258,6 +269,8 @@ export function startServer(
     idleMs = ENGINE_IDLE_MS,
     cacheDir = (project) => defaultCacheDir(project, process.env),
     saveMs = DISK_SAVE_MS,
+    fastMs = FAST_MS,
+    fullMs = FULL_MS,
   }: {
     /** How long a nested config's engine waits, with none of its files open, before it stops. */
     idleMs?: number;
@@ -265,6 +278,10 @@ export function startServer(
     cacheDir?: (project: string) => string | undefined;
     /** The least time between two writes of a config's results cache. */
     saveMs?: number;
+    /** How long after an edit its fast pass waits (tests: long, to see the state before it). */
+    fastMs?: number;
+    /** How long after an edit the full pass waits. */
+    fullMs?: number;
   } = {},
 ): () => void {
   const documents = new TextDocuments(TextDocument);
@@ -274,6 +291,8 @@ export function startServer(
   let watchScripts = false;
   /** The client can be told to ask for inline hints again (after a check, a settings change). */
   let refreshHints = false;
+  /** The client can be told to ask for code lenses again (after a full pass). */
+  let refreshLenses = false;
   /** The client answers `workspace/configuration`. */
   let canPullSettings = false;
   /** The client lets the server ask to be told when settings change. */
@@ -300,6 +319,22 @@ export function startServer(
         .map((document) => [toTypeScriptPath(fileURLToPath(document.uri)), document.version]),
     );
 
+  /**
+   * The version each open file document had when it was opened, by path (`toTypeScriptPath`): one
+   * still at that version holds the text it was opened with, so its fast pass may take its results
+   * from the cache.
+   */
+  const versionsAtOpen = new Map<string, number>();
+
+  /** The files of `files` whose document is unedited since it was opened. */
+  const uneditedSinceOpen = (files: readonly string[]): string[] => {
+    const now = openVersions();
+    return files.filter((file) => {
+      const version = now.get(toTypeScriptPath(file));
+      return version !== undefined && version === versionsAtOpen.get(toTypeScriptPath(file));
+    });
+  };
+
   /** The engine of the config `file` belongs to, if it runs. */
   const engineOf = (file: string): Engine | undefined => {
     const configFile = locator.configOf(file);
@@ -322,15 +357,18 @@ export function startServer(
     return ` (${displayPath(folder, engine.configFile)})`;
   };
 
+  /** A file's text on disk; empty for a file a fix creates (it does not exist yet). */
+  const textOnDisk = (file: string): string => (existsSync(file) ? readFileSync(file, "utf8") : "");
+
   const fileMapper = (open: ReadonlyMap<string, string>): FileMapper => {
     const indexes = new Map<string, ReturnType<typeof buildLineIndex>>();
     return {
       uriOf: (file) => pathToFileURL(file).href,
-      textOf: (file) => open.get(file) ?? readFileSync(file, "utf8"),
+      textOf: (file) => open.get(file) ?? textOnDisk(file),
       indexOf: (file) => {
         const cached = indexes.get(file);
         if (cached !== undefined) return cached;
-        const index = buildLineIndex(open.get(file) ?? readFileSync(file, "utf8"));
+        const index = buildLineIndex(open.get(file) ?? textOnDisk(file));
         indexes.set(file, index);
         return index;
       },
@@ -431,11 +469,13 @@ export function startServer(
         return;
       }
       const raw = outcome.result;
-      const pass = layBaseline(
-        state.config,
-        raw,
-        activeRuleIds(state.config, { kind: "configured" }),
-        open,
+      const active = activeRuleIds(state.config, { kind: "configured" });
+      const pass = layBaseline(state.config, raw, active, open);
+      // Before the baseline: an accepted error still leaves its guarantee unproven.
+      engine.proofs = proofView(
+        proveGuarantees(state.checker.guarantees(), raw.findings, active),
+        (file) => state.checker.analysedText(file),
+        engine.cwd,
       );
       const result = pass.fresh;
       const { byUri, sites } = render(
@@ -457,8 +497,9 @@ export function startServer(
         ...statusReport(state.config, result, pass.baselined.size),
         configFile: engine.configFile,
       });
-      // The hints come from this pass's summaries.
+      // The hints and lenses come from this pass's summaries.
       if (refreshHints) connection.languages.inlayHint.refresh().catch(logUnexpected);
+      if (refreshLenses) connection.sendRequest(CodeLensRefreshRequest.type).catch(logUnexpected);
       saveSoon(engine);
     } catch (error) {
       reportFailure(error);
@@ -556,7 +597,9 @@ export function startServer(
     const targets = files.filter((file) => open.has(file));
     if (targets.length === 0) return;
     try {
-      const result = editor.checkFiles(targets, open);
+      // A document just opened usually holds the text the saved results were computed on: its
+      // findings then come from the cache, with no type checking (a large app's first findings).
+      const result = editor.checkFiles(targets, open, uneditedSinceOpen(targets));
       for (const file of targets) {
         const merged = mergeFastPass({ file, fast: result });
         // Only the file rules ran: the project rules' entries are not matched here.
@@ -630,8 +673,8 @@ export function startServer(
     clearTimeout(engine.fastTimer);
     engine.fastTimer = setTimeout(() => {
       fastPass(engine);
-    }, FAST_MS);
-    scheduleFull(engine, FULL_MS);
+    }, fastMs);
+    scheduleFull(engine, fullMs);
   };
 
   const clearDiagnostics = (engine: Engine): void => {
@@ -745,6 +788,7 @@ export function startServer(
       disk: undefined,
       saveTimer: undefined,
       savedAt: undefined,
+      proofs: NO_PROOFS,
     };
     engines.set(configFile, engine);
     void loadEngine(engine).catch(logUnexpected);
@@ -812,6 +856,7 @@ export function startServer(
     watchScripts =
       params.capabilities.workspace?.didChangeWatchedFiles?.dynamicRegistration === true;
     refreshHints = params.capabilities.workspace?.inlayHint?.refreshSupport === true;
+    refreshLenses = params.capabilities.workspace?.codeLens?.refreshSupport === true;
     canPullSettings = params.capabilities.workspace?.configuration === true;
     watchSettings =
       params.capabilities.workspace?.didChangeConfiguration?.dynamicRegistration === true;
@@ -822,6 +867,7 @@ export function startServer(
         textDocumentSync: TextDocumentSyncKind.Incremental,
         hoverProvider: true,
         inlayHintProvider: true,
+        codeLensProvider: { resolveProvider: false },
         codeActionProvider: {
           codeActionKinds: [CodeActionKind.QuickFix, CodeActionKind.RefactorRewrite, FIX_ALL_KIND],
         },
@@ -900,6 +946,12 @@ export function startServer(
   });
 
   documents.onDidOpen((event) => {
+    if (event.document.uri.startsWith("file:")) {
+      versionsAtOpen.set(
+        toTypeScriptPath(fileURLToPath(event.document.uri)),
+        event.document.version,
+      );
+    }
     engineForDocument(event.document.uri);
   });
   documents.onDidChangeContent((event) => {
@@ -910,7 +962,7 @@ export function startServer(
       // An imported JSON file: no findings of its own, but the files that import it change, and
       // only the full pass checks those.
       cancelFull(engine);
-      scheduleFull(engine, FULL_MS);
+      scheduleFull(engine, fullMs);
       return;
     }
     // Fixes hold offsets of the text before this edit: offer none until the fast pass recomputes them.
@@ -924,6 +976,9 @@ export function startServer(
     void runFull(engine).catch(logUnexpected);
   });
   documents.onDidClose((event) => {
+    if (event.document.uri.startsWith("file:")) {
+      versionsAtOpen.delete(toTypeScriptPath(fileURLToPath(event.document.uri)));
+    }
     if (!isSyncedFile(event.document.uri)) return;
     const engine = engineOf(fileURLToPath(event.document.uri));
     if (engine === undefined) return;
@@ -1111,10 +1166,15 @@ export function startServer(
           .flatMap((site) => [...site.actions, ...(site.extra ?? [])])
           .map((action) => versionedAction(action, versionOf)),
         ...explainActions(params.context.diagnostics),
+        ...(guarded(() => {
+          const document = documents.get(params.textDocument.uri);
+          if (engine === undefined || key === undefined || document === undefined) return [];
+          return proofPathActions(engine.proofs, key, document.getText(), params.range);
+        }) ?? []),
       );
       if (all.count >= 2) {
         actions.push({
-          title: "Fix all stateward problems in this file",
+          title: "Fix all stateward problems in the file",
           kind: CodeActionKind.QuickFix,
           ...fixAll,
         });
@@ -1122,7 +1182,7 @@ export function startServer(
     }
     if (all.count >= 1 && kindWanted(only, FIX_ALL_KIND)) {
       actions.push({
-        title: "Fix all stateward problems in this file",
+        title: "Fix all stateward problems in the file",
         kind: FIX_ALL_KIND,
         ...fixAll,
       });
@@ -1156,19 +1216,14 @@ export function startServer(
         offsetAt(index, range.start),
         offsetAt(index, range.end),
       );
+      // The edits may reach other files (a helper file the refactoring writes once).
+      const files = fileMapper(new Map([[file, text]]));
       return found.map((action) =>
         versionedAction(
           {
             title: action.title,
             kind: CodeActionKind.RefactorRewrite,
-            edit: {
-              changes: {
-                [uri]: action.edits.map((edit) => ({
-                  range: toRange(index, edit.location),
-                  newText: edit.newText,
-                })),
-              },
-            },
+            edit: { changes: toLspChanges(action.edits, files) },
           },
           versionOf,
         ),
@@ -1185,14 +1240,32 @@ export function startServer(
     const document = documents.get(params.textDocument.uri);
     const editor = checkerOf(params.textDocument.uri);
     if (document === undefined || editor === undefined) return null;
-    const markdown = guarded(() =>
-      editor.hover(
-        fileURLToPath(document.uri),
-        offsetAt(buildLineIndex(document.getText()), params.position),
-      ),
-    );
+    const markdown = guarded(() => {
+      const file = fileURLToPath(document.uri);
+      const text = document.getText();
+      const offset = offsetAt(buildLineIndex(text), params.position);
+      // From the last full pass's proofs: no type checking for it.
+      const engine = engineOf(file);
+      const guarantee =
+        engine === undefined
+          ? undefined
+          : guaranteeHover(engine.proofs, toTypeScriptPath(file), text, offset);
+      return [...(guarantee === undefined ? [] : [guarantee]), ...editor.hover(file, offset)];
+    });
     if (markdown === undefined || markdown.length === 0) return null;
     return { contents: { kind: MarkupKind.Markdown, value: markdown.join("\n\n---\n\n") } };
+  });
+
+  connection.onCodeLens((params) => {
+    const document = documents.get(params.textDocument.uri);
+    if (document === undefined) return [];
+    const lenses = guarded(() => {
+      const file = fileURLToPath(document.uri);
+      const engine = engineOf(file);
+      if (engine === undefined) return [];
+      return guaranteeLenses(engine.proofs, toTypeScriptPath(file), document.getText());
+    });
+    return lenses ?? [];
   });
 
   /** Which inline hints the editor's settings turn on (`stateward.inlayHints.*`). */
@@ -1202,6 +1275,10 @@ export function startServer(
     const document = documents.get(params.textDocument.uri);
     const editor = checkerOf(params.textDocument.uri);
     if (document === undefined || editor === undefined) return [];
+    // Hints come from a full pass's summaries, and the client is asked again after each one: before
+    // the first, answering would build and bind the programs ahead of the open file's findings.
+    const engine = guarded(() => engineOf(fileURLToPath(document.uri)));
+    if (refreshHints && engine?.firstFullDone !== true) return [];
     const hints = guarded(() => {
       const index = buildLineIndex(document.getText());
       const found = editor.inlayHints(fileURLToPath(document.uri), (kind) =>

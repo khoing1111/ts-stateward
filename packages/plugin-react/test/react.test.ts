@@ -20,11 +20,9 @@ const dependencies: Shown[] = [
     file: "CartBadge.tsx",
     at: "cart.onSave",
     message:
-      "`cart.onSave` from `useCart()` is a new function every render, so this effect runs after every render",
+      "effect runs after every render: `cart.onSave` from `useCart()` is a new function each time",
     hint: "wrap `onSave` in `useCallback` inside `useCart` (cart.ts:9)",
-    notes: [
-      "cart.ts: () => api.save(items): `onSave` is created here on every render of `useCart`",
-    ],
+    notes: ["cart.ts: () => api.save(items): `onSave` is created on every render of `useCart`"],
     fixes: [],
   },
   {
@@ -33,9 +31,9 @@ const dependencies: Shown[] = [
     file: "CartBadge.tsx",
     at: "cart.clear",
     message:
-      "`cart.clear` from `useCart()` is a new function every render, so this callback changes every render",
+      "`useCallback` gives a new function every render: `cart.clear` from `useCart()` is a new function each time",
     hint: "wrap `clear` in `useCallback` inside `useCart` (cart.ts:14)",
-    notes: ["cart.ts: clear: `clear` is created here on every render of `useCart`"],
+    notes: ["cart.ts: clear: `clear` is created on every render of `useCart`"],
     fixes: [],
   },
   {
@@ -44,10 +42,10 @@ const dependencies: Shown[] = [
     file: "CartBadge.tsx",
     at: "cart.summary",
     message:
-      "`cart.summary` from `useCart()` is a new object every render, so this `useMemo` reruns every render",
+      "`useMemo` reruns every render: `cart.summary` from `useCart()` is a new object each time",
     hint: "wrap `summary` in `useMemo` inside `useCart` (cart.ts:13)",
     notes: [
-      "cart.ts: { count: items.length, total: items.reduce((sum, item) => sum + item.price, 0) }: `summary` is created here on every render of `useCart`",
+      "cart.ts: { count: items.length, total: items.reduce((sum, item) => sum + item.price, 0) }: `summary` is created on every render of `useCart`",
     ],
     fixes: [],
   },
@@ -57,10 +55,10 @@ const dependencies: Shown[] = [
     file: "CartList.tsx",
     at: "removeItem",
     message:
-      "`removeItem` from `useCart()` is a new function every render, so `<CartRow>` re-renders every time",
+      "`<CartRow>` re-renders every time: `removeItem` from `useCart()` is a new function each time",
     hint: "keep the latest handler in a ref (React's `useEffectEvent`, or your own hook)",
     notes: [
-      "cart.ts: (id: string) => {\n    setItems((current) => current.filter((item) => item.id !== id));\n  }: `removeItem` is created here on every render of `useCart`",
+      "cart.ts: (id: string) => {\n    setItems((current) => current.filter((item) => item.id !== id));\n  }: `removeItem` is created on every render of `useCart`",
     ],
     fixes: [],
   },
@@ -70,11 +68,9 @@ const dependencies: Shown[] = [
     file: "CartPage.tsx",
     at: "onSave",
     message:
-      "`onSave` from `useCart()` is a new function every render, so this effect runs after every render",
+      "effect runs after every render: `onSave` from `useCart()` is a new function each time",
     hint: "wrap `onSave` in `useCallback` inside `useCart` (cart.ts:9)",
-    notes: [
-      "cart.ts: () => api.save(items): `onSave` is created here on every render of `useCart`",
-    ],
+    notes: ["cart.ts: () => api.save(items): `onSave` is created on every render of `useCart`"],
     fixes: [],
   },
   {
@@ -83,11 +79,9 @@ const dependencies: Shown[] = [
     file: "CheckoutPage.tsx",
     at: "save",
     message:
-      "`save` from `useCheckout()` is a new function every render, so this effect runs after every render",
+      "effect runs after every render: `save` from `useCheckout()` is a new function each time",
     hint: "wrap `onSave` in `useCallback` inside `useCart` (cart.ts:9)",
-    notes: [
-      "cart.ts: () => api.save(items): `onSave` is created here on every render of `useCart`",
-    ],
+    notes: ["cart.ts: () => api.save(items): `onSave` is created on every render of `useCart`"],
     fixes: [],
   },
   {
@@ -96,10 +90,10 @@ const dependencies: Shown[] = [
     file: "SameFile.tsx",
     at: "toggle",
     message:
-      "`toggle` from `useToggle()` is a new function every render, so this effect runs after every render",
+      "effect runs after every render: `toggle` from `useToggle()` is a new function each time",
     hint: "wrap `toggle` in `useCallback` inside `useToggle` (SameFile.tsx:6)",
     notes: [
-      "SameFile.tsx: () => setOn((current) => !current): `toggle` is created here on every render of `useToggle`",
+      "SameFile.tsx: () => setOn((current) => !current): `toggle` is created on every render of `useToggle`",
     ],
     fixes: [],
   },
@@ -109,8 +103,8 @@ const dependencies: Shown[] = [
     file: "SettingsPage.tsx",
     at: "settings",
     message:
-      "stateward cannot tell whether `settings` from `useSettings()` is a new value each render",
-    hint: "declare `useSettings` as a function at module level (`function useX() { … }`) to make it checkable",
+      "not checked: whether `settings` from `useSettings()` is new each render: `useSettings` is not a module-level function",
+    hint: "declare `useSettings` as a module-level function (`function useX() { … }`), so it can be checked",
     notes: [],
     fixes: [],
   },
@@ -120,8 +114,8 @@ const dependencies: Shown[] = [
     file: "SettingsPage.tsx",
     at: "profile",
     message:
-      "stateward cannot tell whether `profile` from `useProfile()` is a new value each render",
-    hint: "`useProfile` gets it from `api.readProfile()` (store.ts:20); wrap that in `useMemo` to make it checkable",
+      "not checked: whether `profile` from `useProfile()` is new each render: `api.readProfile()` in `useProfile` is not followed",
+    hint: "wrap `api.readProfile()` in `useMemo` inside `useProfile` (store.ts:20), so it can be checked",
     notes: [],
     fixes: [],
   },
@@ -130,11 +124,10 @@ const dependencies: Shown[] = [
     severity: "warning",
     file: "SignupForm.tsx",
     at: "options",
-    message:
-      "`options` from `useForm(…)` is a new object every render, so this `useMemo` reruns every render",
+    message: "`useMemo` reruns every render: `options` from `useForm(…)` is a new object each time",
     hint: "wrap the object in `useMemo` inside `useForm` (form.ts:12)",
     notes: [
-      "form.ts: { validateOnBlur: true, fields: Object.keys(values) }: a new object is created here on every render of `useForm`",
+      "form.ts: { validateOnBlur: true, fields: Object.keys(values) }: a new object is created on every render of `useForm`",
     ],
     fixes: [],
   },
@@ -146,7 +139,7 @@ const providers: Shown[] = [
     severity: "warning",
     file: "ThemeProvider.tsx",
     at: "{ theme, setTheme }",
-    message: "`ThemeContext` gets a new object every render, so all its readers re-render",
+    message: "`ThemeContext` value is a new object every render: all its readers re-render",
     hint: "wrap it in `useMemo` and pass that:\n    const themeValue = useMemo(() => ({ theme, setTheme }), [theme, setTheme]);",
     notes: [],
     fixes: [],
@@ -156,9 +149,9 @@ const providers: Shown[] = [
     severity: "warning",
     file: "ThemeProvider.tsx",
     at: "user",
-    message: "`UserContext` gets a new object every render, so all its readers re-render",
+    message: "`UserContext` value is a new object every render: all its readers re-render",
     hint: "wrap `user` in `useMemo` where it is created (line 18)",
-    notes: ["ThemeProvider.tsx: { name }: `user` is created here on every render"],
+    notes: ["ThemeProvider.tsx: { name }: `user` is created on every render"],
     fixes: [],
   },
   {
@@ -166,7 +159,7 @@ const providers: Shown[] = [
     severity: "warning",
     file: "ThemeProvider.tsx",
     at: "[locale, setLocale]",
-    message: "`LocaleContext` gets a new array every render, so all its readers re-render",
+    message: "`LocaleContext` value is a new array every render: all its readers re-render",
     hint: "wrap it in `useMemo` and pass that:\n    const localeValue = useMemo(() => [locale, setLocale], [locale, setLocale]);",
     notes: [],
     fixes: [],
@@ -176,7 +169,7 @@ const providers: Shown[] = [
     severity: "warning",
     file: "ThemeProvider.tsx",
     at: "() => onSave()",
-    message: "`SaveContext` gets a new function every render, so all its readers re-render",
+    message: "`SaveContext` value is a new function every render: all its readers re-render",
     hint: "wrap it in `useCallback` and pass that:\n    const saveValue = useCallback(() => onSave(), [onSave]);",
     notes: [],
     fixes: [],
@@ -186,7 +179,7 @@ const providers: Shown[] = [
     severity: "warning",
     file: "ThemeProvider.tsx",
     at: "{ id, index }",
-    message: "`ItemContext` gets a new object every render, so all its readers re-render",
+    message: "`ItemContext` value is a new object every render: all its readers re-render",
     hint: "extract the item into a component (e.g. `<ItemProvider id={id} index={index}>`) and memoize the value there",
     notes: [],
     fixes: [],
@@ -196,9 +189,9 @@ const providers: Shown[] = [
     severity: "warning",
     file: "ThemeProvider.tsx",
     at: "item",
-    message: "`ItemContext` gets a new object every render, so all its readers re-render",
+    message: "`ItemContext` value is a new object every render: all its readers re-render",
     hint: "extract the item into a component (e.g. `<ItemProvider id={id} index={index}>`) and memoize the value there",
-    notes: ["ThemeProvider.tsx: { id, index }: `item` is created here on every render"],
+    notes: ["ThemeProvider.tsx: { id, index }: `item` is created on every render"],
     fixes: [],
   },
   // an input is new every render, so the fix names it first and writes no `useMemo`.
@@ -207,9 +200,9 @@ const providers: Shown[] = [
     severity: "warning",
     file: "ThemeProvider.tsx",
     at: "{ theme, toggle }",
-    message: "`ToggleContext` gets a new object every render, so all its readers re-render",
-    hint: "stabilise `toggle` first (`useCallback` where it is created, line 74): it is new every render, so a memo of the value would be too",
-    notes: ["ThemeProvider.tsx: toggle: `toggle` is created here on every render"],
+    message: "`ToggleContext` value is a new object every render: all its readers re-render",
+    hint: "stabilise `toggle` first (`useCallback` where it is created, line 74): it is new every render, so a memo of the value would be new too",
+    notes: ["ThemeProvider.tsx: toggle: `toggle` is created on every render"],
     fixes: [],
   },
   {
@@ -217,12 +210,12 @@ const providers: Shown[] = [
     severity: "warning",
     file: "ThemeProvider.tsx",
     at: "toolbar",
-    message: "`ToggleContext` gets a new object every render, so all its readers re-render",
-    hint: "stabilise `toggle` and `reset` first (`useCallback`, lines 83, 84): they are new every render, so a memo of the value would be too",
+    message: "`ToggleContext` value is a new object every render: all its readers re-render",
+    hint: "stabilise `toggle` and `reset` first (`useCallback`, lines 83, 84): they are new every render, so a memo of the value would be new too",
     notes: [
-      "ThemeProvider.tsx: { theme, toggle: () => toggle(), reset }: `toolbar` is created here on every render",
-      'ThemeProvider.tsx: () => setTheme(theme === "light" ? "dark" : "light"): `toggle` is created here on every render',
-      'ThemeProvider.tsx: () => setTheme("light"): `reset` is created here on every render',
+      "ThemeProvider.tsx: { theme, toggle: () => toggle(), reset }: `toolbar` is created on every render",
+      'ThemeProvider.tsx: () => setTheme(theme === "light" ? "dark" : "light"): `toggle` is created on every render',
+      'ThemeProvider.tsx: () => setTheme("light"): `reset` is created on every render',
     ],
     fixes: [],
   },
@@ -232,7 +225,7 @@ const providers: Shown[] = [
     severity: "warning",
     file: "ThemeProvider.tsx",
     at: "{ name: props.name }",
-    message: "`FieldContext` gets a new object every render, so all its readers re-render",
+    message: "`FieldContext` value is a new object every render: all its readers re-render",
     hint: "wrap it in `useMemo` and pass that:\n    const fieldValue = useMemo(() => ({ name: props.name }), [props.name]);",
     notes: [],
     fixes: [],
@@ -246,10 +239,10 @@ const plainCalls: Shown[] = [
     file: "Columns.tsx",
     at: "columns",
     message:
-      "`columns` from `getColumns(\u2026)` is a new array every render, so this effect runs after every render",
+      "effect runs after every render: `columns` from `getColumns(\u2026)` is a new array each time",
     hint: "wrap the call in `useMemo` on its inputs: `useMemo(() => getColumns(prefix), [prefix])`",
     notes: [
-      'Columns.tsx: [{ key: `${prefix}-name`, title: "Name" }]: a new array is created here on every call of `getColumns`',
+      'Columns.tsx: [{ key: `${prefix}-name`, title: "Name" }]: a new array is created on every call of `getColumns`',
     ],
     fixes: [],
   },
@@ -259,10 +252,10 @@ const plainCalls: Shown[] = [
     file: "Columns.tsx",
     at: "columns",
     message:
-      "`columns` from `getColumns(\u2026)` is a new array every render, so `<Table>` re-renders every time",
+      "`<Table>` re-renders every time: `columns` from `getColumns(\u2026)` is a new array each time",
     hint: "wrap the call in `useMemo` on its inputs: `useMemo(() => getColumns(prefix), [prefix])`",
     notes: [
-      'Columns.tsx: [{ key: `${prefix}-name`, title: "Name" }]: a new array is created here on every call of `getColumns`',
+      'Columns.tsx: [{ key: `${prefix}-name`, title: "Name" }]: a new array is created on every call of `getColumns`',
     ],
     fixes: [],
   },
@@ -272,10 +265,10 @@ const plainCalls: Shown[] = [
     file: "Columns.tsx",
     at: "columns",
     message:
-      "`columns` from `buildColumns(\u2026)` is a new array every render, so this effect runs after every render",
-    hint: "`options`, an argument of `buildColumns(options)`, is new every render too: make it stable first, then wrap the call in `useMemo`",
+      "effect runs after every render: `columns` from `buildColumns(\u2026)` is a new array each time",
+    hint: "make `options`, an argument of `buildColumns(options)`, stable first, then wrap the call in `useMemo`: it is new every render too",
     notes: [
-      'Columns.tsx: [{ key: `${options.prefix}-name`, title: "Name" }]: a new array is created here on every call of `buildColumns`',
+      'Columns.tsx: [{ key: `${options.prefix}-name`, title: "Name" }]: a new array is created on every call of `buildColumns`',
     ],
     fixes: [],
   },
@@ -285,11 +278,11 @@ const plainCalls: Shown[] = [
     file: "Columns.tsx",
     at: "columns",
     message:
-      "`columns` from `useColumns(\u2026)` is a new array every render, so this effect runs after every render",
+      "effect runs after every render: `columns` from `useColumns(\u2026)` is a new array each time",
     hint: "wrap the call in `useMemo` inside `useColumns` (Columns.tsx:39), on its inputs: `useMemo(() => getColumns(prefix), [prefix])`",
     notes: [
       "Columns.tsx: getColumns(prefix): `getColumns(prefix)` makes it anew on every render of `useColumns`",
-      'Columns.tsx: [{ key: `${prefix}-name`, title: "Name" }]: a new array is created here on every call of `getColumns`',
+      'Columns.tsx: [{ key: `${prefix}-name`, title: "Name" }]: a new array is created on every call of `getColumns`',
     ],
     fixes: [],
   },
@@ -367,8 +360,8 @@ describe("react: findings", () => {
         .findings.filter((finding) => finding.kind === "unknown")
         .map((finding) => finding.message),
     ).toEqual([
-      "stateward cannot tell whether `settings` from `useSettings()` is a new value each render",
-      "stateward cannot tell whether `profile` from `useProfile()` is a new value each render",
+      "not checked: whether `settings` from `useSettings()` is new each render: `useSettings` is not a module-level function",
+      "not checked: whether `profile` from `useProfile()` is new each render: `api.readProfile()` in `useProfile` is not followed",
     ]);
   });
 });

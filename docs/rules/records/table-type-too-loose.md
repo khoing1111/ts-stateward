@@ -2,22 +2,61 @@
 
 # records/table-type-too-loose
 
-A lookup table typed `Record<string, V>` says neither "these are all the keys" nor "keys come from outside"; say which in its type.
+A table typed `Record<string, V>` lets a misspelt or missing key compile; typing its keys, or its reads as possibly missing, lets TypeScript check each read.
 
-- Group: records/keys
-- Tier: core (on in every preset)
-- Add-on: none
-- Heuristic: no
-- Severity under `recommended`: error
-- Severity under `strict`: error
+```ts
+const labels: Record<string, string> = { idle: "Idle", done: "Done" };
 
-## Why
+export function label(status: string): string {
+  return labels[status];
+}
+```
 
-`const labels: Record<string, string> = { idle: "Idle", done: "Done" }` could mean two things. If it is a fixed table, every key is known, but the type accepts any string: `labels[status]` compiles with a misspelt or missing key and the page shows "undefined". If it is an open dictionary whose keys come from outside, the type should say that a lookup can find nothing, so each read handles it. TypeScript has a spelling for each; the rule asks you to pick one and then trusts it.
+`stateward check` prints:
 
-## When to use it
+```text
+error[records/table-type-too-loose]: `labels` accepts any string key, so a misspelt or missing key still compiles
+ --> example.ts:1:7
+  |
+1 | const labels: Record<string, string> = { idle: "Idle", done: "Done" };
+  |       ^^^^^^
+  = fix: use `Partial<Record<string, string>>` for keys from outside; for fixed keys, look keys up as `keyof typeof labels` and use `satisfies`
+  = note: keys: "idle", "done"
+  = docs: stateward explain records/table-type-too-loose
+```
 
-Write the table's intent in its type. Each of these is silent:
+Say which table it is. A fixed table, read with keys of a known type:
+
+```ts
+type Status = "idle" | "done";
+
+const labels = { idle: "Idle", done: "Done" } satisfies Record<Status, string>;
+
+export function label(status: Status): string {
+  return labels[status];
+}
+```
+
+Or an open dictionary, whose type says a lookup can find nothing: `const labels: Partial<Record<string, string>> = { … }`, read as `labels[key] ?? key`.
+
+The editor offers a quick fix for each. "Use satisfies: the keys are fixed" moves the type behind the table as `satisfies Record<Status, string>`, where `Status` is the type the reads look it up with (imported when the file does not import it yet), or a union type in scope with exactly the table's keys. With no such type it writes the keys out (`Record<"idle" | "done", string>`) and says so: that checks only the keys written there, not the ones your code needs. "Use Partial<Record<string, …>>: keys come from outside" types it `Partial<Record<string, string>>`. Each is offered only when the code still compiles after it; an import a fix leaves unused is removed with it. For a `Map`, use an object with `satisfies` instead; there is no quick fix.
+
+## Why it matters
+
+`Record<string, string>` could mean two things. If it is a fixed table, every key is known, but the type accepts any string: `labels[status]` compiles with a misspelt or missing key, and the page shows "undefined". If it is an open dictionary whose keys come from outside, the type should say that a lookup can find nothing, so each read handles it. TypeScript has a spelling for each; once you pick one, TypeScript checks the reads and the rule trusts it.
+
+## What it does not catch
+
+It reports only a variable built from an object literal typed `Record<string, V>` (or `{ [key: string]: V }`), or a `new Map` of literal pairs, that your code reads and never changes or hands on. So it does not report:
+
+- a table that states its intent in its type (the spellings below);
+- a table that is changed, or may be: written from another file, passed to a function that could change it, spread or copied into another object (`{ ...views, extra }`, `Object.assign`), or handed on somewhere stateward cannot follow;
+- a table where every read with a wider key handles a missing entry (`roleLabels[role] ?? role`, `labels[key]?.trim()`, `if (key in labels)`, `Object.hasOwn(labels, key)`, or `if (!label)` after the read): an open dictionary used correctly. The same holds for a `Map` (`reasons.get(reason) ?? reason`, `if (shortcuts.has(key))`);
+- a table exported to code outside the checked files, a table never read, tables from packages, and names listed in `ignore`.
+
+## Getting the best from it
+
+Each of these states the intent, so the rule does not report it and TypeScript checks the reads:
 
 | You mean | Write |
 | --- | --- |
@@ -26,61 +65,19 @@ Write the table's intent in its type. Each of these is silent:
 | an open dictionary, keys from outside | `const labels: Partial<Record<string, string>> = { … }` (or `{ [key: string]: string \| undefined }`) |
 | a fixed table read with a key from outside | `satisfies Record<Status, string>`, and test the key first: `key in labels`, `Object.hasOwn(labels, key)` or a guard `isStatus(key)` |
 
-It is on as an error in every preset. It reports a table only when it can see that nothing in your code changes it or hands it on.
-
-## What it catches
-
-A variable built from an object literal typed `Record<string, V>` (or `{ [key: string]: V }`), or a `new Map` of literal pairs, that your code reads and never adds to, changes, deletes from or hands on.
-
-### Bad
-
-```ts
-const labels: Record<string, string> = { idle: "Idle", done: "Done", failed: "Failed" };
-const text = labels[status]; // a fixed table or an open dictionary? Any string is accepted.
-```
-
-### Good
-
-```ts
-type Status = "idle" | "done" | "failed";
-const labels = { idle: "Idle", done: "Done", failed: "Failed" } satisfies Record<Status, string>;
-const text = labels[status]; // `status` must be a Status; a missing label fails to compile
-```
-
-or, when the keys come from outside:
-
-```ts
-const labels: Partial<Record<string, string>> = { idle: "Idle", done: "Done" };
-const text = labels[key] ?? key; // the type says a lookup can find nothing
-```
-
-### Fix
-
-Two quick fixes, one per intent: "It is a fixed table: use satisfies" moves the type behind the table as `satisfies Record<Status, string>`, where `Status` is the type the reads look the table up with (`labels[touchpointStatus()]` gives `TouchpointStatus`, imported when the file does not import it yet), or a union type in scope with exactly the table's keys. With no such type the keys are written out (`Record<"idle" | "done", string>`), and the fix says so: it checks only the keys written there, not the ones your code needs. "It is an open dictionary" types it `Partial<Record<string, string>>`. Each is offered only when the code still compiles after it; an import a fix leaves unused is removed with it.
-
-When some read uses a wider key (`pageTitles[pathname]` with a `string` from the router) and does not handle a missing entry, the message leads with the open dictionary; a fixed table needs the key typed first (`keyof typeof pageTitles`). When the keys come from `Object.keys(labels)`, read key and value together with `Object.entries(labels)`. For a `Map`, use an object with `satisfies` instead; there is no quick fix.
-
-## What it does not catch
-
-- A table that states its intent in its type (the four spellings above).
-- A table that is changed, or may be: written from another file, passed to a function that could change it, spread or copied into another object (`{ ...views, extra }`, `Object.assign`), or handed on somewhere stateward cannot follow.
-- A table where every read with a wider key handles a missing entry (`roleLabels[role] ?? role`, `labels[key]?.trim()`, `if (key in labels)`, `Object.hasOwn(labels, key)`, or `if (!label)` after the read): an open dictionary used correctly. The same holds for a `Map` (`reasons.get(reason) ?? reason`, `if (shortcuts.has(key))`).
-- A table exported to code outside the checked files, a table never read, tables from packages, and names listed in `ignore`.
+When some read uses a wider key (`pageTitles[pathname]` with a `string` from the router) and does not handle a missing entry, the message leads with the open dictionary; a fixed table needs the key typed first (`keyof typeof pageTitles`). When the keys come from `Object.keys(labels)`, read key and value together with `Object.entries(labels)`.
 
 ## Turn it on or off
 
-In `stateward.config.ts`:
-
 ```ts
 rules: { "records/table-type-too-loose": "off" } // or "warning"
-groups: { "states/records": "off" } // the whole group
 rules: { "records/table-type-too-loose": ["error", { ignore: ["*_MESSAGES"] }] } // keep some names open
 ```
 
-### Options
-
-Set as `rules: { "records/table-type-too-loose": ["error", { … }] }`.
+Options, set as `rules: { "records/table-type-too-loose": ["error", { … }] }`:
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `ignore` | list of strings | `[]` | Variable names (globs like *_MESSAGES) that may stay typed as open-ended records. |
+
+Core rule: error under `recommended` and `strict`. Group: `records/keys`.

@@ -2,77 +2,76 @@
 
 # react/state-copies-prop
 
-A state is not a copy of a prop that an effect keeps in step: one value, one owner.
-
-- Group: react/state
-- Tier: core (on in every preset)
-- Add-on: none
-- Heuristic: no
-- Severity under `recommended`: warning
-- Severity under `strict`: warning
-
-## Why
-
-`const [draft, setDraft] = useState(name)` plus `useEffect(() => setDraft(name), [name])` keeps two copies of one value. They disagree for a render after every change of `name` (the effect runs after the screen shows the old copy), and an edit the user typed into `draft` is silently thrown away whenever the parent passes a new `name`, even the same text in a new render of a list.
-
-## When to use it
-
-Use it in any React app. It is a warning in every preset. It stays on with the React Compiler, which does not change what an effect sets.
-
-## What it catches
-
-In one component or hook: `useState(prop)` (also `useState(props.name)` and `useState(() => name)`), and an effect that sets that state from the same prop.
-
-### Bad
+A state that copies a prop, kept in sync by an effect, differs from the prop for one render after each change and can overwrite what the user typed.
 
 ```tsx
-function NameEditor({ name }: { name: string }) {
+import { useEffect, useState } from "react";
+
+export function NameEditor({ name }: { name: string }) {
   const [draft, setDraft] = useState(name);
   useEffect(() => {
     setDraft(name);
   }, [name]);
-  return <input value={draft} onChange={(e) => setDraft(e.target.value)} />;
+  return <input value={draft} onChange={(event) => setDraft(event.target.value)} />;
 }
 ```
 
-### Good
+`stateward check` prints:
+
+```text
+warning[react/state-copies-prop]: effect overwrites the draft `draft` with `name` whenever it changes: edits are lost
+ --> example.tsx:6:5
+  |
+6 |     setDraft(name);
+  |     ^^^^^^^^^^^^^^
+  = fix: drop the effect and render `<NameEditor key={…}>` so the draft starts over when `name` changes
+  = note: example.tsx:4: `draft` starts as `name`
+  = docs: stateward explain react/state-copies-prop
+```
+
+Remove the effect, and give the component a `key` where it is rendered, so a new value starts a new editor:
 
 ```tsx
-// Where it is rendered: a new user starts a new editor.
-<NameEditor key={user.id} name={user.name} />
+import { useState } from "react";
 
-function NameEditor({ name }: { name: string }) {
+export function NameEditor({ name }: { name: string }) {
   const [draft, setDraft] = useState(name);
-  return <input value={draft} onChange={(e) => setDraft(e.target.value)} />;
+  return <input value={draft} onChange={(event) => setDraft(event.target.value)} />;
+}
+
+export function Profile({ user }: { user: { id: string; name: string } }) {
+  return <NameEditor key={user.id} name={user.name} />;
 }
 ```
 
-### Fix
+React then creates the editor anew when the `key` changes, with the new prop as its first value. When the component never changes the value itself, use the prop directly and remove the state. There is no quick fix.
 
-When the component never changes the value itself, use the prop directly and remove the state. When it does (a form the user edits), remove the effect and give the component a `key` that changes when it should start over: React then creates it anew, with the new prop as the initial value. There is no quick fix.
+## Why it matters
+
+`useState(name)` plus an effect that sets it from `name` keeps two copies of one value. They disagree for a render after every change of `name` (the effect runs after the screen shows the old copy), and what the user typed into `draft` is silently thrown away whenever the parent passes a new `name`, even the same text in a new render of a list.
 
 ## What it does not catch
 
-- A copy whose initial value is computed (`useState(name.trim())`) or comes from another prop.
-- A copy re-synced somewhere else than an effect (during rendering, in a parent).
-- State copied from a context or from another hook's result.
+It looks, in one component or hook, for `useState(prop)` (also `useState(props.name)` and `useState(() => name)`) and an effect that sets that state from the same prop. It is silent on:
 
-It says nothing of a copy that is meant to differ from the prop: a debounce or throttle hook (the state is set from the prop inside a `setTimeout` or another timer), or a previous value (the effect reads the copy to compare it with the prop, or counts the changes in another state). A draft the user edits (the setter is also called outside the effect, from an input) is reported with only the `key` fix, since the state is needed. A copy the component also sets to a fixed value elsewhere (`setShouldBlock(false)` when the user proceeds) follows the prop except after that event: it is reported with a value derived from the prop and a state for that event instead, `const shouldBlock = isDirty && !<that state>`.
+- a copy whose first value is computed (`useState(name.trim())`) or comes from another prop;
+- a copy set again somewhere else than an effect (during rendering, in a parent);
+- state copied from a context or from another hook's result;
+- a copy meant to differ from the prop: a debounce or throttle hook (the state is set from the prop inside a timer), or a previous value (the effect compares the copy with the prop, or counts the changes in another state).
+
+A draft the user edits (the setter is also called outside the effect, as above) is reported with only the `key` fix, since the state is needed. A copy the component also sets to a fixed value elsewhere (`setShouldBlock(false)` when the user proceeds) follows the prop except after that event: the message suggests a value derived from the prop and a state for that event, `const shouldBlock = isDirty && !<that state>`. The rule stays on with the React Compiler, which does not change what an effect sets.
 
 ## Turn it on or off
 
-In `stateward.config.ts`:
-
 ```ts
 rules: { "react/state-copies-prop": "off" } // or "error"
-groups: { "react/effects": "off" } // the whole group
 rules: { "react/state-copies-prop": ["warning", { ignore: ["draft*"] }] } // states copied on purpose
 ```
 
-### Options
-
-Set as `rules: { "react/state-copies-prop": ["warning", { … }] }`.
+Options, set as `rules: { "react/state-copies-prop": ["warning", { … }] }`:
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `ignore` | list of strings | `[]` | State names (globs like draft*) that may be copied this way on purpose. |
+
+Core rule: warning under `recommended` and `strict`. Group: `react/state`.

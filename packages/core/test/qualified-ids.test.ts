@@ -63,4 +63,26 @@ describe("qualified ids", () => {
     const sourceFile = ts.createSourceFile("a.ts", "export {};", ts.ScriptTarget.Latest, true);
     expect(declarationPath(sourceFile)).toBe("");
   });
+
+  it("names an `X.y = …` by its ordinal among the same-named ones, never its offset", () => {
+    const expandos = (text: string): string[] => {
+      const sourceFile = ts.createSourceFile("a.ts", text, ts.ScriptTarget.Latest, true);
+      return sourceFile.statements.flatMap((statement) =>
+        ts.isExpressionStatement(statement) && ts.isBinaryExpression(statement.expression)
+          ? [declarationPath(statement.expression.left)]
+          : [],
+      );
+    };
+    const text =
+      'function make() {}\nmake.label = "a";\nmake["k"] = 1;\nmake.label = "b";\nother.label = 2;\n';
+    expect(expandos(text)).toEqual([
+      "$expando:label",
+      "$expando:k",
+      "$expando:label$2",
+      "$expando:label$3",
+    ]);
+    expect(expandos(`// a comment\n\n${text.replace("make[", "// another\nmake[")}`)).toEqual(
+      expandos(text),
+    );
+  });
 });

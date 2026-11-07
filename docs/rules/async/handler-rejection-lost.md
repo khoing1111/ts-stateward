@@ -2,90 +2,104 @@
 
 # async/handler-rejection-lost
 
-An async event handler, listener or timer callback catches its own failures, since nothing awaits it.
-
-- Group: async/failures
-- Tier: core (on in every preset)
-- Add-on: none
-- Heuristic: no
-- Severity under `recommended`: error
-- Severity under `strict`: error
-
-## Why
-
-Nothing awaits an `onClick`, a listener or a timer callback. When an `async` one fails after an `await`, its promise rejects with no code waiting for it: the console shows an unhandled rejection, the user sees nothing, and whatever the handler was changing is left half done. A Save button whose `await save()` fails looks like it did nothing.
-
-## When to use it
-
-Use it in any app with async event handlers: React components, DOM listeners, timers. It is on as an error in every preset. Turn it off only if a global `unhandledrejection` handler is how you deal with these on purpose.
-
-## What it catches
-
-An `async` function written in place as:
-
-- a JSX prop named `on` plus a capital letter (`onClick`, `onSubmit`);
-- the listener of `addEventListener`;
-- the callback of `setTimeout`, `setInterval` or `queueMicrotask` (the `timers` option adds more);
-
-when it awaits outside a `try` with a `catch`, or returns a promise from `fetch`, `Promise.all` and similar, or an `async` function in the same file. An `await` in a `catch` or `finally` block is not protected by that `try`.
-
-### Bad
+No code awaits an event handler or a timer callback, so its failure is an unhandled rejection the user never sees; a `catch` inside it can show the error.
 
 ```tsx
-<button onClick={async () => {
-  await save();
-}}>Save</button>
+async function save(): Promise<void> {
+  const response = await fetch("/api/save", { method: "POST" });
+  if (!response.ok) throw new Error(`save failed: ${String(response.status)}`);
+}
+
+export function SaveButton() {
+  return (
+    <button
+      onClick={async () => {
+        await save();
+      }}
+    >
+      Save
+    </button>
+  );
+}
 ```
 
-### Good
+`stateward check` prints:
+
+```text
+error[async/handler-rejection-lost]: unhandled rejection: nothing catches a failure of the async `onClick` handler
+  --> example.tsx:10:9
+   |
+10 |         await save();
+   |         ^^^^^
+   = fix: catch inside the handler, since nothing awaits it:
+         onClick={async () => {
+           try { await save(); } catch (e) { showError(e); }
+         }}
+   = docs: stateward explain async/handler-rejection-lost
+```
+
+Catch the failure in the handler, and show, retry or record it:
 
 ```tsx
-<button onClick={async () => {
-  try { await save(); } catch (e) { showError(e); }
-}}>Save</button>
+async function save(): Promise<void> {
+  const response = await fetch("/api/save", { method: "POST" });
+  if (!response.ok) throw new Error(`save failed: ${String(response.status)}`);
+}
+
+export function SaveButton({ onError }: { onError: (error: unknown) => void }) {
+  return (
+    <button
+      onClick={async () => {
+        try {
+          await save();
+        } catch (error) {
+          onError(error);
+        }
+      }}
+    >
+      Save
+    </button>
+  );
+}
 ```
 
-### Fix
+There is no quick fix: what to do with the failure is your call. `await save().catch(onError)` works too.
 
-Wrap the body in `try` / `catch` and show, retry or record the failure. There is no quick fix: what to do with it is your call.
+## Why it matters
+
+Nothing awaits an `onClick`, a listener or a timer callback. When an `async` one fails, its promise rejects with no code waiting for it: the console shows an unhandled rejection, the user sees nothing, and whatever the handler was changing is left half done. A Save button whose save fails looks like it did nothing.
 
 ## What it does not catch
 
-- A call that catches its own failure (`await save().catch(showError)`).
-- A promise that reports failure in its value instead of rejecting: its type has an `unwrap()` method and it resolves to data or an `error` (RTK Query's mutation and lazy-query triggers, `await addTodo(todo)`). `await addTodo(todo).unwrap()` rejects, and is reported.
-- A package function the config's `facts` say never fails: `facts: { "my-client": { send: { rejects: [] } } }`.
-- A handler passed by name (`onClick={save}`): only functions written in place are read.
-- A prop whose type returns a promise (`onSave: () => Promise<void>`, or a type alias of one): the component that declares it awaits it. The same for a prop that your component calls only as `await onSubmit(…)` inside the `try` of a `try` with a `catch`: it handles the failure.
-- A call your project says never rejects (it catches and reports its own failures), with a JSDoc tag `@neverRejects` on the prop in its props type, on a function type alias, or on the function:
+It reads `async` functions written in place as a JSX prop named `on` plus a capital letter (`onClick`, `onSubmit`), the listener of `addEventListener`, or the callback of `setTimeout`, `setInterval` or `queueMicrotask` (the `timers` option adds more). It reports one that awaits outside a `try` with a `catch` (an `await` in a `catch` or `finally` block is not protected by that `try`), or returns a promise from `fetch`, `Promise.all` and similar, or from an `async` function in the same file. It is silent on:
 
-```ts
-type ToolbarProps = {
-  /** Shows its own errors. @neverRejects */
-  handleSearch: (query: string) => Promise<void>;
-};
-/** @neverRejects */
-type SafeHandler = (query: string) => Promise<void>;
-```
+- a handler passed by name (`onClick={save}`), and other callbacks no code awaits: `.then` callbacks, `setImmediate`, observers, `useEffect` callbacks;
+- a handler with no `await` and no promise the rule recognises;
+- a call that catches its own failure (`await save().catch(onError)`), or a call to an `async` function of the project that catches its own: every `await` and `throw` in it is inside a `try` with a `catch` (a `catch` that rethrows or awaits again does not count);
+- a promise that reports failure in its value instead of rejecting: its type has an `unwrap()` method and it resolves to data or an `error` (RTK Query's mutation and lazy-query triggers). `await addTodo(todo).unwrap()` rejects, and is reported;
+- a prop whose type returns a promise (`onSave: () => Promise<void>`): the component that declares it awaits it. The same for a prop your component calls only as `await onSubmit(…)` inside a `try` with a `catch`.
 
-  stateward takes the tag at its word: a function marked this way that does reject is not caught by this rule.
-- Other callbacks nobody awaits: `.then` callbacks, `setImmediate`, observers, `useEffect` callbacks.
-- A handler with no `await` and no promise the rule recognises.
+## Getting the best from it
+
+Tell stateward which calls never reject, and it stops asking about them:
+
+- a package function: `facts: { "my-client": { send: { rejects: [] } } }` in the config;
+- your own function that catches and reports its failures: a JSDoc `@neverRejects` on the function, on a function type alias, or on the prop in its props type (`/** Shows its own errors. @neverRejects */ handleSearch: (query: string) => Promise<void>;`). stateward takes the tag at its word: a function marked this way that does reject is not caught.
 
 ## Turn it on or off
 
-In `stateward.config.ts`:
+Turn it off only if a global `unhandledrejection` handler is how you deal with these on purpose:
 
 ```ts
 rules: { "async/handler-rejection-lost": "off" } // or "warning"
-groups: { "errors/async": "off" } // the whole group
 rules: { "async/handler-rejection-lost": ["error", { ignoreProps: ["onSubmit"] }] } // a prop your form library awaits
 ```
 
-### Options
-
-Set as `rules: { "async/handler-rejection-lost": ["error", { … }] }`.
+Options, set as `rules: { "async/handler-rejection-lost": ["error", { … }] }`:
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
-| `timers` | list of strings | `["setTimeout","setInterval","queueMicrotask"]` | Functions whose first argument is a callback nobody awaits (add requestAnimationFrame, setImmediate…). |
+| `timers` | list of strings | `["setTimeout","setInterval","queueMicrotask"]` | Functions whose first argument is a callback no code awaits (add requestAnimationFrame, setImmediate…). |
 | `ignoreProps` | list of strings | `[]` | JSX props whose async handler the component awaits itself, like a form library's onSubmit (globs allowed). |
+
+Core rule: error under `recommended` and `strict`. Group: `async/failures`.

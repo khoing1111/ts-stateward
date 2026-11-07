@@ -280,7 +280,7 @@ export function modelOf(summaries: ReadonlyMap<string, Json>): Model {
           what:
             info.via === null
               ? inEffect
-                ? "this effect throws"
+                ? "an effect throws"
                 : `\`${name}\` throws`
               : `\`${info.via.text}\` can throw`,
         });
@@ -390,11 +390,11 @@ export function modelOf(summaries: ReadonlyMap<string, Json>): Model {
 }
 
 /** The line every boundary hover ends with: what no boundary ever catches. */
-export const NOT_CAUGHT = "not caught here: errors in event handlers and async code";
+export const NOT_CAUGHT = "not caught by a boundary: errors in event handlers and async code";
 
 /**
- * On a boundary's tag: `catches: NotFoundError (via <UserPage> → useUser) | others stateward
- * cannot see (from …)`, then `NOT_CAUGHT`. Undefined when `offset` is on no boundary's tag.
+ * On a boundary's tag: `catches: NotFoundError (via <UserPage> → useUser) | others not known
+ * (from …)`, then `NOT_CAUGHT`. Undefined when `offset` is on no boundary's tag.
  */
 export function boundaryLines(model: Model, file: string, offset: number): string[] | undefined {
   const element = model.byFile.get(file)?.find((one) => offset >= one.at[0] && offset < one.at[1]);
@@ -412,7 +412,7 @@ export function boundaryLines(model: Model, file: string, offset: number): strin
       ? [...names, unknownText(caught.unknowns, caught.more)]
       : names;
   return [
-    parts.length === 0 ? "catches nothing stateward can see" : `catches: ${parts.join(" | ")}`,
+    parts.length === 0 ? "catches nothing known" : `catches: ${parts.join(" | ")}`,
     NOT_CAUGHT,
   ];
 }

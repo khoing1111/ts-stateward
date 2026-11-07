@@ -10,16 +10,18 @@ function flagged(): readonly Finding[] {
   return checkOnly(fixture(`${RULE}/flagged`), RULE);
 }
 
-function lost(subject: string): string {
-  return `if ${subject}, the error that led to this finally is lost`;
+function lost(subject?: string): string {
+  const base = subject === undefined ? "a `throw`" : "a throw";
+  const cause = subject === undefined ? "" : `: ${subject}`;
+  return `${base} in \`finally\` replaces the original error${cause}`;
 }
 
 function throws(call: string): string {
-  return lost(`\`${call}(…)\` throws here`);
+  return lost(`\`${call}(…)\` can throw`);
 }
 
 const HINT =
-  "move it out of finally, or catch it inside:\n    finally {\n      try { cleanup(); } catch (e) { report(e); }\n    }";
+  "catch it inside the `finally`, or move it out, so the original error is kept:\n    finally {\n      try { cleanup(); } catch (e) { report(e); }\n    }";
 
 function at(message: string) {
   return says("finally.ts", message, HINT);
@@ -35,7 +37,7 @@ describe(`errors/${RULE}: a finally that can throw`, () => {
       at(throws("decodeURI")),
       at(throws("structuredClone")),
       at(throws("atob")),
-      at(lost("this `throw` runs")),
+      at(lost()),
       at(throws("this.close")),
       at(throws("mustHave")),
       at(throws("mustBeKnown")),
@@ -44,7 +46,7 @@ describe(`errors/${RULE}: a finally that can throw`, () => {
       at(throws("JSON.parse")),
       at(throws("JSON.parse")),
       at(throws("JSON.parse")),
-      at(lost("`someVeryLongFunctionNameForTheTest(…)` throws here")),
+      at(lost("`someVeryLongFunctionNameForTheTest(…)` can throw")),
       at(throws("JSON.parse")),
     ]);
   });

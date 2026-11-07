@@ -6,21 +6,21 @@ const complete = [
   "",
   "A chain must handle every case.",
   "",
-  "## Why",
-  "",
-  "text",
-  "",
-  "## When to use it",
-  "",
-  "text",
-  "",
-  "## What it catches",
-  "",
-  "### Bad",
-  "",
-  "```ts",
+  "```ts example-bad",
   "## not a section",
   "```",
+  "",
+  "```ts example-good",
+  "const fixed = 1;",
+  "```",
+  "",
+  "## Why it matters",
+  "",
+  "text",
+  "",
+  "## When it says “not checked”",
+  "",
+  "text",
   "",
   "## What it does not catch",
   "",
@@ -37,9 +37,15 @@ function without(heading: string): string {
   return [...complete.slice(0, index), ...complete.slice(index + 1)].join("\n");
 }
 
+const ORDER =
+  '"Why it matters", "When it says “not checked”", "What it does not catch", "Getting the best from it", "Turn it on or off"';
+
 describe("explainSectionProblems", () => {
-  it("accepts the full set of sections in order", () => {
+  it("accepts the sections in order, with the optional ones left out or present", () => {
     expect(explainSectionProblems("demo/rule", complete.join("\n"))).toEqual([]);
+    expect(explainSectionProblems("demo/rule", without("## When it says “not checked”"))).toEqual(
+      [],
+    );
   });
 
   it("names the rule and the missing section", () => {
@@ -49,25 +55,46 @@ describe("explainSectionProblems", () => {
   });
 
   it("does not count a heading inside a code fence", () => {
-    const text = complete.join("\n").replace("## Why", "```\n## Why\n```");
+    const text = complete.join("\n").replace("## Why it matters", "```\n## Why it matters\n```");
     expect(explainSectionProblems("demo/rule", text)).toEqual([
-      'demo/rule: the explain text lacks the section "## Why"',
+      'demo/rule: the explain text lacks the section "## Why it matters"',
     ]);
   });
 
   it("names a section that is out of order", () => {
     const text = complete
       .join("\n")
-      .replace("## When to use it", "## TMP")
-      .replace("## Why", "## When to use it")
-      .replace("## TMP", "## Why");
+      .replace("## What it does not catch", "## TMP")
+      .replace("## Why it matters", "## What it does not catch")
+      .replace("## TMP", "## Why it matters");
     expect(explainSectionProblems("demo/rule", text)).toEqual([
-      'demo/rule: the section "## Why" is out of order; the order is "Why", "When to use it", "What it catches", "What it does not catch", "Turn it on or off"',
+      `demo/rule: the section "## Why it matters" is out of order; the order is ${ORDER}`,
+    ]);
+  });
+
+  it("names a section that is not one of the list", () => {
+    const text = complete.join("\n").replace("## Why it matters", "## Why it matters\n\n## Bad");
+    expect(explainSectionProblems("demo/rule", text)).toEqual([
+      `demo/rule: "## Bad" is not one of the sections; the order is ${ORDER}`,
+    ]);
+  });
+
+  it("asks for a bad and a good example before the sections", () => {
+    const text = complete.join("\n").replace("```ts example-good", "```ts");
+    expect(explainSectionProblems("demo/rule", text)).toEqual([
+      "demo/rule: the explain text needs a `ts example-good` block before its sections",
+    ]);
+    const late = complete
+      .join("\n")
+      .replace("```ts example-bad", "```ts")
+      .replace("text\n\n## Turn", "```tsx example-bad\nx\n```\n\n## Turn");
+    expect(explainSectionProblems("demo/rule", late)).toEqual([
+      "demo/rule: the explain text needs a `ts example-bad` block before its sections",
     ]);
   });
 
   it("asks for the title and the summary", () => {
-    expect(explainSectionProblems("demo/rule", "# other/rule\n\n## Why\n")).toContain(
+    expect(explainSectionProblems("demo/rule", "# other/rule\n\n## Why it matters\n")).toContain(
       'demo/rule: the explain text must start with "# demo/rule"',
     );
     expect(

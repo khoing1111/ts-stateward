@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "customConditions": [
+      "source"
+    ],
+    "target": "ES2022",
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": [],
+    "paths": {
+      "@acme/ui": [
+        "../../acme-ui/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "src"
+  ]
+}

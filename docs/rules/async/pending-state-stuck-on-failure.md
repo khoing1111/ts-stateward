@@ -2,81 +2,98 @@
 
 # async/pending-state-stuck-on-failure
 
-State set before an await and set again after it is also set again when the await fails, so a failure does not leave it pending.
-
-- Group: async/failures
-- Tier: core (on in every preset)
-- Add-on: none
-- Heuristic: yes: it guesses, so it is never an error unless you set it
-- Severity under `recommended`: warning
-- Severity under `strict`: warning
-
-State that is set before an `await` and set again after it is also set again when the `await` fails, so a failure does not leave it pending.
-
-## Why
-
-`setLoading(true); await search(); setLoading(false);` works until `search()` fails. The function stops at the `await`, `setLoading(false)` never runs, and the spinner stays on until the page is reloaded. The same goes for `setStatus("saving")` before a save and `setStatus("saved")` after it: a failed save shows "saving" for ever. The fix is a `finally` that clears the state, or a `catch` that sets what a failure means.
-
-## When to use it
-
-Use it in any app that keeps request state next to a request. It reads the shape of the code, not the names: any state written before an awaited call and written again after it counts. That is still a guess about what the code means, so it is a warning, not an error, in every preset. Turn it off if you set the state again somewhere this rule cannot see.
-
-## What it catches
-
-In one function, state that outlives the call is written (`setLoading(true)`, `this.isSaving = true`, `state.phase = "loading"`, `setState({ status: "loading" })`), a later `await` of a call that can reject, and the same state is written again afterwards, but a failure or an early `return` or `throw` in between skips that. The same goes for a promise chain that writes it again only in `.then()`. State that outlives the call is a setter (`set…` with one argument) or a place not declared as a variable inside the function: a field of `this`, a parameter's field, a module-level variable, a `useState` setter of the component around a handler. The finding is on the first write.
-
-A call can reject when stateward can see it does: `fetch`, a request of `axios`, `ky`, `ofetch`, `got`, `node-fetch` or `superagent`, a package function your config's `facts` say rejects or throws, `Promise.all` of one of those, or a function of your project that throws or awaits one of those outside a `try` that catches (followed four calls deep).
-
-### Bad
+When the awaited call fails, a state set to "loading" before it stays set and the spinner shows until reload; resetting it in `finally` prevents that.
 
 ```ts
-setLoading(true);
-await search();
-setLoading(false);
-```
+import { useState } from "react";
 
-### Good
+export function useSearch() {
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState<string[]>([]);
 
-```ts
-setLoading(true);
-try {
-  await search();
-} finally {
-  setLoading(false);
+  async function run(query: string): Promise<void> {
+    setLoading(true);
+    const response = await fetch(`/api/search?q=${query}`);
+    setResults((await response.json()) as string[]);
+    setLoading(false);
+  }
+
+  return { loading, results, run };
 }
 ```
 
-When success writes a value only success makes true (`setStatus("saved")`, the call's result), write what a failure means in a `catch`: `catch (error) { setStatus("failed"); throw error; }`. A `catch` that writes the state also counts, as long as the code after the `try` does too. Or keep the request in one union (`{ kind: "idle" } | { kind: "loading" } | { kind: "failed"; error: Error } | { kind: "ready"; data: T }`) and set its failed case.
+`stateward check` prints:
 
-### Fix
+```text
+warning[async/pending-state-stuck-on-failure]: `loading` stays `true` when `fetch()` fails
+ --> example.ts:8:5
+  |
+8 |     setLoading(true);
+  |     ^^^^^^^^^^^^^^^^
+  = fix: set `loading` again in a `finally`, so a failure resets it too: `try { await fetch(); } finally { setLoading(false); }`
+  = docs: stateward explain async/pending-state-stuck-on-failure
+```
 
-When the code is a plain run (a write, some awaited statements, the write again as the last statement of the same block, no `try`) and the write again clears the state (`false`, `null`, `undefined`), the quick fix wraps the middle in `try { … } finally { … }`. In every other shape there is no quick fix: what a failure should leave is your call.
+Clear the state in a `finally`, so it is cleared whether the call works or fails:
+
+```ts
+import { useState } from "react";
+
+export function useSearch() {
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState<string[]>([]);
+
+  async function run(query: string): Promise<void> {
+    setLoading(true);
+    try {
+      const response = await fetch(`/api/search?q=${query}`);
+      setResults((await response.json()) as string[]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return { loading, results, run };
+}
+```
+
+When the code is a plain run (a write, some awaited statements, then the write again as the last statement of the same block, no `try`) and the write again clears the state (`false`, `null`, `undefined`), the editor's quick fix wraps the middle in `try { … } finally { … }`. In every other shape there is no quick fix: what a failure should leave is your call. When success writes a value only success makes true (`setStatus("saved")`, the call's result), write what a failure means in a `catch`: `catch (error) { setStatus("failed"); throw error; }`. A `catch` that writes the state also counts, as long as the code after the `try` does too.
+
+## Why it matters
+
+`setLoading(true); await search(); setLoading(false);` works until `search()` fails. The function stops at the `await`, `setLoading(false)` never runs, and the spinner stays on until the page is reloaded. The same goes for `setStatus("saving")` before a save and `setStatus("saved")` after it: a failed save shows "saving" for ever.
 
 ## What it does not catch
 
-- State written through `this.setState({ loading: true })`, or a setter with more than one argument.
-- State that is never written again in the same function, or is written again in a different one.
-- A variable declared inside the function: it is gone when the function fails.
-- An `await` of a call stateward cannot see rejecting: a package function with no facts, a function received as a value or a prop (`this.props.actions.save()`), a declared function with no body. Say what a package's function does with `facts: { "my-client": { save: { rejects: ["Error"] } } }`.
-- A call whose promise settles with its error in the value (`unwrap()`, RTK Query's triggers): it does not reject.
-- A call that cannot fail, said in code: `facts: { "my-client": { save: { rejects: [] } } }` for a package function, or a JSDoc `/** @neverRejects */` on your own function (and not looked into any deeper). A state set through a setter whose type has a member nothing can fill, `| { status: "failed"; error: never }`, says the request cannot fail, and the rule believes it.
+It reads the shape of the code, not the names: in one function, state that outlives the call is written (`setLoading(true)`, `this.isSaving = true`, `state.phase = "loading"`, `setState({ status: "loading" })`), then a call that can reject is awaited, then the state is written again, but a failure, an early `return` or a `throw` in between skips that. A promise chain that writes it again only in `.then()` counts too. "State that outlives the call" is a setter (`set…` with one argument) or a place not declared inside the function: a field of `this`, a parameter's field, a module-level variable, a `useState` setter of the component around a handler. The finding is on the first write. It does not see:
 
-It is wrong when the failure is handled somewhere this rule cannot see, such as a caller that always resets the state: mark the case as intended with `// stateward-ignore async/pending-state-stuck-on-failure: <why>` above the line, or list the state's name under `ignore`.
+- state written through `this.setState({ loading: true })`, or a setter with more than one argument;
+- state that is never written again in the same function, or is written again in a different one;
+- a variable declared inside the function: it is gone when the function fails;
+- an `await` of a call it cannot see rejecting: a package function with no facts, a function received as a value or a prop (`this.props.actions.save()`), a declared function with no body;
+- a call whose promise settles with its error in the value (`unwrap()`, RTK Query's triggers): it does not reject.
+
+A call can reject when stateward can see that it does: `fetch`, a request of `axios`, `ky`, `ofetch`, `got`, `node-fetch` or `superagent`, a package function your config's `facts` say rejects or throws, `Promise.all` of one of those, or a function of your project that throws or awaits one of those outside a `try` that catches (followed four calls deep).
+
+It guesses what the code means, so it is a warning in every preset, and it is wrong when the failure is handled somewhere it cannot see, such as a caller that always resets the state: say so above the line with `// stateward-ignore async/pending-state-stuck-on-failure: <why>`, or list the state's name under `ignore`.
+
+## Getting the best from it
+
+Keep a request in one union instead of separate flags: `{ kind: "idle" } | { kind: "loading" } | { kind: "failed"; error: Error } | { kind: "ready"; data: T }`, and set its failed case in a `catch`. Then "loading but also failed" cannot happen, and every screen decides what a failure shows.
+
+Say what cannot fail, and the rule believes it: `facts: { "my-client": { save: { rejects: [] } } }` for a package function, a JSDoc `/** @neverRejects */` on your own function (not looked into any deeper), or a setter whose type has a member nothing can fill (`| { status: "failed"; error: never }`). Say what a package function does reject with `facts: { "my-client": { save: { rejects: ["Error"] } } }`.
 
 ## Turn it on or off
 
-In `stateward.config.ts`:
-
 ```ts
 rules: { "async/pending-state-stuck-on-failure": "off" } // or "error"
-groups: { "async/failures": "off" } // the whole group
 rules: { "async/pending-state-stuck-on-failure": ["warning", { ignore: ["*Draft"] }] } // states set again elsewhere
 ```
 
-### Options
-
-Set as `rules: { "async/pending-state-stuck-on-failure": ["warning", { … }] }`.
+Options, set as `rules: { "async/pending-state-stuck-on-failure": ["warning", { … }] }`:
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `ignore` | list of strings | `[]` | State names (globs like *Busy) that are set again somewhere this rule cannot see. |
+
+Core rule: warning under `recommended` and `strict`. It judges from patterns in the code, not only from types, so it can be wrong: it is never an error unless you make it one. Group: `async/failures`.

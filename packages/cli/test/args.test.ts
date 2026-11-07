@@ -221,6 +221,17 @@ describe("parseArgs", () => {
     });
   });
 
+  it("parses guarantees", () => {
+    expect(parseArgs(["guarantees", "--format", "json"])).toEqual({
+      ok: true,
+      value: { kind: "guarantees", format: "json", cwd: undefined },
+    });
+    expect(parseArgs(["guarantees", "x"])).toEqual({
+      ok: false,
+      errors: ['guarantees takes no arguments, got "x"'],
+    });
+  });
+
   it("parses explain", () => {
     expect(parseArgs(["explain", "a/b"])).toEqual({
       ok: true,
@@ -238,7 +249,10 @@ describe("parseArgs", () => {
     [["check", "extra"], 'check takes no arguments, got "extra"'],
     [["init", "extra"], 'init takes no arguments, got "extra"'],
     [["coverage", "extra"], 'coverage takes no arguments, got "extra"'],
-    [["init", "--format", "json"], "--format only applies to check, coverage, plan and deps"],
+    [
+      ["init", "--format", "json"],
+      "--format only applies to check, coverage, plan, deps and guarantees",
+    ],
     [
       ["init", "--packs", "unions,nope"],
       '--packs: unknown pack "nope"; known packs: unions, records, async, react-context, errors, ownership, reducers, react',
@@ -252,7 +266,10 @@ describe("parseArgs", () => {
     [["coverage", "--preset", "strict"], "--preset only applies to init"],
     [["plan", "extra"], 'plan takes no arguments, got "extra"'],
     [["next", "extra"], 'next takes no arguments, got "extra"'],
-    [["next", "--format", "json"], "--format only applies to check, coverage, plan and deps"],
+    [
+      ["next", "--format", "json"],
+      "--format only applies to check, coverage, plan, deps and guarantees",
+    ],
     [["check", "--rule"], "--rule needs a value"],
     [["plan", "--rule", "a/b"], "--rule only applies to check"],
     [["check", "--anyway"], "--anyway only applies to next"],

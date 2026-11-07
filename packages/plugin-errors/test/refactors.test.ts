@@ -7,7 +7,7 @@ import { errors } from "../src/index.js";
 import { fixture } from "./helpers.js";
 
 const DIR = fixture("inlay-hints");
-const TITLE = "Handle the known errors here, rethrow the rest";
+const TITLE = "Handle the known errors, rethrow the rest";
 
 const parsed = parseConfig({ preset: "recommended", plugins: [errors()] }, DIR);
 if (!parsed.ok) throw new Error(parsed.errors.join("\n"));

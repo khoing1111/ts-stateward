@@ -1,6 +1,7 @@
 import path from "node:path";
 import type {
   Config,
+  LibraryTypes,
   ConfigOverride,
   EditorContributions,
   ExtendedConfig,
@@ -121,6 +122,7 @@ type TokensFn = NonNullable<EditorContributions["tokens"]>;
 type CodeActionsFn = NonNullable<EditorContributions["codeActions"]>;
 type InlayHintsFn = NonNullable<EditorContributions["inlayHints"]>;
 type LibraryFactsFn = NonNullable<EditorContributions["libraryFacts"]>;
+type GuaranteesFn = NonNullable<EditorContributions["guarantees"]>;
 
 /* Functions cannot be checked beyond `typeof`; the declared signature is the plugin's promise. */
 const isFileCheck = (value: unknown): value is FileRule["check"] => typeof value === "function";
@@ -132,6 +134,7 @@ const isSilentReason = (value: unknown): value is NonNullable<ProjectRule["silen
   typeof value === "function";
 const isHover = (value: unknown): value is HoverFn => typeof value === "function";
 const isInlayHints = (value: unknown): value is InlayHintsFn => typeof value === "function";
+const isGuarantees = (value: unknown): value is GuaranteesFn => typeof value === "function";
 const isCodeActions = (value: unknown): value is CodeActionsFn => typeof value === "function";
 const isTokens = (value: unknown): value is TokensFn => typeof value === "function";
 const isLibraryFacts = (value: unknown): value is LibraryFactsFn => typeof value === "function";
@@ -269,6 +272,16 @@ function parseMeta(value: unknown, where: string, errors: string[]): RuleMeta | 
   return { ...info, explain: value.explain };
 }
 
+/** `RuleInfo.needsTypes` as given: undefined when left out, "invalid" when not a `LibraryTypes`. */
+function parseNeedsTypes(value: unknown): LibraryTypes | "invalid" | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return "invalid";
+  const { library, modules } = value;
+  if (typeof library !== "string" || library === "") return "invalid";
+  if (!isStringArray(modules) || modules.length === 0) return "invalid";
+  return { library, modules: [...modules] };
+}
+
 /** The metadata a pack declares up front (`RuleInfo`): everything but the `explain` text. */
 function parseInfo(value: unknown, where: string, errors: string[]): RuleInfo | undefined {
   const found = parseInfoFields(value, where, errors);
@@ -281,7 +294,7 @@ function parseInfo(value: unknown, where: string, errors: string[]): RuleInfo | 
     errors.push(`${where}.meta.sharedOptions must map option names to rule keys of the same pack`);
     return undefined;
   }
-  const info =
+  const sharing =
     shared === undefined
       ? found
       : {
@@ -290,6 +303,27 @@ function parseInfo(value: unknown, where: string, errors: string[]): RuleInfo | 
             Object.entries(shared).map(([name, rule]) => [name, String(rule)]),
           ),
         };
+  const { fixNeedsStrictNulls } = value;
+  const needsTypes = parseNeedsTypes(value.needsTypes);
+  if (needsTypes === "invalid") {
+    errors.push(
+      `${where}.meta.needsTypes must be { library: "<name>", modules: ["<module>", …] } when present`,
+    );
+    return undefined;
+  }
+  if (fixNeedsStrictNulls !== undefined && fixNeedsStrictNulls !== true) {
+    errors.push(`${where}.meta.fixNeedsStrictNulls must be true when present`);
+    return undefined;
+  }
+  const typed =
+    needsTypes === undefined
+      ? sharing
+      : {
+          ...sharing,
+          needsTypes,
+        };
+  const info =
+    fixNeedsStrictNulls === true ? { ...typed, fixNeedsStrictNulls: true as const } : typed;
   if (value.options === undefined) return info;
   const options = parseOptionSpecs(value.options, where, errors);
   return options === undefined ? undefined : { ...info, options };
@@ -300,10 +334,14 @@ function parseInfoFields(value: unknown, where: string, errors: string[]): RuleI
     errors.push(`${where}.meta must be an object`);
     return undefined;
   }
-  const { description, defaultSeverity, tier, group, addon, heuristic, widenedBy } = value;
+  const { description, summary, defaultSeverity, tier, group, addon, heuristic, widenedBy } = value;
   const { needsJsDoc, listUnknowns, yieldsTo } = value;
   if (typeof description !== "string") {
     errors.push(`${where}.meta.description must be a string`);
+    return undefined;
+  }
+  if (summary !== undefined && typeof summary !== "string") {
+    errors.push(`${where}.meta.summary must be a string when present`);
     return undefined;
   }
   if (!isSeverity(defaultSeverity)) {
@@ -330,7 +368,8 @@ function parseInfoFields(value: unknown, where: string, errors: string[]): RuleI
     errors.push(`${where}.meta.group must name the rule's group in kebab-case, e.g. "switches"`);
     return undefined;
   }
-  const base = { description, defaultSeverity, tier, group };
+  const described = { description, defaultSeverity, tier, group };
+  const base = summary === undefined ? described : { ...described, summary };
   const guessed = heuristic === true ? { ...base, heuristic: true as const } : base;
   const reading = needsJsDoc === true ? { ...guessed, needsJsDoc: true as const } : guessed;
   const listing = listUnknowns === true ? { ...reading, listUnknowns: true as const } : reading;
@@ -414,11 +453,12 @@ function parseEditor(
     errors.push(`${where}.editor must be an object`);
     return undefined;
   }
-  const { hover, tokens, libraryFacts, inlayHints, codeActions } = value;
+  const { hover, tokens, libraryFacts, inlayHints, codeActions, guarantees } = value;
   const editor: {
     hover?: HoverFn;
     tokens?: TokensFn;
     libraryFacts?: LibraryFactsFn;
+    guarantees?: GuaranteesFn;
     inlayHints?: InlayHintsFn;
     codeActions?: CodeActionsFn;
   } = {};
@@ -442,6 +482,13 @@ function parseEditor(
       return undefined;
     }
     editor.libraryFacts = libraryFacts;
+  }
+  if (guarantees !== undefined) {
+    if (!isGuarantees(guarantees)) {
+      errors.push(`${where}.editor.guarantees must be a function`);
+      return undefined;
+    }
+    editor.guarantees = guarantees;
   }
   if (hover !== undefined) {
     if (!isHover(hover)) {

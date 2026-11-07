@@ -322,7 +322,7 @@ describe("stateward check: fixes are tried first", { timeout: 60_000 }, () => {
       fixes: [],
       rejected: [{ title: "Copy as text", reason }],
       ignore: {
-        title: "Ignore this case here",
+        title: "Add an ignore comment",
         edits: [{ newText: "// stateward-ignore checked/copies: \n" }],
       },
     });

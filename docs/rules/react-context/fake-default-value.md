@@ -2,39 +2,41 @@
 
 # react-context/fake-default-value
 
-A React context gets its value from a Provider, not from a fake default like {} as Theme.
-
-- Group: react-context/defaults
-- Tier: coverage (info under `recommended`, an error under `strict`)
-- Add-on: none
-- Heuristic: no
-- Severity under `recommended`: info
-- Severity under `strict`: error
-
-## Why
-
-`createContext({} as Theme)`, or `createContext<Theme>(null!)`, hands every component a fake value when the Provider is missing. The type says a theme is there; at run time it is not. `useContext(ThemeContext).colors` then fails far from where the Provider is missing, or quietly reads an empty object.
-
-## When to use it
-
-Use it in any React app. It shows as info under `recommended` (a hint in the editor that does not fail the check) and as an error under `strict`. It is the first step towards `react-context/provider-missing`, which then checks that every reader has a Provider above it. Turn it off if your defaults are real values (a default theme, a logger that does nothing).
-
-## What it catches
-
-React's `createContext` (also as `React.createContext`) called with a fake default: a cast (`{} as Theme`, `[] as Item[]`, `null!`, `<Theme>{}`) or an empty object `{}`.
-
-### Bad
+A default like `{} as Theme` is used when the Provider is missing, so the code reads an empty object typed as a full one and fails later.
 
 ```tsx
+import { createContext, useContext } from "react";
+
+type Theme = { colors: { text: string } };
+
 const ThemeContext = createContext({} as Theme);
-const ThemeContext = createContext<Theme>(null!);
+
+export function Title() {
+  return <h1 style={{ color: useContext(ThemeContext).colors.text }}>Hello</h1>;
+}
 ```
 
-### Good
+`stateward check` prints:
 
-Create the context with `undefined` (or `null`), so its type says the value can be missing, and read it through a hook that throws when it is:
+```text
+info[react-context/fake-default-value]: `ThemeContext` defaults to a fake value, `{} as Theme`
+ --> example.tsx:5:22
+  |
+5 | const ThemeContext = createContext({} as Theme);
+  |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = fix: create it with `undefined` and read it in a hook that throws, so a missing Provider fails at once:
+        const ThemeContext = createContext<Theme | undefined>(undefined);
+        // in useTheme(): if (value === undefined) throw new Error("ThemeContext needs a Provider");
+  = docs: stateward explain react-context/fake-default-value
+```
+
+Create the context with `undefined`, so its type says the value can be missing, and read it through a hook that throws when it is:
 
 ```tsx
+import { createContext, useContext } from "react";
+
+type Theme = { colors: { text: string } };
+
 const ThemeContext = createContext<Theme | undefined>(undefined);
 
 function useTheme(): Theme {
@@ -42,38 +44,43 @@ function useTheme(): Theme {
   if (theme === undefined) throw new Error("useTheme needs a ThemeContext Provider");
   return theme;
 }
+
+export function Title() {
+  return <h1 style={{ color: useTheme().colors.text }}>Hello</h1>;
+}
 ```
 
-`react-context/provider-missing` then checks that every component reading it through `useTheme` has a Provider above it.
+There is no quick fix, since every read changes. Once the context says it can be missing, `react-context/provider-missing` checks that every component reading it has a Provider above it. Its quick fix then states the context required (`requiredContext<Theme>()`), and the readers need no check at all.
 
-### Fix
+## Why it matters
 
-Create the context with `undefined` and read it through a hook that throws when it is missing. There is no quick fix, since every read changes.
+`createContext({} as Theme)`, or `createContext<Theme>(null!)`, hands every component a fake value when the Provider is missing. The type says a theme is there; at run time it is not. `useContext(ThemeContext).colors.text` then throws far from where the Provider is missing, or quietly reads an empty object.
 
 ## What it does not catch
 
-- A real default: `createContext({ colors: defaultColors })`, or `createContext([])`.
-- `createContext<Callbacks>({})` when no property of `Callbacks` is required: `{}` is then a complete value of the type.
-- `undefined` or `null` as the default (`createContext<Theme | null>(null)`, `createContext(null as Theme | null)`): the context's type then says the value can be missing, an optional or a required context on purpose, and TypeScript makes the readers check it. `null!` and `undefined as unknown as Theme` hide it, and are reported.
-- A cast deeper inside the default (`{ user: null as User }`): only the value as a whole is read.
-- Contexts from other libraries' `createContext`.
-- Whether a Provider is missing: that is `react-context/provider-missing`.
+It looks at React's `createContext` (also `React.createContext`) called with a cast (`{} as Theme`, `[] as Item[]`, `null!`, `<Theme>{}`) or an empty object `{}`. It is silent on:
+
+- a real default: `createContext({ colors: defaultColors })`, or `createContext([])`;
+- `createContext<Callbacks>({})` when no property of `Callbacks` is required: `{}` is then a complete value of the type;
+- `undefined` or `null` as the default (`createContext<Theme | null>(null)`, `createContext(null as Theme | null)`): the type then says the value can be missing, and TypeScript makes the readers check it. `null!` and `undefined as unknown as Theme` hide that, and are reported;
+- a cast deeper inside the default (`{ user: null as User }`): only the value as a whole is read;
+- contexts from other libraries' `createContext`;
+- the one cast of a helper that returns a `RequiredContext` (`requiredContext<T>()` in your `guarantees.ts`): `react-context/provider-missing` proves every reader of such a context is under its Provider, so its default is never read. A context stated required but made with a cast anywhere else is still reported, and the fix line points at the helper.
 
 ## Turn it on or off
 
-In `stateward.config.ts`:
+It shows as info under `recommended` (a hint in the editor that does not fail the check) and as an error under `strict`. Turn it off if your defaults are real values (a default theme, a logger that does nothing):
 
 ```ts
 rules: { "react-context/fake-default-value": "off" } // or "warning"
-groups: { "react-context/defaults": "off" } // the whole group
 rules: { "react-context/fake-default-value": ["error", { severities: { empty: "info" } }] } // only casts are errors
 ```
 
-### Options
-
-Set as `rules: { "react-context/fake-default-value": ["info", { … }] }`.
+Options, set as `rules: { "react-context/fake-default-value": ["info", { … }] }`:
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of placeholder. Kinds: `cast`: a cast (`{} as Theme`, `x!`): the type says a real value is there when it is not; `empty`: an empty object `{}`: the context's type usually shows the gap. |
 | `ignore` | list of strings | `[]` | Context names (globs like *Optional*) whose placeholder is on purpose. |
+
+Coverage rule (it points at code whose types do not say enough to check it): info under `recommended`, error under `strict`. Group: `react-context/defaults`.

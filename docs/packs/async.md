@@ -4,46 +4,75 @@
 
 An async failure is never lost: handlers catch their own, and state set before an await is set again when it fails.
 
-## Rules
+## Turn it on
 
-Rules sit under their group. Set a whole group in the config, `groups: { "async/failures": "warning" }`, or one rule under `rules`; a rule's own entry wins.
-
-### failures
-
-| Rule | Kind | recommended | strict | What it checks |
-| --- | --- | --- | --- | --- |
-| [handler-rejection-lost](../rules/async/handler-rejection-lost.md) | Core | error | error | An async event handler, listener or timer callback catches its own failures, since nothing awaits it. |
-| [pending-state-stuck-on-failure](../rules/async/pending-state-stuck-on-failure.md) | Core | warning | warning | State set before an await and set again after it is also set again when the await fails, so a failure does not leave it pending. (heuristic) |
-
-## Options
-
-Set in the config as `rules: { "<rule>": [severity, { option: value }] }`.
-
-### handler-rejection-lost
-
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `timers` | list of strings | `["setTimeout","setInterval","queueMicrotask"]` | Functions whose first argument is a callback nobody awaits (add requestAnimationFrame, setImmediate…). |
-| `ignoreProps` | list of strings | `[]` | JSX props whose async handler the component awaits itself, like a form library's onSubmit (globs allowed). |
-
-### pending-state-stuck-on-failure
-
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `ignore` | list of strings | `[]` | State names (globs like *Busy) that are set again somewhere this rule cannot see. |
-
-## Add-ons
-
-None yet.
-
-## Settings
-
-Presets and add-ons are set in the config, not on the plugin:
+Install `@stateward/plugin-async` and add `asyncFlow()` to `plugins` in `stateward.config.ts`, with a `preset` (`npx stateward init` does both):
 
 ```ts
-export default defineConfig({
-  plugins: [asyncFlow()],
-  preset: "strict",
-  // addons: ["async/<addon>"],
-});
+plugins: [asyncFlow()], preset: "recommended", // or "strict"
 ```
+
+Each rule's page has its options and what it does not catch. One rule or a whole group is set under `rules` or `groups`: `rules: { "async/<rule>": "warning" }`.
+
+## Rules
+
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [handler-rejection-lost](../rules/async/handler-rejection-lost.md) | an async `onClick`, listener or timer callback whose failure is never caught | No code awaits an event handler or a timer callback, so its failure is an unhandled rejection the user never sees; a `catch` inside it can show the error. | Core | error | error |
+| [pending-state-stuck-on-failure](../rules/async/pending-state-stuck-on-failure.md) | a "loading" state set before an `await` that stays set when the call fails (guess) | When the awaited call fails, a state set to "loading" before it stays set and the spinner shows until reload; resetting it in `finally` prevents that. | Core | warning | warning |
+
+## [handler-rejection-lost](../rules/async/handler-rejection-lost.md)
+
+No code awaits an event handler or a timer callback, so its failure is an unhandled rejection the user never sees; a `catch` inside it can show the error.
+
+```tsx
+// …
+export function SaveButton() {
+  return (
+    <button
+      onClick={async () => {
+        await save();
+      }}
+    >
+      Save
+    </button>
+  );
+}
+```
+
+```text
+error[async/handler-rejection-lost]: unhandled rejection: nothing catches a failure of the async `onClick` handler
+```
+
+Fix: catch the failure in the handler, and show, retry or record it.
+
+Core rule: error under `recommended` and `strict`. Group: `async/failures`.
+
+## [pending-state-stuck-on-failure](../rules/async/pending-state-stuck-on-failure.md)
+
+When the awaited call fails, a state set to "loading" before it stays set and the spinner shows until reload; resetting it in `finally` prevents that.
+
+```ts
+// …
+export function useSearch() {
+  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState<string[]>([]);
+
+  async function run(query: string): Promise<void> {
+    setLoading(true);
+    const response = await fetch(`/api/search?q=${query}`);
+    setResults((await response.json()) as string[]);
+    setLoading(false);
+  }
+
+  return { loading, results, run };
+// …
+```
+
+```text
+warning[async/pending-state-stuck-on-failure]: `loading` stays `true` when `fetch()` fails
+```
+
+Fix: clear the state in a `finally`, so it is cleared whether the call works or fails.
+
+Core rule: warning under `recommended` and `strict`. It judges from patterns in the code, not only from types, so it can be wrong: it is never an error unless you make it one. Group: `async/failures`.

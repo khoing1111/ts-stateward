@@ -1,6 +1,6 @@
 {
   "name": "@stateward/plugin-records",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "stateward rules for records: lookup tables and records keyed by a union have every key, once, under a type that names them.",
   "license": "MIT",
   "repository": {

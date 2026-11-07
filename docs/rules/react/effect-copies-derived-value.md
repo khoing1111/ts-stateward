@@ -2,70 +2,71 @@
 
 # react/effect-copies-derived-value
 
-A value computed from props or state is computed while rendering, not copied into state by an effect.
-
-- Group: react/effects
-- Tier: core (on in every preset)
-- Add-on: none
-- Heuristic: no
-- Severity under `recommended`: warning
-- Severity under `strict`: warning
-
-## Why
-
-`useEffect(() => { setFullName(first + " " + last); }, [first, last])` keeps a second copy of something the component already knows. When `first` changes, React renders once with the old `fullName`, runs the effect, and renders again with the new one. For one render the screen, and any code that reads `fullName`, sees a stale value; and the state has two owners, the props and the effect.
-
-## When to use it
-
-Use it in any React app. It is a warning in every preset. It stays on with the React Compiler: the compiler memoizes values, but it does not remove an effect that copies one.
-
-It checks only the exact shape below, where the fix is certain. For every `setState` called directly in an effect, turn on `set-state-in-effect` from `eslint-plugin-react-hooks`.
-
-## What it catches
-
-An effect whose whole body is one call `setX(…)`, where the new value reads only props, state and module-level names, its dependencies are props or state, and `setX` is called nowhere else in the component.
-
-### Bad
+Copying a computed value into state in an effect adds a render that shows the old value first; computing it while rendering shows the new value at once.
 
 ```tsx
-const [fullName, setFullName] = useState("");
-useEffect(() => {
-  setFullName(`${first} ${last}`);
-}, [first, last]);
+import { useEffect, useState } from "react";
+
+export function Greeting({ first, last }: { first: string; last: string }) {
+  const [fullName, setFullName] = useState("");
+  useEffect(() => {
+    setFullName(`${first} ${last}`);
+  }, [first, last]);
+  return <p>Hello, {fullName}</p>;
+}
 ```
 
-### Good
+`stateward check` prints:
+
+```text
+warning[react/effect-copies-derived-value]: `fullName` is copied from `first` and `last` in an effect: each change first renders a stale value
+ --> example.tsx:6:5
+  |
+6 |     setFullName(`${first} ${last}`);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = fix: compute it while rendering, and remove the state and the effect:
+        const fullName = `${first} ${last}`;
+  = docs: stateward explain react/effect-copies-derived-value
+```
+
+Compute the value while rendering, and remove the state and the effect:
 
 ```tsx
-const fullName = `${first} ${last}`;
+export function Greeting({ first, last }: { first: string; last: string }) {
+  const fullName = `${first} ${last}`;
+  return <p>Hello, {fullName}</p>;
+}
 ```
 
-### Fix
+When the computation is slow (filtering a long list), wrap it in `useMemo` with the same dependencies. There is no quick fix.
 
-Compute the value while rendering, and remove the state and the effect. When the computation calls a function that is slow (filtering a long list), wrap it in `useMemo` with the same dependencies. There is no quick fix.
+## Why it matters
+
+The effect keeps a second copy of something the component already knows. When `first` changes, React renders once with the old `fullName`, runs the effect, and renders again with the new one. For one render the screen, and any code that reads `fullName`, sees a stale value, and the state has two owners: the props and the effect.
 
 ## What it does not catch
 
-- An effect that does anything else as well (logs, sets two states, checks a condition).
-- A value computed from a local variable, a ref or a function declared in the component.
-- A state that is also set elsewhere (an event handler): it is not only derived.
-- A state whose initial value is the same prop: `react/state-copies-prop` reports it.
-- An effect whose dependencies are not written as an array in the call.
+It checks only the exact shape where the fix is certain: an effect whose whole body is one call `setX(…)`, where the new value reads only props, state and module-level names, its dependencies are props or state, and `setX` is called nowhere else in the component. So it is silent on:
+
+- an effect that does anything else as well (logs, sets two states, checks a condition);
+- a value computed from a local variable, a ref or a function declared in the component;
+- a state that is also set elsewhere (an event handler): it is not only derived;
+- a state whose initial value is the same prop: `react/state-copies-prop` reports that one;
+- an effect whose dependencies are not written as an array in the call.
+
+For every `setState` called directly in an effect, turn on `set-state-in-effect` from `eslint-plugin-react-hooks`. This rule stays on with the React Compiler: the compiler memoizes values, but it does not remove an effect that copies one.
 
 ## Turn it on or off
 
-In `stateward.config.ts`:
-
 ```ts
 rules: { "react/effect-copies-derived-value": "off" } // or "error"
-groups: { "react/effects": "off" } // the whole group
 rules: { "react/effect-copies-derived-value": ["warning", { ignore: ["draft*"] }] } // states copied on purpose
 ```
 
-### Options
-
-Set as `rules: { "react/effect-copies-derived-value": ["warning", { … }] }`.
+Options, set as `rules: { "react/effect-copies-derived-value": ["warning", { … }] }`:
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `ignore` | list of strings | `[]` | State names (globs like draft*) that may be copied this way on purpose. |
+
+Core rule: warning under `recommended` and `strict`. Group: `react/effects`.

@@ -1,6 +1,7 @@
 import {
   ANY_CONTEXT,
   type ComponentSummary,
+  type ContextDeclaration,
   type HookSummary,
   type Loc,
   type Placement,
@@ -15,7 +16,8 @@ export type ContextSet = ReadonlySet<string>;
 /** A place a slot renders, with the name of the component (or route) that renders it. */
 export type Position = SlotPosition & { owner: string };
 
-export type ContextInfo = { id: string; name: string; loc: Loc };
+/** A context that needs a Provider; `stated` when its type says so (`RequiredContext`). */
+export type ContextInfo = ContextDeclaration;
 
 /** Every summary of the project, indexed by id. Built once per check. */
 export type Graph = {
@@ -69,10 +71,14 @@ export function buildGraph(summaries: ReadonlyMap<string, Summary>): Graph {
       ),
     ),
   );
-  const contextList = all
-    .flatMap((summary) => summary.contexts)
-    .filter((context) => read.has(context.id))
-    .sort((a, b) => compareLoc(a.loc, b.loc));
+  // A stated context is listed by every file that reads it: one entry each, stated if any says so.
+  const byId = new Map<string, ContextInfo>();
+  for (const context of all.flatMap((summary) => summary.contexts)) {
+    if (!read.has(context.id)) continue;
+    const known = byId.get(context.id);
+    if (known === undefined || (context.stated && !known.stated)) byId.set(context.id, context);
+  }
+  const contextList = [...byId.values()].sort((a, b) => compareLoc(a.loc, b.loc));
   const everyComponent = new Map(
     all.flatMap((summary) => summary.components).map((component) => [component.id, component]),
   );

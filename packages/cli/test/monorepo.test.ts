@@ -105,6 +105,7 @@ describe("a config for several packages", { timeout: 20_000 }, () => {
         "stateward: config stateward.config.mjs",
         `stateward: project packages/a/tsconfig.json (1 file)`,
         `stateward: project packages/b/tsconfig.json (1 file)`,
+        "stateward: results are not kept for the next run",
         "",
       ].join("\n"),
     );

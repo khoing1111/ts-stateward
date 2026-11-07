@@ -47,16 +47,17 @@ Every key of the config: [config.md](https://github.com/khoing1111/ts-stateward/
 
 ## Rules
 
-| Rule | What it finds | Kind | `recommended` | `strict` |
-| --- | --- | --- | --- | --- |
-| [handler-rejection-lost](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/async/handler-rejection-lost.md) | An async event handler, listener or timer callback catches its own failures, since nothing awaits it. | Core | error | error |
-| [pending-state-stuck-on-failure](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/async/pending-state-stuck-on-failure.md) | State set before an await and set again after it is also set again when the await fails, so a failure does not leave it pending. (heuristic) | Core | warning | warning |
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [handler-rejection-lost](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/async/handler-rejection-lost.md) | an async `onClick`, listener or timer callback whose failure is never caught | No code awaits an event handler or a timer callback, so its failure is an unhandled rejection the user never sees; a `catch` inside it can show the error. | Core | error | error |
+| [pending-state-stuck-on-failure](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/async/pending-state-stuck-on-failure.md) | a "loading" state set before an `await` that stays set when the call fails (guess) | When the awaited call fails, a state set to "loading" before it stays set and the spinner shows until reload; resetting it in `finally` prevents that. | Core | warning | warning |
 
-Kind: **Core** rules are on in every preset. **Coverage** rules ask your types to say more; they
-are info under `recommended` and errors under `strict`. **Add-on** rules stay off until you list
-their add-on in `addons`; the table shows their severity once it is listed. A heuristic rule
-guesses, so it is never an error unless you set it.
+**Core** rules are on in every preset. **Coverage** rules point at code whose types do not say
+enough for stateward to check it; they are info under `recommended` and errors under `strict`.
+**Add-on** rules stay off until you list their add-on in `addons`; the table shows their severity
+once it is listed. A rule marked (guess) judges from patterns in the code, not only from types, so
+it can be wrong and is never an error unless you make it one.
 
-Each rule's page says why it matters, what it catches and misses, how to fix what it finds, and its options. The pack's page: [docs/packs/async.md](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/async.md). Every pack's rules: [the rules index](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/README.md).
+Each rule's page shows an example with what stateward prints for it, the fix, why it matters, what it misses, and its options. The pack's page: [docs/packs/async.md](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/async.md). Every pack's rules: [the rules index](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/README.md).
 
 <!-- /generated:rules -->

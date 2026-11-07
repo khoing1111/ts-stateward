@@ -4,59 +4,46 @@ import { fitted } from "./lookup-text.js";
 
 const EXPLAIN = `# records/duplicate-key
 
-A \`new Map([...])\` or \`new Set([...])\` written out in code has the same key twice.
+The same key twice in a \`new Map([...])\` or \`new Set([...])\` keeps only the last entry, so the first one has no effect.
 
-## Why
-
-\`new Map([["recent", a], ["recent", b]])\` keeps only \`b\`. Nothing fails: \`a\` is gone, and the code that read \`a\` from the map gets \`b\`. It usually happens when a long list of entries is copied and one key is not renamed. A \`Set\` with a repeated item works, but the repeat is a leftover that hides a mistake (a missing item).
-
-## When to use it
-
-Use it in any project. It only reports keys that are plain constants, so it does not guess, and it is an error under every preset.
-
-## What it catches
-
-A \`new Map([...])\` whose entries are written out as \`[key, value]\` pairs, or a \`new Set([...])\`, when two keys are the same constant: a string, a number, an enum member, or a \`const\` whose type is one value (\`const RECENT = "recent"\`). The finding is on the second key, and the first is listed as a related place. \`"recent"\` and \`RECENT\` are the same key when \`RECENT\` is \`"recent"\`.
-
-### Bad
-
-\`\`\`ts
-const groups = new Map([
-  ["recent", recentEmojis],
-  ["people", peopleEmojis],
-  ["recent", otherEmojis],
+\`\`\`ts example-bad
+export const shortcuts = new Map([
+  ["save", "Ctrl+S"],
+  ["open", "Ctrl+O"],
+  ["save", "Ctrl+Shift+S"],
 ]);
 \`\`\`
 
-### Good
+Give the entry the key it was meant to have, or remove the one that should lose:
 
-\`\`\`ts
-const groups = new Map([
-  ["recent", recentEmojis],
-  ["people", peopleEmojis],
-  ["custom", otherEmojis],
+\`\`\`ts example-good
+export const shortcuts = new Map([
+  ["save", "Ctrl+S"],
+  ["open", "Ctrl+O"],
+  ["saveAs", "Ctrl+Shift+S"],
 ]);
 \`\`\`
 
-### Fix
+There is no quick fix: which of the two values is right is your call. The finding is on the second key, with the first listed as a related place.
 
-Remove the entry that should lose, or give it the key it was meant to have. There is no quick fix: which of the two values is right is your call.
+## Why it matters
+
+\`new Map([["save", a], ["save", b]])\` keeps only \`b\`. Nothing fails: \`a\` is gone, and the code that reads \`"save"\` gets \`b\`. It usually happens when a long list of entries is copied and one key is not renamed. A \`Set\` with a repeated item works, but the repeat is a leftover that hides a mistake, often an item that is missing.
 
 ## What it does not catch
 
-- An object literal with the same property twice: ESLint's \`no-dupe-keys\` (and TypeScript itself) reports that.
-- A key that is not a constant (a variable of type \`string\`, a call), and entries added later with \`.set()\` or \`.add()\`.
-- A list built elsewhere (\`new Map(entries)\`, \`new Map(Object.entries(x))\`) and entries that come from a spread.
-- A \`Map\` or \`Set\` class of your own, and \`WeakMap\` / \`WeakSet\`.
+It compares only keys that are constants: a string, a number, an enum member, or a \`const\` whose type is one value (\`"save"\` and \`SAVE\` are the same key when \`const SAVE = "save"\`). So it never guesses, and it does not see:
+
+- a key that is not a constant (a variable of type \`string\`, a call), or entries added later with \`.set()\` or \`.add()\`;
+- a list built elsewhere (\`new Map(entries)\`, \`new Map(Object.entries(x))\`), or entries from a spread;
+- a \`Map\` or \`Set\` class of your own, and \`WeakMap\` / \`WeakSet\`;
+- an object literal with the same property twice: TypeScript and ESLint's \`no-dupe-keys\` report that.
 
 ## Turn it on or off
-
-In \`stateward.config.ts\`:
 
 \`\`\`ts
 rules: { "records/duplicate-key": "off" } // or "warning"
 rules: { "records/duplicate-key": ["error", { ignore: ["*_ALIASES"] }] } // generated tables
-groups: { "guards/lookups": "off" } // the whole group
 \`\`\`
 `;
 
@@ -113,19 +100,20 @@ function headline(label: string, kind: Kind, count: number, line: number): strin
   const times = count === 2 ? "twice" : `${String(count)} times`;
   const effect =
     kind === "Set"
-      ? "the repeat does nothing"
+      ? "the repeat has no effect"
       : count === 2
         ? "the second value replaces the first"
         : "the last value replaces the others";
   return fitted(
-    (cut) => `\`${cut(label)}\` is in this ${kind} ${times}; ${effect} (line ${String(line)})`,
+    (cut) =>
+      `\`${cut(label)}\` is in the ${kind} ${times}; ${effect} (first at line ${String(line)})`,
   );
 }
 
 function hint(kind: Kind): string {
   return kind === "Set"
-    ? "remove the repeated item, or write the item that was meant here"
-    : "remove the entry that should lose, or give it the key it was meant to have";
+    ? "remove the repeated item, or write the item that was meant instead"
+    : "remove the entry that should not win, or give it the key it was meant to have";
 }
 
 /** The name a `new Map(...)` is stored under: its variable or property, if it has one. */
@@ -162,7 +150,7 @@ function checkLiteral(
       node: second.key,
       message: headline(first.label, kind, entries.length, line),
       hint: hint(kind),
-      related: [{ node: first.key, message: `the first ${first.label} is here` }],
+      related: [{ node: first.key, message: `first ${first.label}` }],
     });
   }
 }
@@ -171,7 +159,8 @@ export const duplicateKey = defineRule({
   kind: "file",
   meta: {
     description:
-      "A new Map([...]) or new Set([...]) written out in code has the same key twice, so the second replaces the first.",
+      "The same key twice in a `new Map([...])` or `new Set([...])` keeps only the last entry, so the first one has no effect.",
+    summary: "the same key twice in a `new Map([...])` or `new Set([...])` written out in code",
     defaultSeverity: "error",
     tier: "core",
     group: "keys",

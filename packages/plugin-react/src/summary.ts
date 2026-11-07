@@ -184,7 +184,7 @@ function distinct(entries: readonly Entry[]): Entry[] {
   });
 }
 
-/** The name a render function goes by in messages: `CartPage`, or "this component". */
+/** The name a render function goes by in messages: `CartPage`, or "the component". */
 function functionName(fn: ts.Node): string {
   if ((ts.isFunctionDeclaration(fn) || ts.isFunctionExpression(fn)) && fn.name !== undefined) {
     return fn.name.text;
@@ -192,7 +192,7 @@ function functionName(fn: ts.Node): string {
   const parent = fn.parent;
   if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) return parent.name.text;
   if (ts.isCallExpression(parent)) return functionName(parent);
-  return "this component";
+  return "the component";
 }
 
 /**

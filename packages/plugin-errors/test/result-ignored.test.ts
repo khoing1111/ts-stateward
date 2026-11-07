@@ -12,7 +12,7 @@ function dropped(
 ): Shown {
   return says(
     file,
-    `the result of \`${callee}(…)\` is dropped, so its error is never handled`,
+    `the \`Result\` of \`${callee}(…)\` is dropped: its error is never handled`,
     [
       "check it, or pass it on:",
       `    const saved = ${awaited ? "await " : ""}${call};`,

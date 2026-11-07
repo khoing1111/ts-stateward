@@ -6,3 +6,6 @@ dist/
 artifacts/
 .scratch/
 packages/cli/test/fixtures/tmp-*/
+python/target/
+python/.venv/
+python/.spike-corpus/

@@ -9,8 +9,15 @@ function flagged(): readonly Finding[] {
   return checkOnly(fixture(`${RULE}/flagged`), RULE);
 }
 
+/** `rest` says what to move (`it …` or `these lines …`) and how; the reason follows it. */
 function bug(expected: string, rest: string): string {
-  return `a bug here would be handled like a failed \`${expected}\`; move ${rest}`;
+  const [lines, them] = rest.startsWith("these lines") ? ["the lines", "them"] : ["the line", "it"];
+  const how = rest.replace(/^(?:it|these lines) /, "");
+  const why = `so a bug in ${them} is not handled like a failed \`${expected}\``;
+  const quick = " (quick fix)";
+  return how.endsWith(quick)
+    ? `move ${lines} ${how.slice(0, -quick.length)}, ${why}${quick}`
+    : `move ${lines} ${how}, ${why}`;
 }
 
 /** Applies the edits to the text, last first so earlier offsets stay valid. */
@@ -29,7 +36,7 @@ describe(`errors/${RULE}: lines after the expected call that can only fail as bu
     expect(shown(flagged())).toEqual([
       says(
         "access.ts",
-        "`onOpen()` is inside the `try` meant for `throw new AccessError(…)`",
+        "the `try` for `throw new AccessError(…)` also catches errors from `onOpen()`",
         bug(
           "throw new AccessError(…)",
           "it after the `try` and return from the `catch` (declare what it uses before the `try`)",
@@ -37,7 +44,7 @@ describe(`errors/${RULE}: lines after the expected call that can only fail as bu
       ),
       says(
         "plan.tsx",
-        "`setTitle(openEditor(plan))` is inside the `try` meant for `getPlan(…)`",
+        "the `try` for `getPlan(…)` also catches errors from `setTitle(openEditor(plan))`",
         bug(
           "getPlan(…)",
           "it after the `try` and return from the `catch` (declare what it uses before the `try`)",
@@ -45,12 +52,12 @@ describe(`errors/${RULE}: lines after the expected call that can only fail as bu
       ),
       says(
         "plan.tsx",
-        "`setSaved(true)` is inside the `try` meant for `savePlan(…)`",
+        "the `try` for `savePlan(…)` also catches errors from `setSaved(true)`",
         bug("savePlan(…)", "these lines after the `try` (quick fix)"),
       ),
       says(
         "plan.tsx",
-        "`onEvent(event)` is inside the `try` meant for `JSON.parse(…)`",
+        "the `try` for `JSON.parse(…)` also catches errors from `onEvent(event)`",
         bug(
           "JSON.parse(…)",
           "it after the `try` and return from the `catch` (declare what it uses before the `try`)",
@@ -58,10 +65,18 @@ describe(`errors/${RULE}: lines after the expected call that can only fail as bu
       ),
       says(
         "plan.tsx",
-        "`onSaved()` is inside the `try` meant for `savePlan(…)`",
+        "the `try` for `savePlan(…)` also catches errors from `onSaved()`",
         bug(
           "savePlan(…)",
           "these lines after the `try` and return from the `catch` (declare what they use before the `try`)",
+        ),
+      ),
+      says(
+        "session.ts",
+        "the `try` for `createSession.mutateAsync(…)` also catches errors from `onCreated(session)`",
+        bug(
+          "createSession.mutateAsync(…)",
+          "it after the `try` and return from the `catch` (declare what it uses before the `try`)",
         ),
       ),
     ]);

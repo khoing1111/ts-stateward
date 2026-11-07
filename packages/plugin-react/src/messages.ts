@@ -19,11 +19,11 @@ function consequence(target: Target, cut: (text: string) => string): string {
   if (target.kind === "memo-prop") return `\`<${cut(target.component)}>\` re-renders every time`;
   switch (target.hook) {
     case "useMemo":
-      return "this `useMemo` reruns every render";
+      return "`useMemo` reruns every render";
     case "useCallback":
-      return "this callback changes every render";
+      return "`useCallback` gives a new function every render";
     default:
-      return "this effect runs after every render";
+      return "effect runs after every render";
   }
 }
 
@@ -36,7 +36,7 @@ type UnknownValue = Extract<Resolved, { kind: "unknown" }>;
  */
 function headline(dependency: Dependency, source: string, what: Fresh): string {
   const build = (cut: Cut, dependencyCut: (text: string) => string): string =>
-    `\`${dependencyCut(dependency.text)}\` from \`${cut.name(source)}\` is a new ${noun(what)} every render, so ${consequence(dependency.target, cut.name)}`;
+    `${consequence(dependency.target, cut.name)}: \`${dependencyCut(dependency.text)}\` from \`${cut.name(source)}\` is a new ${noun(what)} each time`;
   const kept = fitted((cut) => build(cut, (text) => text));
   return kept.length <= MAX_HEADLINE ? kept : fitted((cut) => build(cut, cut.name));
 }
@@ -56,7 +56,7 @@ export function wrapCallHint(wrap: Wrap): string {
   if (fresh !== undefined) {
     return fitted(
       (cut) =>
-        `\`${cut.name(fresh)}\`, an argument of \`${cut.name(call.text)}\`, is new every render too: make it stable first, then wrap the call in \`useMemo\``,
+        `make \`${cut.name(fresh)}\`, an argument of \`${cut.name(call.text)}\`, stable first, then wrap the call in \`useMemo\`: it is new every render too`,
     );
   }
   const memo = `useMemo(() => ${call.text}, [${call.args.join(", ")}])`;
@@ -102,8 +102,7 @@ function adviceFor(
   if (derived.length > 0 && dependency.target.kind === "memo-prop") {
     return {
       hint: fitted(
-        (cut) =>
-          `stabilising it gains nothing: it really changes with ${listed(derived.map(cut.name))}`,
+        (cut) => `leave it as it is: it really changes with ${listed(derived.map(cut.name))}`,
       ),
       fixes: [],
       derived,
@@ -137,7 +136,7 @@ function adviceFor(
     return {
       hint: fitted(
         (cut) =>
-          `move \`${cut.name(label)}\` to module scope; it then never changes${fixes.length > 0 ? " (quick fix)" : ""}`,
+          `move \`${cut.name(label)}\` to module scope, so it never changes${fixes.length > 0 ? " (quick fix)" : ""}`,
       ),
       fixes,
     };
@@ -186,7 +185,7 @@ export function freshDependency(
         ? headline(dependency, source, what)
         : fitted(
             (cut) =>
-              `\`${cut.name(dependency.text)}\` from \`${cut.name(source)}\` is built from ${listed(state.map(cut.name))}, so it changes whenever ${state.length === 1 ? "that does" : "they do"}`,
+              `\`${cut.name(dependency.text)}\` from \`${cut.name(source)}\` changes whenever ${listed(state.map(cut.name))} ${state.length === 1 ? "does" : "do"}: it is built from ${state.length === 1 ? "it" : "them"}`,
           ),
     hint:
       advice?.hint ??
@@ -213,8 +212,8 @@ export function freshDependency(
         location: locationOf(owner.file, at),
         message:
           label === null
-            ? `a new ${noun(what)} is created here on every ${every} of \`${owner.name}\``
-            : `\`${label}\` is created here on every ${every} of \`${owner.name}\``,
+            ? `a new ${noun(what)} is created on every ${every} of \`${owner.name}\``
+            : `\`${label}\` is created on every ${every} of \`${owner.name}\``,
       },
     ],
   };
@@ -229,12 +228,16 @@ export function unknownDependency(
   return {
     message: fitted(
       (cut) =>
-        `stateward cannot tell whether \`${cut.name(dependency.text)}\` from \`${cut.name(source)}\` is a new value each render`,
+        `not checked: whether \`${cut.name(dependency.text)}\` from \`${cut.name(source)}\` is new each render: ${
+          value === undefined
+            ? `\`${cut.name(source.replace(/\(…?\)$/, ""))}\` is not a module-level function`
+            : `\`${cut.name(value.text)}\` in \`${cut.name(value.owner.name)}\` is not followed`
+        }`,
     ),
     hint: fitted((cut) =>
       value === undefined
-        ? `declare \`${cut.name(source.replace(/\(…?\)$/, ""))}\` as a function at module level (\`function useX() { … }\`) to make it checkable`
-        : `\`${cut.name(value.owner.name)}\` gets it from \`${cut.name(value.text)}\` (${cut.path(`${value.owner.relative}:${String(value.at.line)}`)}); wrap that in \`useMemo\` to make it checkable`,
+        ? `declare \`${cut.name(source.replace(/\(…?\)$/, ""))}\` as a module-level function (\`function useX() { … }\`), so it can be checked`
+        : `wrap \`${cut.name(value.text)}\` in \`useMemo\` inside \`${cut.name(value.owner.name)}\` (${cut.path(`${value.owner.relative}:${String(value.at.line)}`)}), so it can be checked`,
     ),
   };
 }

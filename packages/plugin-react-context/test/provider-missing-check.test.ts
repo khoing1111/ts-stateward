@@ -58,6 +58,8 @@ const empty: Summary = {
   unknowns: [],
   routes: [],
   externalContexts: [],
+  guards: [],
+  declared: [],
 };
 
 function component(id: string, over: Partial<ComponentSummary> = {}): ComponentSummary {
@@ -87,7 +89,13 @@ function renders(id: string, start: number, under: string[] = []): ComponentRend
   };
 }
 
-const AUTH = { id: "auth", name: "AuthCtx", loc: loc("ctx.ts", 0) };
+const AUTH = {
+  id: "auth",
+  name: "AuthCtx",
+  loc: loc("ctx.ts", 0),
+  stated: false,
+  declare: null,
+};
 const read = { context: "auth", loc: loc("read.tsx", 7) };
 
 function files(summary: Summary): Map<string, Summary> {
@@ -111,8 +119,8 @@ describe("provider-missing check (pure)", () => {
       ["`<A>` is rendered without `AuthCtx.Provider`", "site.tsx@9"],
     ]);
     expect(problems[0]?.notes).toEqual([
-      "site.tsx@1 `<B>` is rendered here",
-      "site.tsx@3 `<C>` is rendered here",
+      "site.tsx@1 `<B>` is rendered",
+      "site.tsx@3 `<C>` is rendered",
       "read.tsx@7 `C` reads `AuthCtx`",
     ]);
   });
@@ -152,8 +160,8 @@ describe("provider-missing check (pure)", () => {
     const twice = { ...base, components: [app(), layout(both), component("C", { reads: [read] })] };
     expect(run(files(twice)).problems.map((problem) => problem.notes)).toEqual([
       [
-        "site.tsx@4 `<C>` is rendered here",
-        "l.tsx@2 `Layout` renders its `children` here, not under the Provider",
+        "site.tsx@4 `<C>` is rendered",
+        "l.tsx@2 `Layout` renders its `children` outside the Provider",
         "read.tsx@7 `C` reads `AuthCtx`",
       ],
     ]);

@@ -42,88 +42,66 @@ import {
 
 const EXPLAIN = `# unions/if-chain-misses-case
 
-An if / else if chain over a union handles every case, so a value added later fails to compile.
+A case added to the union later goes to the last \`else\` with no compile error; testing every case and checking the rest with \`never\` makes the chain fail to compile.
 
-## Why
+\`\`\`ts example-bad
+type Job =
+  | { kind: "idle" }
+  | { kind: "running"; progress: number }
+  | { kind: "failed"; error: string };
 
-An \`if / else if\` chain over a union is a switch in other words, and it fails the same way. A chain that handles \`"idle"\` and \`"running"\` does nothing for \`"failed"\` or \`"retry"\`, and nothing for \`"cancelled"\` the day someone adds it. TypeScript does not say a word unless the chain ends with an \`else\` that checks for \`never\`.
-
-## When to use it
-
-To have TypeScript check a chain you mean to cover every case, end it with \`else { status satisfies never; }\` (or a call to your own \`never\` helper, \`else { ensureNever(status); }\`): a case added later then fails to compile at that line, and this rule has nothing more to say.
-
-Much code handles only some values on purpose, so by default the rule reports only chains that look meant to cover every case: the ones where a missing case is most likely forgotten. It is on as an error in every preset. A chain that handles every case but has no \`never\` check is an error; a chain that leaves a case out is a guess, so it is a warning (\`severities\` changes either). To report every chain that leaves a case out, set \`report: "all"\` (see the end of this page). An early return (\`if (s.kind === "err") return;\`) is a single \`if\`, which this rule never checks.
-
-## What it catches
-
-A chain of two or more tests on the same value (\`s\`, \`s.kind\`, \`s?.kind\`, also joined with \`||\`): \`===\` against a literal, \`"prop" in s\`, \`typeof s === "…"\`, \`s instanceof C\`, or \`isX(s)\`. By default it reports the chain when:
-
-- every case is handled, but the \`else\` has no \`never\` check, so a case added later would land there;
-- the chain tests two or more cases and its \`else\` takes one or two cases nobody tested (as with a \`default\`, they were likely forgotten);
-- the chain tests two or more cases, has no \`else\`, and misses exactly one case.
-
-With \`report: "all"\` every one of these findings has the rule's severity, and it also reports an \`else\` that takes three or more untested cases, and a chain without an \`else\` that misses two or more. An \`else\` that takes more than 5 untested cases (option \`maxHidden\`) is reported as info: it often means "everything else" on purpose. To keep one, say which cases it takes: \`else { event.type satisfies "scroll" | "resize"; … }\` (a type that names exactly the cases that fall through, written out or as an alias; a case added later fails to compile there, and the rule is silent). \`Exclude<Event["type"], "click" | "key">\` is accepted too, as your stated choice, but it grows with the union: a case added later falls into the \`else\` again without a word, so write the cases out unless that is what you want. A type that names more or fewer cases keeps the finding, with the exact type in its hint. A second quick fix keeps the \`else\` and writes that check, with the cases that fall through today, as its first statement; saying "these cases all mean the same" is your decision, so \`--fix\` and "Fix all" never apply it. Or say why on the line above the \`else\`: \`// stateward-ignore unions/if-chain-misses-case: <why>\`.
-
-Only unions declared in your project are checked: a member a package or TypeScript's lib adds later is not a state your app designed (option \`projectTypesOnly\`).
-
-A chain that handles every case and has no \`else\` is fine: TypeScript already sees the remaining value as \`never\`. An \`else\` is fine when it does \`status satisfies never\` (also \`(status) satisfies never\` or \`void (status satisfies never)\`), assigns the value to a \`never\` variable, or passes it to a function whose parameter is \`never\`, such as your own \`ensureNever\`. For \`node.type === "frame"\` tests over a union of objects, TypeScript narrows \`node\` itself, so the check is \`node satisfies never\`.
-
-### Bad
-
-\`\`\`ts
-if (status.kind === "idle") {
-  start();
-} else if (status.kind === "running") {
-  watch();
-} else if (status.kind === "failed") {
-  report(status);
-}
-// "retry" is not handled
-\`\`\`
-
-### Good
-
-\`\`\`ts
-if (status.kind === "idle") {
-  start();
-} else if (status.kind === "running") {
-  watch();
-} else if (status.kind === "failed") {
-  report(status);
-} else if (status.kind === "retry") {
-  again();
-} else {
-  status satisfies never;
+export function describe(job: Job): string {
+  if (job.kind === "idle") {
+    return "Waiting";
+  } else if (job.kind === "running") {
+    return \`\${String(job.progress)}%\`;
+  } else {
+    return "Done";
+  }
 }
 \`\`\`
 
-The check must run every time the \`else\` does: put it directly in the \`else\`, not inside an \`if\`, a loop, a \`try\` or a function.
+Test every case, and end the chain with an \`else\` that checks for \`never\`:
 
-### Fix
+\`\`\`ts example-good
+type Job =
+  | { kind: "idle" }
+  | { kind: "running"; progress: number }
+  | { kind: "failed"; error: string };
 
-When every case is handled and only the check is missing, a quick fix adds \`status satisfies never;\` at the top of the \`else\` (\`void (type satisfies never);\` for a value named \`type\`, which would start a declaration); \`stateward check --fix\` applies it too. Inside \`useMemo\`, \`useCallback\`, \`useEffect\` or \`useLayoutEffect\`, when the chain reads only \`selectedNode.type\`, it tests \`const nodeType = selectedNode.type;\` instead and checks \`nodeType\`, so the hook's dependencies stay the same.
-
-When the \`else\` hides cases, the quick fix "List the 2 hidden cases (same behaviour)" turns it into:
-
-\`\`\`ts
-} else if (status.kind === "failed" || status.kind === "retry") {
-  return -1; // the old body
-} else {
-  status satisfies never;
-  return -1;
+export function describe(job: Job): string {
+  if (job.kind === "idle") {
+    return "Waiting";
+  } else if (job.kind === "running") {
+    return \`\${String(job.progress)}%\`;
+  } else if (job.kind === "failed") {
+    return \`Failed: \${job.error}\`;
+  } else {
+    job satisfies never;
+    return "Done";
+  }
 }
 \`\`\`
 
-If the file has its own \`never\` helper, the new \`else\` calls it instead (\`return ensureNever(status);\`). Every case still does what it did, and a case added later fails to compile. \`--fix\` does not apply it: a value outside the type at run time (from an \`as\` cast or unchecked data) now skips the old body. It is offered when the hidden cases can be written as values (strings, numbers, booleans, enum members, \`null\`, \`undefined\`), or as \`typeof\` tests in a \`typeof\` chain. When cases are missing and there is no \`else\`, write them yourself.
+The editor offers quick fixes. When every case is tested and only the check is missing, one adds \`job satisfies never;\` at the top of the \`else\`; \`stateward check --fix\` applies it too. When the \`else\` takes untested cases, "List the missing case (same behaviour)" tests the cases in a new \`else if\` that runs the old body, and adds an \`else\` with the check (or a call to your own \`never\` helper, such as \`ensureNever(job)\`, when the file has one). \`--fix\` does not apply that one: a value outside the type at run time (from an \`as\` cast or unchecked data) would now skip the old body. It is offered when the hidden cases can be written as values, or as \`typeof\` tests in a \`typeof\` chain. When cases are missing and there is no \`else\`, write them yourself. As with \`unions/default-hides-cases\`, a value named \`type\` gets \`void (type satisfies never);\`, a chain on \`node.type\` inside a React hook tests a \`const\` of it so the hook's dependencies stay the same, and each fix is offered only in a form that compiles on a copy of your code.
 
-Each quick fix is tried on a copy of your code first, in its forms in order (the \`const\` of the tag, the object, the value itself; your helper, then \`satisfies never\`), and offered only in the first form that compiles.
+## Why it matters
+
+An \`if / else if\` chain over a union is a switch in other words, and it fails the same way. A chain that handles \`"idle"\` and \`"running"\` lets \`"failed"\` fall into the last branch, and does the same for \`"cancelled"\` the day someone adds it. TypeScript says nothing unless the chain ends with an \`else\` that checks for \`never\`; with one, a case added later fails to compile at that line.
 
 ## What it does not catch
 
-- By default, a chain that handles some values on purpose: an \`else\` that takes three or more untested cases, or no \`else\` and two or more cases missing.
-- A single \`if\`.
+Much code handles only some values on purpose, so by default the rule reports only the chains that look meant to cover every case (two or more tests on the same value):
+
+- every case is handled, but the \`else\` has no \`never\` check, so a case added later would land there (an error);
+- the \`else\` takes one or two cases no branch tests (a warning: probably missed, but it is a guess);
+- there is no \`else\`, and exactly one case is missing (a warning).
+
+So by default it does not report an \`else\` that takes three or more untested cases, and on a chain without an \`else\` that misses two or more. Set \`report: "all"\` to report those too; an \`else\` that takes more than 5 untested cases (\`maxHidden\`) is then info, since it often means "everything else" on purpose. It also does not check:
+
+- A single \`if\`, such as an early return (\`if (s.kind === "err") return;\`).
 - A chain that also uses other tests (\`!==\`, \`&&\`, \`<\`, a call that is not a type guard, \`a[i]\`), tests different values, or mixes \`===\` tests with \`typeof\` or \`in\` tests.
-- A value whose type is not a union (\`any\`, \`unknown\`, an unconstrained generic).
+- A value whose type is not a union (\`any\`, \`unknown\`, an unconstrained generic), or a union declared in a package or TypeScript's lib (set \`projectTypesOnly: false\` for those).
 - A chain without an \`else\` where only \`undefined\` or \`null\` is left and the code after the chain handles it.
 - A chain that splits by shape (\`typeof\`, \`instanceof\`, \`Array.isArray\`) and leaves a set of strings or numbers to the \`else\`: the \`else\` handles them as one shape.
 - \`s?.kind\` when \`s\` can be \`undefined\`: TypeScript keeps \`undefined\` after every test, so no \`never\` check can compile.
@@ -131,17 +109,18 @@ Each quick fix is tried on a copy of your code first, in its forms in order (the
 
 For your own type guards, the rule counts a member as handled when it fits the guard's type. TypeScript is stricter there, so in rare cases the rule misses a case; it never reports one that is not missing.
 
-## Turn it on or off
+## Getting the best from it
 
-In \`stateward.config.ts\`:
+The tests it reads are \`===\` against a literal, \`"prop" in s\`, \`typeof s === "…"\`, \`s instanceof C\` and your own type guards \`isX(s)\`, on \`s\`, \`s.kind\` or \`s?.kind\`, also joined with \`||\`. A chain that handles every case and has no \`else\` is fine: TypeScript already sees the rest as \`never\`. An \`else\` is fine when its first statement is \`job satisfies never\` (also \`(job) satisfies never\` or \`void (job satisfies never)\`), assigns the value to a \`never\` variable, or passes it to a function whose parameter is \`never\`. For \`node.type === "frame"\` tests over a union of objects, TypeScript narrows \`node\` itself, so the check is \`node satisfies never\`. The check must run every time the \`else\` does: put it directly in the \`else\`, not inside an \`if\`, a loop, a \`try\` or a function.
+
+When the cases the \`else\` takes really all mean the same, say which they are: \`else { event.type satisfies "scroll" | "resize"; … }\`, written out or as an alias. A case added later then fails to compile there, and the rule is silent. A type that names more or fewer cases keeps the finding, with the exact type in its hint. \`Exclude<Event["type"], "click" | "key">\` is accepted as your choice, but it grows with the union, so a new case falls into the \`else\` again without a word. A quick fix writes this check with today's cases; it is your decision, so \`--fix\` and "Fix all" never apply it. Or say why above the \`else\`: \`// stateward-ignore unions/if-chain-misses-case: <why>\`.
+
+## Turn it on or off
 
 \`\`\`ts
 rules: { "unions/if-chain-misses-case": "off" } // or "warning"
 rules: { "unions/if-chain-misses-case": ["error", { report: "all" }] } // every chain that leaves a case out
-rules: { "unions/if-chain-misses-case": ["error", { projectTypesOnly: false }] } // packages' unions too
-rules: { "unions/if-chain-misses-case": ["error", { ignore: ["*Event"] }] } // unions not checked
-rules: { "unions/if-chain-misses-case": ["error", { severities: { "many-hidden": "warning" } }] } // per kind of finding
-groups: { "guards/switches": "off" } // the whole group
+rules: { "unions/if-chain-misses-case": ["error", { severities: { missing: "error" } }] } // per kind of finding
 \`\`\`
 `;
 
@@ -303,13 +282,11 @@ function shownLabels(missing: readonly string[], form: Test["form"]): readonly s
 }
 
 function missingHeadline(missing: readonly string[], subject: string, maxHidden: number): string {
-  const noun = missing.length === 1 ? "case" : "cases";
   return fittedCases(
     HEADLINE_MAX,
     missing,
     maxHidden,
-    (cut, labels) =>
-      `this chain does not handle ${String(missing.length)} ${noun} of \`${cut(subject)}\`${labels}`,
+    (cut, labels) => `\`if\` chain does not handle ${labels} of \`${cut(subject)}\``,
   );
 }
 
@@ -330,13 +307,13 @@ function missingHint(
 }
 
 function hiddenHeadline(missing: readonly string[], subject: string, maxHidden: number): string {
-  const noun = missing.length === 1 ? "case" : "cases";
+  const [verb, them] = missing.length === 1 ? ["is", "it"] : ["are", "them"];
   return fittedCases(
     HEADLINE_MAX,
     missing,
     maxHidden,
     (cut, labels) =>
-      `this \`else\` hides ${String(missing.length)} ${noun} of \`${cut(subject)}\`${labels}`,
+      `${labels} of \`${cut(subject)}\` ${verb} not tested; \`else\` handles ${them}`,
   );
 }
 
@@ -358,11 +335,11 @@ function hiddenHint(input: {
   const n = String(missing.length);
   const same = rest.spelled
     ? missing.length === 1
-      ? "if the `else` is right for it, say so"
-      : `if these ${n} cases all mean the same, say which`
+      ? "name it in the `else` instead, if that is where it belongs"
+      : `name the ${n} cases in the \`else\` if they all mean the same`
     : missing.length === 1
-      ? "if the `else` is right for it, say so above the `else`"
-      : `if these ${n} cases all mean the same, say so above the \`else\``;
+      ? "say why above the `else` instead, if that is where it belongs"
+      : `say why above the \`else\` if the ${n} cases all mean the same`;
   // Core decides which fix, if any, is offered: the hint names the change, not the fix.
   const end = (cut: (text: string) => string): string =>
     check.tag === undefined
@@ -370,13 +347,13 @@ function hiddenHint(input: {
       : "then check a `const` of the tag in the `else`";
   const line = fitted((cut) => {
     const list = `add \`else if\` branches, ${end(cut)}`;
-    return many ? `${same}, or ${list}:` : `${list}, or ${same}:`;
+    return many ? `${same}; otherwise ${list}:` : `${list}; or ${same}:`;
   });
   return [line, `    ${rest.line}`].join("\n");
 }
 
 function completeHeadline(subject: string): string {
-  return fitted((cut) => `this \`else\` will hide any case added to \`${cut(subject)}\` later`);
+  return fitted((cut) => `\`else\` is unreachable: every case of \`${cut(subject)}\` is tested`);
 }
 
 function completeHint(check: Check): string {
@@ -384,12 +361,12 @@ function completeHint(check: Check): string {
     // The hook's dependencies stay as they are: the code reads the tag, not the whole object.
     return fitted(
       (cut) =>
-        `test \`const ${check.target} = ${cut(check.tag?.subject ?? "")}\` instead, and put \`${satisfiesStatement(check.target)}\` first in the \`else\``,
+        `test \`const ${check.target} = ${cut(check.tag?.subject ?? "")}\` instead, and put \`${satisfiesStatement(check.target)}\` first in the \`else\`, so a case added later fails to compile`,
     );
   }
   return fitted(
     (cut) =>
-      `let TypeScript check it: put \`${satisfiesStatement(cut(check.target))}\` first in the \`else\``,
+      `put \`${satisfiesStatement(cut(check.target))}\` first in the \`else\`, so a case added later fails to compile`,
   );
 }
 
@@ -419,10 +396,12 @@ export const ifChainMissesCase = defineRule({
   kind: "file",
   meta: {
     description:
-      "An if / else if chain over a union handles every case, so a value added later fails to compile.",
+      "A case added to the union later goes to the last `else` with no compile error; testing every case and checking the rest with `never` makes the chain fail to compile.",
+    summary: "an `if` / `else if` chain over a union that misses a case or has no `never` check",
     defaultSeverity: "error",
     tier: "core",
     group: "cases",
+    fixNeedsStrictNulls: true,
     options: {
       report: option.string({
         default: "likely-mistakes",
@@ -435,7 +414,7 @@ export const ifChainMissesCase = defineRule({
         min: 0,
         integer: true,
         description:
-          'An `else` that hides more cases than this is reported as info: it often means "everything else".',
+          'An `else` that handles more untested cases than this is reported as info: it often means "everything else".',
       }),
       ignore: option.strings({
         default: [],
@@ -446,8 +425,9 @@ export const ifChainMissesCase = defineRule({
         kinds: {
           complete: "every case is handled, and the else has no check",
           missing: "a chain without an else misses cases",
-          hidden: "the else hides up to maxHidden cases",
-          "many-hidden": "the else hides more than maxHidden cases (info unless set here)",
+          hidden: "the else handles up to maxHidden untested cases",
+          "many-hidden":
+            "the else handles more than maxHidden untested cases (info unless set here)",
         },
         description: "A severity per kind of finding.",
       }),

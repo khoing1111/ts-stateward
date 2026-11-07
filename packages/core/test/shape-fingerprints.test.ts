@@ -139,10 +139,23 @@ describe("a file's shape: what its importers can learn about it", () => {
     expect(importerKeeps(withDefault, withDefault.replace(' = "x"', ""))).toBe(false);
   });
 
-  it("keeps where a top-level `X.y = …` starts: the qualified id of `y` counts from the top", () => {
+  it("keeps a top-level `X.y = …` but not where it starts: a comment above it keeps the shape", () => {
     const expando =
       'export function make(name: string): string {\n  return name;\n}\nmake.label = "a";\nexport const label = "a";\n';
-    expect(importerKeeps(expando, `// moved\n${expando}`)).toBe(false);
+    expect(importerKeeps(expando, `// moved\n${expando}`)).toBe(true);
+    expect(
+      importerKeeps(expando, expando.replace('make.label = "a";', '// why\n\nmake.label = "a";')),
+    ).toBe(true);
+    expect(
+      importerKeeps(
+        expando,
+        expando.replace('make.label = "a";', 'make.label = "a";\nmake.label = "b";'),
+      ),
+    ).toBe(false);
+    expect(importerKeeps(expando, expando.replace('make.label = "a";\n', ""))).toBe(false);
+    const two = expando.replace('make.label = "a";', 'make.label = "a";\nmake.other = 1;');
+    const swapped = expando.replace('make.label = "a";', 'make.other = 1;\nmake.label = "a";');
+    expect(importerKeeps(two, swapped)).toBe(false);
   });
 
   it("is the whole text of a declaration file or a script", () => {

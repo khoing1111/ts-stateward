@@ -4,7 +4,7 @@ import { checkOnly, fixture, says, shown, type Shown } from "./brand-helpers.js"
 const RULE = "brand-built-outside-owner";
 
 function built(brand: string): string {
-  return `\`${brand}\` is built here without its check`;
+  return `\`${brand}\` is built without its check`;
 }
 
 /** The constructor each fixture brand's file exports, and whether it builds or checks a value. */
@@ -112,7 +112,7 @@ describe(`ownership/${RULE}: flagged`, () => {
       ),
       declares("`isMaybeQty`", "Positive"),
       declares("`Check`", "Positive"),
-      declares("An unnamed function", "Positive"),
+      declares("an unnamed function", "Positive"),
     ]);
   });
 

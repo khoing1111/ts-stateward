@@ -113,6 +113,30 @@ const neverProbe: FileRule = {
   },
 };
 
+/** For every call to a function named `probe*`: `signalParameterOf`. */
+const signalProbe: FileRule = {
+  kind: "file",
+  meta,
+  check(ctx) {
+    const visit = (node: ts.Node): void => {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text.startsWith("probe")
+      ) {
+        const found = ctx.types.signalParameterOf(node);
+        const answer =
+          found === undefined
+            ? "none"
+            : `${String(found.index)}${found.property === undefined ? "" : `.${found.property}`}`;
+        ctx.report({ node, hint: "probe hint", message: `${node.expression.text}: ${answer}` });
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(ctx.sourceFile);
+  },
+};
+
 /** For every call to a function named `probe*`: `parameterIsReadonly` for each argument. */
 const readonlyProbe: FileRule = {
   kind: "file",
@@ -710,6 +734,49 @@ describe("TypeQueries.isLibraryType", () => {
       "libFlag.on: true",
       "o: false",
       "i: false",
+    ]);
+  });
+});
+
+describe("TypeQueries.signalParameterOf", () => {
+  it("finds a signal parameter, a signal in an options object (not a request's own), and a library's own signal type", () => {
+    expect(
+      project(
+        {
+          "a.ts": [
+            "type Signal = { readonly aborted: boolean; addEventListener?: (type: 'abort', f: () => void) => void };",
+            "type Options = { headers?: Record<string, string>; signal?: Signal | null };",
+            "export declare function probeDirect(id: string, signal: Signal): Promise<string>;",
+            "export declare function probeOptional(id: string, signal?: Signal): Promise<string>;",
+            "export declare function probeOptions(url: string, init?: Options): Promise<string>;",
+            "export declare function probeGeneric<T extends { signal: Signal }>(options: T): Promise<string>;",
+            "export declare function probeNone(id: string, options?: { timeout: number }): Promise<string>;",
+            "export declare function probeLoose(id: string, options?: { signal: unknown }): Promise<string>;",
+            "export declare function probeRest(...signals: Signal[]): Promise<string>;",
+            "type Req = { readonly url: string; readonly signal: Signal };",
+            "export declare function probeRequest(input: string | Req, init?: Options): Promise<string>;",
+            "declare const signal: Signal;",
+            "void probeDirect('a', signal);",
+            "void probeOptional('a');",
+            "void probeOptions('a');",
+            "void probeGeneric({ signal });",
+            "void probeNone('a');",
+            "void probeLoose('a');",
+            "void probeRest(signal);",
+            "void probeRequest('a');",
+          ].join("\n"),
+        },
+        signalProbe,
+      ),
+    ).toEqual([
+      "probeDirect: 1",
+      "probeOptional: 1",
+      "probeOptions: 1.signal",
+      "probeGeneric: 0.signal",
+      "probeNone: none",
+      "probeLoose: none",
+      "probeRest: none",
+      "probeRequest: 1.signal",
     ]);
   });
 });

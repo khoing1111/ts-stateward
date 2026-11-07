@@ -6,63 +6,79 @@ import { fitted } from "./text.js";
 
 const EXPLAIN = `# reducers/state-unreachable
 
-A state of a reducer that no event can lead to.
+A reducer state that no event leads to is code that can never run, often a step that was planned and not written.
 
-## Why
+\`\`\`ts example-bad
+import { useReducer } from "react";
 
-A state nothing leads to is dead code in the type: screens, styles and tests are written for it, and none of them can ever run. Usually a transition was planned and never written, or removed from the reducer but not from the type. TypeScript treats every member of the union as possible, so it cannot tell you.
+type CheckoutState = { status: "cart" } | { status: "review" } | { status: "paid" };
+type CheckoutEvent = { type: "pay" } | { type: "reset" };
 
-## When to use it
-
-Use it for reducers whose state is a union with a tag like \`status\` or \`kind\`, passed to \`useReducer\`, given a start as the default of its state (\`state = initialState\`), or marked \`@initial\`. It is on as an error in every preset; keep it on.
-
-## What it catches
-
-A state that no sequence of events reaches from where the reducer starts. The rule follows each \`return\`: which states it can give, from the states the surrounding code allows (\`switch (state.status)\`, \`if (state.status !== "paying") return state\`). It starts from the second argument of \`useReducer\` (a constant is followed to its value, in any file, and an \`init\` function through its returns) from the default of its state parameter (\`(state = INITIAL_STATE, action) => …\`, followed the same way; a constant can have any name, and \`INITIAL_STATE\` is the usual one), and from the states named in \`@initial\` on the reducer, which wins over the default.
-
-### Bad
-
-\`\`\`ts
-/** @final "paid" | "cancelled" */
-type CheckoutState =
-  | { status: "cart" }
-  | { status: "review" } // nothing returns it
-  | { status: "paid" }
-  | { status: "cancelled" };
-
-function checkoutReducer(state: CheckoutState, event: CheckoutEvent): CheckoutState {
+function checkout(state: CheckoutState, event: CheckoutEvent): CheckoutState {
   switch (event.type) {
-    case "pay": return state.status === "cart" ? { status: "paid" } : state;
-    case "cancel": return { status: "cancelled" };
+    case "pay":
+      return state.status === "cart" ? { status: "paid" } : state;
+    case "reset":
+      return { status: "cart" };
   }
 }
-// useReducer(checkoutReducer, { status: "cart" })
+
+export function useCheckout() {
+  return useReducer(checkout, { status: "cart" });
+}
 \`\`\`
 
-### Good
+Add the event that leads to \`"review"\`, or remove \`"review"\` from the type:
 
-Add the event that leads to \`"review"\`, or remove \`"review"\` from \`CheckoutState\`.
+\`\`\`ts example-good
+import { useReducer } from "react";
 
-### Fix
+type CheckoutState = { status: "cart" } | { status: "review" } | { status: "paid" };
+type CheckoutEvent = { type: "review" } | { type: "pay" } | { type: "reset" };
 
-Add the missing transition, or remove the state. There is no quick fix: which event leads there is your design.
+function checkout(state: CheckoutState, event: CheckoutEvent): CheckoutState {
+  switch (event.type) {
+    case "review":
+      return state.status === "cart" ? { status: "review" } : state;
+    case "pay":
+      return state.status === "review" ? { status: "paid" } : state;
+    case "reset":
+      return { status: "cart" };
+  }
+}
+
+export function useCheckout() {
+  return useReducer(checkout, { status: "cart" });
+}
+\`\`\`
+
+There is no quick fix: which event leads there is your design.
+
+## Why it matters
+
+A state nothing leads to is dead code in the type: screens, styles and tests are written for it, and none of them can ever run. Usually a step was planned and never written, or removed from the reducer but not from the type. TypeScript treats every member of the union as possible, so it cannot tell you.
+
+## When it says “not checked”
+
+When a \`return\` is typed \`any\`, which state it gives is not known, and the rule lists it as not checked. Give it a type that names its states.
 
 ## What it does not catch
 
 - A function that only has the shape \`(state, event) => state\`, with no \`useReducer\`, no default for its state and no \`@initial\`.
-- A reducer whose start is not known (a parameter, a call, a value typed as the whole union), or that is also called or passed around elsewhere, or exported from your package, without \`@initial\`: any state may come first. \`reducers/reducer-not-readable\` points these out.
+- A reducer whose start is not known (a parameter, a call, a value typed as the whole union), or that is also called or passed around elsewhere, or exported from your package, without \`@initial\`: any state may come first.
+- A \`return\` typed as the whole union (a helper typed \`: CheckoutState\`): it counts as leading to every state.
 - State in \`useState\` or class fields, nested or parallel states, and conditions on data (\`attempt > 3\`: both branches count).
-- A \`return\` typed as the whole union (a helper typed \`: CheckoutState\`): it counts as leading to every state; \`reducers/reducer-not-readable\` points it out.
 
-When a \`return\` is typed \`any\`, the rule cannot tell which state it gives and says so in an info finding.
+\`reducers/reducer-not-readable\` lists the reducers and returns it cannot read, with the change that makes them checkable.
+
+## Getting the best from it
+
+Keep the state a union with a tag like \`status\` or \`kind\`, and let the rule see where it starts: the second argument of \`useReducer\` (a constant is followed to its value, in any file, and an \`init\` function through its returns), the default of the state parameter (\`(state = INITIAL_STATE, action) => …\`), or \`/** @initial "cart" */\` on the reducer, which wins over the default. It follows each \`return\` from the states the code around it allows (\`switch (state.status)\`, \`if (state.status !== "paying") return state\`).
 
 ## Turn it on or off
 
-In \`stateward.config.ts\`:
-
 \`\`\`ts
 rules: { "reducers/state-unreachable": "off" } // or "warning"
-groups: { "machines/graph": "off" } // the whole group
 rules: { "reducers/state-unreachable": ["error", { ignoreStates: ["restored"] }] } // reached from outside the reducer
 \`\`\`
 `;
@@ -70,7 +86,9 @@ rules: { "reducers/state-unreachable": ["error", { ignoreStates: ["restored"] }]
 export const stateUnreachable = defineRule({
   kind: "project",
   meta: {
-    description: "A state of a reducer that no event can lead to.",
+    description:
+      "A reducer state that no event leads to is code that can never run, often a step that was planned and not written.",
+    summary: "a state of a reducer's union that no event can lead to",
     defaultSeverity: "error",
     tier: "core",
     group: "graph",
@@ -93,7 +111,8 @@ export const stateUnreachable = defineRule({
         if (unreadable.kind !== "unknown") continue;
         ctx.unknown({
           message: fitted(
-            (cut) => `stateward cannot tell which state \`${cut.name(unreadable.text)}\` returns`,
+            (cut) =>
+              `not checked: which state \`${cut.name(unreadable.text)}\` returns: its type is not one state of \`${cut.name(reducer.stateName)}\``,
           ),
           hint: `give it a type that is one of the states of \`${reducer.stateName}\`, such as \`Extract<${reducer.stateName}, …>\``,
           location: at(machine.file, unreadable),
@@ -132,7 +151,7 @@ export const stateUnreachable = defineRule({
             })),
             {
               location: at(reducer.stateFile, declared ?? reducer.stateAt),
-              message: `${quoted(tag)} is declared here`,
+              message: `${quoted(tag)} is declared`,
             },
           ],
         });

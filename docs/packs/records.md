@@ -4,61 +4,82 @@
 
 Lookup tables and records keyed by a union have every key, once, under a type that names them.
 
-## Rules
+## Turn it on
 
-Rules sit under their group. Set a whole group in the config, `groups: { "records/keys": "warning" }`, or one rule under `rules`; a rule's own entry wins.
-
-### keys
-
-| Rule | Kind | recommended | strict | What it checks |
-| --- | --- | --- | --- | --- |
-| [duplicate-key](../rules/records/duplicate-key.md) | Core | error | error | A new Map([...]) or new Set([...]) written out in code has the same key twice, so the second replaces the first. |
-| [lookup-misses-key](../rules/records/lookup-misses-key.md) | Core | error | error | A lookup like labels[status] has an entry for every value of the key, or handles a missing one. |
-| [table-type-too-loose](../rules/records/table-type-too-loose.md) | Core | error | error | A lookup table typed `Record<string, V>` says neither "these are all the keys" nor "keys come from outside"; say which in its type. |
-| [keyed-maps-out-of-sync](../rules/records/keyed-maps-out-of-sync.md) | Add-on `keyed-maps` | warning | warning | Two records kept in step must lose a key together: a key removed from one and forgotten in the other is reported. (heuristic) |
-
-## Options
-
-Set in the config as `rules: { "<rule>": [severity, { option: value }] }`.
-
-### duplicate-key
-
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `ignore` | list of strings | `[]` | Names of maps and sets (globs like *_ALIASES) whose repeats are deliberate, such as generated tables. |
-
-### keyed-maps-out-of-sync
-
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `minFunctions` | number, whole number, min 1 | `1` | How many functions must write the tables together with one key before they count as kept in step. |
-| `plainStringKeys` | boolean | `true` | Count tables keyed by a plain `string` or `number`; false keeps only named key types like `UserId`, which rarely meet by chance. |
-| `ignore` | list of strings | `[]` | Table names (globs like *Cache) that may be kept apart. |
-
-### lookup-misses-key
-
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `ignore` | list of strings | `[]` | Table names (globs like *_LABELS) whose lookups are not checked. |
-
-### table-type-too-loose
-
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `ignore` | list of strings | `[]` | Variable names (globs like *_MESSAGES) that may stay typed as open-ended records. |
-
-## Add-ons
-
-- `records/keyed-maps`: `keyed-maps-out-of-sync`
-
-## Settings
-
-Presets and add-ons are set in the config, not on the plugin:
+Install `@stateward/plugin-records` and add `records()` to `plugins` in `stateward.config.ts`, with a `preset` (`npx stateward init` does both):
 
 ```ts
-export default defineConfig({
-  plugins: [records()],
-  preset: "strict",
-  // addons: ["records/<addon>"],
-});
+plugins: [records()], preset: "recommended", // or "strict"
 ```
+
+Each rule's page has its options and what it does not catch. One rule or a whole group is set under `rules` or `groups`: `rules: { "records/<rule>": "warning" }`.
+
+## Rules
+
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [duplicate-key](../rules/records/duplicate-key.md) | the same key twice in a `new Map([...])` or `new Set([...])` written out in code | The same key twice in a `new Map([...])` or `new Set([...])` keeps only the last entry, so the first one has no effect. | Core | error | error |
+| [lookup-misses-key](../rules/records/lookup-misses-key.md) | a lookup like `labels[status]` with no entry for some value of the key | A lookup like `labels[status]` is typed as always present; a value with no entry gives `undefined`, and the page shows "undefined" or the next call throws. | Core | error | error |
+| [table-type-too-loose](../rules/records/table-type-too-loose.md) | a lookup table typed `Record<string, V>` that says neither "all keys" nor "keys from outside" | A table typed `Record<string, V>` lets a misspelt or missing key compile; typing its keys, or its reads as possibly missing, lets TypeScript check each read. | Core | error | error |
+
+## [duplicate-key](../rules/records/duplicate-key.md)
+
+The same key twice in a `new Map([...])` or `new Set([...])` keeps only the last entry, so the first one has no effect.
+
+```ts
+export const shortcuts = new Map([
+  ["save", "Ctrl+S"],
+  ["open", "Ctrl+O"],
+  ["save", "Ctrl+Shift+S"],
+]);
+```
+
+```text
+error[records/duplicate-key]: `"save"` is in the Map twice; the second value replaces the first (first at line 2)
+```
+
+Fix: give the entry the key it was meant to have, or remove the one that should lose.
+
+Core rule: error under `recommended` and `strict`. Group: `records/keys`.
+
+## [lookup-misses-key](../rules/records/lookup-misses-key.md)
+
+A lookup like `labels[status]` is typed as always present; a value with no entry gives `undefined`, and the page shows "undefined" or the next call throws.
+
+```ts
+type Status = "idle" | "failed";
+
+const labels: Record<string, string> = { idle: "Idle" };
+
+export function title(status: Status): string {
+  return labels[status].toUpperCase();
+}
+```
+
+```text
+error[records/lookup-misses-key]: `labels[status]` can be missing, but its type says it never is
+```
+
+Fix: give the table an entry for every value, and say so with `satisfies`, so a missing one fails to compile where the table is written.
+
+Core rule: error under `recommended` and `strict`. Group: `records/keys`.
+
+## [table-type-too-loose](../rules/records/table-type-too-loose.md)
+
+A table typed `Record<string, V>` lets a misspelt or missing key compile; typing its keys, or its reads as possibly missing, lets TypeScript check each read.
+
+```ts
+const labels: Record<string, string> = { idle: "Idle", done: "Done" };
+
+export function label(status: string): string {
+  return labels[status];
+}
+```
+
+```text
+error[records/table-type-too-loose]: `labels` accepts any string key, so a misspelt or missing key still compiles
+```
+
+Fix: say which table it is. A fixed table, read with keys of a known type.
+
+Core rule: error under `recommended` and `strict`. Group: `records/keys`.

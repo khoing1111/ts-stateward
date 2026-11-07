@@ -17,68 +17,70 @@ import { fitted } from "./text.js";
 
 const EXPLAIN = `# react/effect-missing-cleanup
 
-An effect that starts something (a listener, a timer, a subscription, an observer, a connection) returns a cleanup that stops it.
+A listener, timer or subscription that an effect starts and never stops keeps running after unmount, and each run of the effect adds another one.
 
-## Why
+\`\`\`tsx example-bad
+import { useEffect, useState } from "react";
 
-React runs an effect's cleanup before it runs the effect again and when the component goes away. Without one, what the effect started keeps going: \`window.addEventListener("resize", onResize)\` adds one more listener on every run and keeps calling \`setWidth\` after the component is gone; an interval keeps ticking; a chat subscription keeps delivering messages to a closed screen. In development, React's Strict Mode runs every effect twice, so a missing cleanup shows as every event handled twice.
-
-## When to use it
-
-Use it in any React app. It is a warning in every preset. It stays on with the React Compiler, which does not add cleanups.
-
-## What it catches
-
-In an effect, with no returned cleanup that undoes it:
-
-- \`addEventListener(type, handler)\`: undone by \`removeEventListener\` with the same target, type and handler variable, or by aborting the \`signal\` passed in its options. A handler written inline cannot be removed, since the cleanup cannot name the same function.
-- \`setInterval(…)\`: undone by \`clearInterval\` on the stored id.
-- \`setTimeout(…)\`: undone by \`clearTimeout\` on the stored id; reported only when the timeout sets state, or the effect runs more than once (it has dependencies, or no list).
-- A timer kept in a ref that the effect clears itself before it starts the next one (a debounce): only unmount is missing, and the fix is an effect of its own, \`useEffect(() => () => clearTimeout(timer.current), [])\`, not a cleanup in this effect.
-- \`subscribe(…)\` or \`.on(…)\` that returns an unsubscribe function (undone by calling it, or by returning the call itself) or a subscription object (undone by its \`unsubscribe()\`).
-- \`new ResizeObserver\`, \`IntersectionObserver\` or \`MutationObserver\`: undone by \`disconnect()\`.
-- \`new WebSocket\` or \`EventSource\`: undone by \`close()\`.
-
-What is kept in a ref or a variable outside the effect may also be stopped by another effect of the same component that has an empty dependency list (its cleanup runs on unmount), when this effect runs once or clears the previous timer itself. A value created only on some paths (\`supported ? new ResizeObserver(…) : undefined\`) and stopped through \`?.\` counts as stopped.
-
-The options below add classes and methods to these lists, or leave \`setTimeout\` out.
-
-### Bad
-
-\`\`\`tsx
-useEffect(() => {
-  window.addEventListener("resize", () => setWidth(window.innerWidth));
-}, []);
+export function WindowWidth() {
+  const [width, setWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    window.addEventListener("resize", () => setWidth(window.innerWidth));
+  }, []);
+  return <p>{width}px</p>;
+}
 \`\`\`
 
-### Good
+Keep what the effect starts in a variable, and return a function that stops it:
 
-\`\`\`tsx
-useEffect(() => {
-  const onResize = () => setWidth(window.innerWidth);
-  window.addEventListener("resize", onResize);
-  return () => window.removeEventListener("resize", onResize);
-}, []);
+\`\`\`tsx example-good
+import { useEffect, useState } from "react";
+
+export function WindowWidth() {
+  const [width, setWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return <p>{width}px</p>;
+}
 \`\`\`
 
-### Fix
+The same goes for a timer id, an unsubscribe function or an observer. There is no quick fix.
 
-Keep what the effect starts in a variable (the handler, the timer id, the unsubscribe function, the observer) and return a function that stops it. There is no quick fix.
+## Why it matters
+
+React runs an effect's cleanup before it runs the effect again and when the component goes away. Without one, what the effect started keeps going: the listener above keeps calling \`setWidth\` after the component is gone, and an effect with dependencies adds one more on every run; an interval keeps ticking; a chat subscription keeps delivering messages to a closed screen. In development, React's Strict Mode runs every effect twice, so a missing cleanup shows as every event handled twice.
+
+## When it says “not checked”
+
+A cleanup that calls a function declared outside the effect with what was started (\`return () => stopAll(id)\`) is listed as not checked, since stateward cannot see that function's body. Stop it in the cleanup itself.
 
 ## What it does not catch
 
-- Something started in a function the effect calls, or in a callback it passes on (\`.then(() => addEventListener(…))\`).
-- A cleanup that calls a function declared outside the effect with what was started (\`return () => stopAll(id)\`): it is listed as a place not checked, since it cannot see that function's body.
-- An \`.on(…)\` that returns the emitter itself rather than an unsubscribe (Node's \`EventEmitter\`): undone by \`.off\`, which this rule does not check.
-- Libraries' own resources (a map, a chart) other than the ones above.
+It looks for these, each with what undoes it in a returned cleanup:
+
+- \`addEventListener(type, handler)\`: \`removeEventListener\` with the same target, type and handler variable, or aborting the \`signal\` passed in its options. A handler written inline cannot be removed, since the cleanup cannot name the same function;
+- \`setInterval(…)\`: \`clearInterval\` on the stored id;
+- \`setTimeout(…)\`: \`clearTimeout\` on the stored id; reported only when the timeout sets state, or the effect runs more than once (it has dependencies, or no list);
+- a timer kept in a ref that the effect clears itself before it starts the next one (a debounce): only unmount is missing, and the fix is an effect of its own, \`useEffect(() => () => clearTimeout(timer.current), [])\`;
+- \`subscribe(…)\` or \`.on(…)\` that returns an unsubscribe function (call it, or return the call itself) or a subscription object (its \`unsubscribe()\`);
+- \`new ResizeObserver\`, \`IntersectionObserver\` or \`MutationObserver\`: \`disconnect()\`;
+- \`new WebSocket\` or \`EventSource\`: \`close()\`.
+
+Something kept in a ref or a variable outside the effect may also be stopped by another effect of the same component with an empty dependency list (its cleanup runs on unmount), when this effect runs once or clears the previous one itself. A value created only on some paths (\`supported ? new ResizeObserver(…) : undefined\`) and stopped through \`?.\` counts as stopped. It is silent on:
+
+- something started in a function the effect calls, or in a callback it passes on (\`.then(() => addEventListener(…))\`);
+- an \`.on(…)\` that returns the emitter itself rather than an unsubscribe (Node's \`EventEmitter\`): undone by \`.off\`, which this rule does not check;
+- libraries' own resources (a map, a chart) other than the ones above; the options add classes and methods to the lists, or leave \`setTimeout\` out.
+
+It stays on with the React Compiler, which does not add cleanups.
 
 ## Turn it on or off
 
-In \`stateward.config.ts\`:
-
 \`\`\`ts
 rules: { "react/effect-missing-cleanup": "off" } // or "error"
-groups: { "react/effects": "off" } // the whole group
 rules: { "react/effect-missing-cleanup": ["warning", { severities: { "inline-handler": "error" } }] } // an inline listener is always a bug
 \`\`\`
 `;
@@ -442,7 +444,7 @@ function messageFor(
         return {
           message: fitted(
             (cut) =>
-              `the \`${cut.name(started.type)}\` listener on \`${cut.name(started.target)}\` is an inline function, so no cleanup can remove it`,
+              `\`${cut.name(started.type)}\` listener on \`${cut.name(started.target)}\` is an inline function: no cleanup can remove it`,
           ),
           hint: fitted(
             (cut) =>
@@ -453,7 +455,7 @@ function messageFor(
       return {
         message: fitted(
           (cut) =>
-            `this effect adds a \`${cut.name(started.type)}\` listener to \`${cut.name(started.target)}\` and never removes it`,
+            `effect adds a \`${cut.name(started.type)}\` listener to \`${cut.name(started.target)}\` and never removes it`,
         ),
         hint: fitted(
           (cut) =>
@@ -484,12 +486,12 @@ function messageFor(
       const sets = setterCallIn(types, started.node);
       const message =
         started.kind === "interval"
-          ? "this effect starts an interval and never clears it: it keeps running after unmount"
+          ? "effect starts an interval and never clears it: it keeps running after unmount"
           : sets === undefined
-            ? "this effect starts a timeout on every run and never clears the previous one"
+            ? "effect starts a timeout on every run and never clears it"
             : fitted(
                 (cut) =>
-                  `this effect starts a timeout that sets \`${cut.name(sets)}\` and never clears it`,
+                  `effect starts a timeout that sets \`${cut.name(sets)}\` and never clears it`,
               );
       const hint =
         stored === undefined
@@ -504,7 +506,7 @@ function messageFor(
         return {
           message: fitted(
             (cut) =>
-              `\`${cut.name(started.call)}\` returns a subscription that this effect never ends`,
+              `\`${cut.name(started.call)}\` returns a subscription that the effect never ends`,
           ),
           hint: fitted(
             (cut) =>
@@ -515,7 +517,7 @@ function messageFor(
       return {
         message: fitted(
           (cut) =>
-            `\`${cut.name(started.call)}\` returns an unsubscribe function that this effect never calls`,
+            `\`${cut.name(started.call)}\` returns an unsubscribe function that the effect never calls`,
         ),
         hint: fitted((cut) =>
           started.stored !== undefined
@@ -528,8 +530,7 @@ function messageFor(
     case "observer":
       return {
         message: fitted(
-          (cut) =>
-            `this effect creates a \`${cut.name(started.constructor)}\` and never disconnects it`,
+          (cut) => `effect creates a \`${cut.name(started.constructor)}\` and never disconnects it`,
         ),
         hint: fitted((cut) =>
           started.stored === undefined
@@ -540,7 +541,7 @@ function messageFor(
     case "connection":
       return {
         message: fitted(
-          (cut) => `this effect opens a \`${cut.name(started.constructor)}\` and never closes it`,
+          (cut) => `effect opens a \`${cut.name(started.constructor)}\` and never closes it`,
         ),
         hint: fitted((cut) =>
           started.stored === undefined
@@ -618,9 +619,9 @@ function checkEffect(ctx: FileContext<Settings>, effect: Effect, all: readonly E
       ctx.unknown({
         message: fitted(
           (cut) =>
-            `stateward cannot tell whether this effect's cleanup stops ${cut.name(described(each))}`,
+            `not checked: whether the cleanup stops ${cut.name(described(each))}: the cleanup is not written in the effect`,
         ),
-        hint: "undo it in the returned function itself (`removeEventListener`, `clearInterval`, `disconnect`, …) to make it checkable",
+        hint: "undo it in the returned function itself (`removeEventListener`, `clearInterval`, `disconnect`, …), so it can be checked",
         node: each.node,
       });
       continue;
@@ -637,10 +638,13 @@ export const effectMissingCleanup = defineRule({
   kind: "file",
   meta: {
     description:
-      "An effect that starts a listener, timer, subscription, observer or connection returns a cleanup that stops it.",
+      "A listener, timer or subscription that an effect starts and never stops keeps running after unmount, and each run of the effect adds another one.",
+    summary:
+      "an effect that starts a listener, timer, subscription or connection and never stops it",
     defaultSeverity: "warning",
     tier: "core",
     group: "effects",
+    needsTypes: { library: "React", modules: ["react"] },
     options: OPTIONS,
     explain: EXPLAIN,
   },

@@ -2,89 +2,99 @@ import ts from "@stateward/core/typescript";
 import { defineRule, matchesName, option } from "@stateward/core";
 import type { TypeQueries } from "@stateward/core";
 import {
-  bindingOf,
   cleanupsOf,
   declarationNode,
   enclosingFunction,
   effectsIn,
   isFunctionNode,
-  setterCall,
+  propOf,
   textOf,
   type Effect,
 } from "./effects.js";
+import { stateWrites } from "./late-writes.js";
+import {
+  abortFix,
+  guardedByStaleFlag,
+  loadersIn,
+  proveAborted,
+  type Loader,
+  type Verdict,
+} from "./latest-wins.js";
 import { calleeName, reactName, unwrapped } from "./react.js";
-import { fitted } from "./text.js";
+import { fitted, shorten } from "./text.js";
 import { bindingPath, isFunctionLike, RenderScope } from "./value.js";
 
 const EXPLAIN = `# react/effect-response-race
 
-An effect that loads data ignores a response that arrives after its inputs have changed.
+Without an abort in the cleanup, the response to an old request can arrive after a newer one and replace the newer data on screen.
 
-## Why
+\`\`\`tsx example-bad
+import { useEffect, useState } from "react";
 
-\`useEffect(() => { fetchUser(userId).then(setUser); }, [userId])\` starts a request every time \`userId\` changes, and nothing stops the old ones. When the user clicks from profile 1 to profile 2 and the request for 1 is slower, it answers last and \`setUser\` shows profile 1 under the heading for 2. The bug depends on timing, so it shows up on slow networks and almost never in development.
+declare function fetchUser(id: string, options?: { signal?: AbortSignal }): Promise<{ name: string }>;
 
-## When to use it
-
-Use it in an app that loads data in effects. It is off until you add its add-on (below), then a warning in every preset: it guesses that the awaited call is a request whose answer can arrive late. It stays on with the React Compiler, which does not change effects. Turn it off if you load data with a library that already handles this (TanStack Query, SWR, a router loader) and the effects it finds are not requests.
-
-## What it catches
-
-An effect with dependencies (or none listed, so it runs after every render) that sets state after an \`await\` or in a \`.then\`/\`.catch\` callback, with no cleanup that sets a flag or aborts the request.
-
-### Bad
-
-\`\`\`tsx
-useEffect(() => {
-  fetchUser(userId).then((user) => setUser(user));
-}, [userId]);
+export function Profile({ userId }: { userId: string }) {
+  const [name, setName] = useState("");
+  useEffect(() => {
+    fetchUser(userId).then((user) => setName(user.name));
+  }, [userId]);
+  return <h1>{name}</h1>;
+}
 \`\`\`
 
-### Good
+Create an \`AbortController\` in the effect, pass its signal, and abort it in the cleanup. The quick fix writes all three:
 
-\`\`\`tsx
-useEffect(() => {
-  let ignore = false;
-  fetchUser(userId).then((user) => {
-    if (!ignore) setUser(user);
-  });
-  return () => {
-    ignore = true;
-  };
-}, [userId]);
+\`\`\`tsx example-good
+import { useEffect, useState } from "react";
+
+declare function fetchUser(id: string, options?: { signal?: AbortSignal }): Promise<{ name: string }>;
+
+export function Profile({ userId }: { userId: string }) {
+  const [name, setName] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchUser(userId, { signal: controller.signal }).then((user) => setName(user.name));
+    return () => controller.abort();
+  }, [userId]);
+  return <h1>{name}</h1>;
+}
 \`\`\`
 
-An \`AbortController\` whose \`abort()\` the cleanup calls works too, and also cancels the request.
+A flag that the cleanup sets, checked before each write, is proven too (the React docs' pattern): \`let ignore = false;\`, \`if (!ignore) setName(…)\`, \`return () => { ignore = true; };\`. It drops the late answer but lets the request run to the end.
 
-### Fix
+## Why it matters
 
-Keep a flag that the cleanup sets, and set state only while it is not set; or abort the request in the cleanup. When the project uses \`@tanstack/react-query\` or \`swr\`, the fix line suggests loading the data with it instead, since it ignores late responses for you. There is no quick fix.
+The effect starts a request every time \`userId\` changes, and nothing stops the old ones. When the user clicks from profile 1 to profile 2 and the request for 1 is slower, it answers last, and profile 1's name shows on profile 2's page. The bug depends on timing, so it shows up on slow networks and almost never in development.
 
 ## What it does not catch
 
-- An effect with an empty dependency list, or whose dependencies all keep their identity between renders: it runs once, so no newer request can be overtaken. Setters and \`dispatch\` from React, react-redux's \`dispatch\`, react-router's \`navigate\`, RTK Query's triggers and \`refetch\`, and the values of the hooks named in \`stableHooks\` (functions or objects, such as a store read from context: \`stableHooks: ["useStores"]\`; the setting of \`react/dependency-changes-every-render\`, read here too) keep their identity; the message never names one of them as the input that changed.
-- A request started in a function the effect calls but does not declare.
-- A cleanup that sets a flag the write does not check: any assignment in the cleanup counts as a guard.
-- A write after \`if (…) return;\` whose test reads a ref (\`if (request !== latest.current) return;\`, or a function of the effect that does, \`if (isStale()) return;\`), or an update that keeps the previous state in one branch (\`setLib((prev) => (prev.api === api ? next : prev))\`): the code already drops a late response.
+A function whose parameters take an \`AbortSignal\`, directly or as \`signal\` in an options object (\`fetch(url, { signal })\`, axios's \`signal\`, your own \`fetchUser(id, signal)\`), says it can be cancelled. For every call to one in an effect whose answer sets state (after an \`await\`, in a \`.then\`, or through a function of the component that sets state), the rule proves that the call gets the signal of an \`AbortController\` the effect creates and aborts in its cleanup, or that every write checks a flag the cleanup sets. What it cannot prove is an error that names the missing step. A signal received by a function written in the effect (\`async function load(signal)\`) counts when every call of it passes the effect's signal. It is silent on:
+
+- an effect that runs once (an empty dependency list, or dependencies that keep their identity): no newer request can overtake it;
+- the calls of TanStack Query, SWR and RTK Query, which manage their own cancellation;
+- a \`catch\` that sets state when the request is aborted: test \`signal.aborted\` there;
+- calls that take no signal, unless you list the add-on below.
+
+It stays on with the React Compiler, which does not change effects.
+
+## Getting the best from it
+
+Give your loaders a \`signal\` parameter and pass it on to \`fetch\`: the rule then proves every effect that calls them. Name your hooks whose values keep their identity in \`stableHooks\` (shared with \`react/dependency-changes-every-render\`).
+
+### Calls that cannot be cancelled
+
+With the \`react/effect-race\` add-on the rule also warns, as a guess, about an effect that sets state after an \`await\` of a call that takes no signal, when a prop or a route parameter in its dependencies can change while the request runs and no cleanup sets a flag. A write after \`if (…) return;\` whose test reads a ref, or an update that keeps the previous state in one branch, already drops a late response and is not reported. Name the awaited calls that are not requests in \`notRequests\` (\`sleep\`, \`delay\`).
 
 ## Turn it on or off
 
-Turn it on in \`stateward.config.ts\`:
+It is on in \`recommended\` and \`strict\`. The add-on adds the guesses about calls that cannot be cancelled.
 
 \`\`\`ts
 addons: ["react/effect-race"]
-\`\`\`
-
-Then change or turn off the rule itself:
-
-\`\`\`ts
-rules: { "react/effect-response-race": "off" } // or "error"
-groups: { "react/effects": "off" } // the whole group
-rules: { "react/effect-response-race": ["warning", { notRequests: ["sleep", "delay"] }] } // awaited calls that are not requests
+rules: { "react/effect-response-race": ["error", { notRequests: ["sleep", "delay"] }] } // awaited calls that are not requests
+rules: { "react/effect-response-race": "off" }
 \`\`\`
 `;
-
-const LATE_CALLBACKS: ReadonlySet<string> = new Set(["then", "catch", "finally"]);
 
 /** The data-loading hooks the fix suggests, by the package that provides them. */
 const DATA_HOOKS: readonly { readonly pkg: string; readonly hook: string }[] = [
@@ -97,61 +107,6 @@ const DATA_HOOKS: readonly { readonly pkg: string; readonly hook: string }[] = [
 function unwrappedCall(expression: ts.Expression): ts.CallExpression | undefined {
   if (ts.isParenthesizedExpression(expression)) return unwrappedCall(expression.expression);
   return ts.isCallExpression(expression) ? expression : undefined;
-}
-
-/** A state set after a response arrives, and the request it waits for. */
-type LateWrite = { node: ts.Node; setter: string; request: ts.Expression };
-
-/** The `.then(…)` call a node is an argument of, or inside an argument of. */
-function lateCallback(node: ts.Node, effect: Effect): ts.CallExpression | undefined {
-  for (let current = node; current !== effect.callback; current = current.parent) {
-    const parent = current.parent;
-    if (
-      ts.isCallExpression(parent) &&
-      parent.arguments.some((argument) => argument === current) &&
-      ts.isPropertyAccessExpression(parent.expression) &&
-      LATE_CALLBACKS.has(parent.expression.name.text)
-    ) {
-      return parent;
-    }
-  }
-  return undefined;
-}
-
-/** The first `await` in the same function before a node, not inside another function. */
-function awaitBefore(node: ts.Node): ts.AwaitExpression | undefined {
-  const fn = enclosingFunction(node);
-  if (fn === undefined) return undefined;
-  let found: ts.AwaitExpression | undefined;
-  const visit = (current: ts.Node): void => {
-    if (found !== undefined || current.pos >= node.pos) return;
-    if (ts.isAwaitExpression(current) && current.end <= node.pos) {
-      found = current;
-      return;
-    }
-    if (!isFunctionNode(current)) ts.forEachChild(current, visit);
-  };
-  ts.forEachChild(fn, visit);
-  return found;
-}
-
-/** The call a `.then` chain starts from: `fetchUser(id)` in `fetchUser(id).then(…).then(…)`. */
-function chainRoot(call: ts.CallExpression): ts.Expression {
-  let current: ts.Expression = call.expression;
-  while (ts.isPropertyAccessExpression(current) || ts.isCallExpression(current)) {
-    const next: ts.Expression = current.expression;
-    if (
-      ts.isCallExpression(current) &&
-      !(
-        ts.isPropertyAccessExpression(current.expression) &&
-        LATE_CALLBACKS.has(current.expression.name.text)
-      )
-    ) {
-      return current;
-    }
-    current = next;
-  }
-  return current;
 }
 
 /** Whether a node reads `x.current` (a ref), not inside a nested function. */
@@ -262,24 +217,6 @@ function exits(statement: ts.Statement): boolean {
   if (!ts.isBlock(statement)) return false;
   const last = statement.statements[statement.statements.length - 1];
   return last !== undefined && ts.isReturnStatement(last);
-}
-
-function lateWrite(types: TypeQueries, node: ts.Node, effect: Effect): LateWrite | undefined {
-  const set = setterCall(types, node);
-  // `.then(setUser)` passes the setter itself.
-  const passed =
-    ts.isIdentifier(node) &&
-    ts.isCallExpression(node.parent) &&
-    node.parent.arguments.some((argument) => argument === node) &&
-    bindingOf(types, node)?.part === "setter"
-      ? node.text
-      : undefined;
-  const setter = set !== undefined ? set.binding.setter : passed;
-  if (setter === undefined) return undefined;
-  const then = lateCallback(node, effect);
-  if (then !== undefined) return { node, setter, request: chainRoot(then) };
-  const awaited = awaitBefore(node);
-  return awaited === undefined ? undefined : { node, setter, request: awaited.expression };
 }
 
 /** Whether a cleanup stops a late write: it sets a flag, or aborts or cancels the request. */
@@ -412,21 +349,150 @@ function changingInput(
   return deps.find((dep) => read.has(dep)) ?? deps[0];
 }
 
+/** The hooks whose values are route parameters: a new page, a new value. */
+const ROUTE_HOOKS: ReadonlySet<string> = new Set([
+  "useParams",
+  "useSearchParams",
+  "useLocation",
+  "useRouter",
+  "useMatch",
+  "useRouteMatch",
+  "useSearch",
+  "usePathname",
+]);
+
+/** The variable declaration a name is declared in, through destructuring. */
+function variableOf(types: TypeQueries, node: ts.Identifier): ts.VariableDeclaration | undefined {
+  let declaration: ts.Node | undefined = declarationNode(types, node);
+  while (declaration !== undefined && ts.isBindingElement(declaration)) {
+    declaration = declaration.parent.parent;
+  }
+  return declaration !== undefined && ts.isVariableDeclaration(declaration)
+    ? declaration
+    : undefined;
+}
+
+/** Whether a dependency is read from a route hook: `const { id } = useParams()`, `params.id`. */
+function isRouteValue(types: TypeQueries, dep: ts.Expression, depth = 0): boolean {
+  if (depth > 2) return false;
+  let node = unwrapped(dep);
+  while (ts.isPropertyAccessExpression(node) || ts.isCallExpression(node)) {
+    node = unwrapped(node.expression);
+  }
+  if (!ts.isIdentifier(node)) return false;
+  const declaration = variableOf(types, node);
+  const init =
+    declaration?.initializer === undefined ? undefined : unwrapped(declaration.initializer);
+  if (init === undefined) return false;
+  if (ts.isCallExpression(init)) {
+    const name = calleeName(init.expression);
+    if (ts.isIdentifier(name) && ROUTE_HOOKS.has(name.text)) return true;
+  }
+  return isRouteValue(types, init, depth + 1);
+}
+
+/** The prop or route parameter in the dependencies, compared by value, that a new render can change. */
+function changingIdentity(
+  types: TypeQueries,
+  effect: Effect,
+  sourceFile: ts.SourceFile,
+): string | undefined {
+  if (effect.deps === "none" || effect.deps === "unreadable") return undefined;
+  const dep = effect.deps.find(
+    (candidate) =>
+      types.isPrimitive(candidate) &&
+      (propOf(types, candidate, effect.owner) !== undefined || isRouteValue(types, candidate)),
+  );
+  return dep === undefined ? undefined : textOf(dep, sourceFile);
+}
+
+/** How a call is named in a message: `fetchUser(…)`. */
+function callText(call: ts.CallExpression, sourceFile: ts.SourceFile): string {
+  return `${call.expression.getText(sourceFile).replace(/\s+/g, "")}(…)`;
+}
+
+function proofMessage(verdict: Verdict, call: string, input: string | undefined): string {
+  return fitted((cut) => {
+    const late =
+      input === undefined
+        ? "an old answer can overwrite a newer one"
+        : `an answer for an old \`${cut.name(input)}\` can overwrite a newer one`;
+    switch (verdict.kind) {
+      case "pass":
+        return `\`${cut.name(call)}\` takes an AbortSignal the effect never passes: ${late}`;
+      case "abort":
+        return `effect never aborts \`${cut.name(verdict.name)}\` in its cleanup: ${late}`;
+      case "foreign":
+        return `\`${cut.name(call)}\` gets a signal the effect does not abort: ${late}`;
+      case "unreadable":
+        return `\`${cut.name(call)}\` is not proven aborted: the cleanup is not written in the effect`;
+      case "proven":
+        return "";
+      default: {
+        const unreachable: never = verdict;
+        return unreachable;
+      }
+    }
+  });
+}
+
+/** The call with the signal where its callee takes it: `fetchUser(…, { signal: controller.signal })`. */
+function withSignal(loader: Loader, sourceFile: ts.SourceFile): string {
+  const callee = loader.call.expression.getText(sourceFile).replace(/\s+/g, "");
+  const signal =
+    loader.at.property === undefined ? "controller.signal" : "{ signal: controller.signal }";
+  return `${shorten(callee, 40)}(${loader.at.index === 0 ? "" : "…, "}${signal})`;
+}
+
+function proofHint(verdict: Verdict, call: string, passed: string): string {
+  switch (verdict.kind) {
+    case "abort":
+      return fitted(
+        (cut) =>
+          `abort it when the effect is cleaned up: \`return () => ${cut.name(verdict.name)}.abort();\``,
+      );
+    case "unreadable":
+      return "return the cleanup as a function written in the effect, so it can be checked: `return () => controller.abort();`";
+    case "pass":
+    case "foreign":
+    case "proven":
+      return [
+        fitted(
+          (cut) =>
+            `create a controller in the effect, pass its signal to \`${cut.name(call)}\`, and abort it in the cleanup:`,
+        ),
+        "    const controller = new AbortController();",
+        `    ${passed}`,
+        "    return () => controller.abort();",
+      ].join("\n");
+    default: {
+      const unreachable: never = verdict;
+      return unreachable;
+    }
+  }
+}
+
+function fixTitle(call: string): string {
+  return `Abort ${call} when the effect is cleaned up`;
+}
+
 export const effectResponseRace = defineRule({
   kind: "file",
   meta: {
     description:
-      "An effect that loads data ignores a response that arrives after its inputs have changed.",
-    defaultSeverity: "warning",
-    tier: "addon",
-    addon: "effect-race",
+      "Without an abort in the cleanup, the response to an old request can arrive after a newer one and replace the newer data on screen.",
+    summary:
+      "an effect that calls a loader taking an `AbortSignal` and does not abort it in its cleanup",
+    defaultSeverity: "error",
+    tier: "core",
     group: "effects",
-    heuristic: true,
+    widenedBy: ["effect-race"],
+    needsTypes: { library: "React", modules: ["react"] },
     options: {
       notRequests: option.strings({
         default: [],
         description:
-          "Awaited calls that are not requests, so a late answer cannot happen (sleep, delay, wait*; globs on the name as called).",
+          "Awaited calls that are not requests, so a late answer cannot happen (sleep, delay, wait*; globs on the name as called). Read by the `react/effect-race` add-on.",
       }),
       stableHooks: option.strings({
         default: [],
@@ -439,6 +505,7 @@ export const effectResponseRace = defineRule({
   },
   check(ctx) {
     const { sourceFile, types } = ctx;
+    const guessing = ctx.addons.includes("effect-race");
     const dependencies = types.dependenciesOf(ctx.file);
     const dataHook = DATA_HOOKS.find((entry) => dependencies.includes(entry.pkg));
     const rtk = dependencies.includes("@reduxjs/toolkit");
@@ -449,21 +516,58 @@ export const effectResponseRace = defineRule({
       const stable = (dep: ts.Expression): boolean =>
         keepsIdentity(types, scope, dep, rtk, ctx.options.stableHooks);
       // With every dependency keeping its identity, the effect runs once: no newer request.
-      if (effect.deps === "unreadable" || (effect.deps !== "none" && effect.deps.every(stable))) {
+      if (effect.deps !== "none" && effect.deps !== "unreadable" && effect.deps.every(stable)) {
         continue;
       }
-      let write: LateWrite | undefined;
-      const visit = (node: ts.Node): void => {
-        if (write !== undefined) return;
-        const found = lateWrite(types, node, effect);
-        if (found !== undefined && checkedAtWrite(found.node, effect)) return;
-        write = found;
-        if (write === undefined) ts.forEachChild(node, visit);
-      };
-      ts.forEachChild(effect.callback, visit);
-      if (write === undefined) continue;
-      const late: LateWrite = write;
-      const request = unwrappedCall(late.request);
+      const cleanups = cleanupsOf(types, effect);
+      const writes = stateWrites(types, effect);
+      const loaders = loadersIn(types, effect, writes, cleanups);
+      const missing = loaders.flatMap((loader) => {
+        const verdict = proveAborted(types, effect, cleanups, loader);
+        return verdict.kind === "proven" || guardedByStaleFlag(types, effect, cleanups, loader)
+          ? []
+          : [{ loader, verdict }];
+      });
+      const first = missing[0];
+      const fix =
+        first === undefined
+          ? undefined
+          : abortFix(
+              types,
+              sourceFile,
+              effect,
+              cleanups,
+              missing,
+              fixTitle(callText(first.loader.call, sourceFile)),
+            );
+      for (const { loader, verdict } of missing) {
+        const call = callText(loader.call, sourceFile);
+        const input = changingInput(effect, loader.call, sourceFile, stable);
+        const own = verdict.kind === "pass" || verdict.kind === "abort";
+        ctx.report({
+          message: proofMessage(verdict, call, input),
+          hint: proofHint(verdict, call, withSignal(loader, sourceFile)),
+          node: loader.call,
+          related: loader.writes
+            .filter((write) => write !== loader.call)
+            .slice(0, 3)
+            .map((write) => ({ node: write, message: "state is set from the answer" })),
+          ...(fix === undefined || !own ? {} : { fixes: [{ ...fix, title: fixTitle(call) }] }),
+        });
+      }
+      if (!guessing || effect.deps === "unreadable") continue;
+      const covered = new Set(loaders.flatMap((loader) => loader.writes));
+      const input = changingIdentity(types, effect, sourceFile);
+      if (input === undefined) continue;
+      const late = writes.find(
+        (write) =>
+          !covered.has(write.node) &&
+          write.awaited.length > 0 &&
+          !checkedAtWrite(write.node, effect),
+      );
+      const awaited = late?.awaited[0];
+      if (late === undefined || awaited === undefined) continue;
+      const request = unwrappedCall(awaited);
       if (
         request !== undefined &&
         matchesName(
@@ -477,18 +581,17 @@ export const effectResponseRace = defineRule({
       if (guard === true) continue;
       if (guard === "unreadable") {
         ctx.unknown({
-          message: "stateward cannot tell whether this effect's cleanup stops a late response",
-          hint: "return the cleanup as a function written in the effect (`return () => { ignore = true; }`) to make it checkable",
+          message:
+            "not checked: whether the cleanup stops a late response: the cleanup is not written in the effect",
+          hint: "return the cleanup as a function written in the effect (`return () => { ignore = true; }`), so it can be checked",
           node: late.node,
         });
         continue;
       }
-      const input = changingInput(effect, late.request, sourceFile, stable);
       ctx.report({
-        message: fitted((cut) =>
-          input === undefined
-            ? "a slow response from an earlier render can overwrite a newer one"
-            : `a slow response for an old \`${cut.name(input)}\` can overwrite a newer one`,
+        message: fitted(
+          (cut) =>
+            `response race: an answer for an old \`${cut.name(input)}\` can overwrite a newer one`,
         ),
         hint: [
           fitted((cut) =>
@@ -501,7 +604,8 @@ export const effectResponseRace = defineRule({
           "    return () => { ignore = true; };",
         ].join("\n"),
         node: late.node,
-        related: [{ node: late.request, message: "the request that can answer late" }],
+        severity: "warning",
+        related: [{ node: awaited, message: "the request that can answer late" }],
       });
     }
   },

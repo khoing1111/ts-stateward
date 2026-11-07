@@ -20,7 +20,7 @@ const expected: Shown[] = [
     severity: "warning",
     file: "ChatRoom.tsx",
     at: "chat.subscribe(room, (message) => setMessages((current) => [...current, message]))",
-    message: "`chat.subscribe(…)` returns an unsubscribe function that this effect never calls",
+    message: "`chat.subscribe(…)` returns an unsubscribe function that the effect never calls",
     hint: "return it as the cleanup: `return chat.subscribe(…);`",
     notes: [],
     fixes: [],
@@ -30,7 +30,7 @@ const expected: Shown[] = [
     severity: "warning",
     file: "ChatRoom.tsx",
     at: "presence.subscribe(setOnline)",
-    message: "`presence.subscribe(…)` returns a subscription that this effect never ends",
+    message: "`presence.subscribe(…)` returns a subscription that the effect never ends",
     hint: "end it in the cleanup: `return () => subscription.unsubscribe();`",
     notes: [],
     fixes: [],
@@ -40,7 +40,7 @@ const expected: Shown[] = [
     severity: "warning",
     file: "ChatRoom.tsx",
     at: "new WebSocket(url)",
-    message: "this effect opens a `WebSocket` and never closes it",
+    message: "effect opens a `WebSocket` and never closes it",
     hint: "close it in the cleanup: `return () => socket.close();`",
     notes: [],
     fixes: [],
@@ -51,7 +51,7 @@ const expected: Shown[] = [
     file: "ProfilePage.tsx",
     at: "setFullName(`${first} ${last}`)",
     message:
-      "`fullName` is copied from `first` and `last` in an effect: an extra render with a stale value first",
+      "`fullName` is copied from `first` and `last` in an effect: each change first renders a stale value",
     hint: "compute it while rendering, and remove the state and the effect:\n    const fullName = `${first} ${last}`;",
     notes: [],
     fixes: [],
@@ -62,19 +62,9 @@ const expected: Shown[] = [
     file: "ProfilePage.tsx",
     at: "setDraft(props.name)",
     message:
-      "an effect overwrites the draft `draft` with `props.name` whenever it changes, losing edits",
+      "effect overwrites the draft `draft` with `props.name` whenever it changes: edits are lost",
     hint: "drop the effect and render `<NameEditor key={…}>` so the draft starts over when `name` changes",
-    notes: ["ProfilePage.tsx: useState(props.name): `draft` starts as `props.name` here"],
-    fixes: [],
-  },
-  {
-    rule: "react/effect-response-race",
-    severity: "warning",
-    file: "ProfilePage.tsx",
-    at: "setUser(loaded)",
-    message: "a slow response for an old `userId` can overwrite a newer one",
-    hint: "ignore a response that arrives after the effect is cleaned up:\n    let ignore = false;\n    … if (!ignore) setUser(…);\n    return () => { ignore = true; };",
-    notes: ["ProfilePage.tsx: fetchUser(userId): the request that can answer late"],
+    notes: ["ProfilePage.tsx: useState(props.name): `draft` starts as `props.name`"],
     fixes: [],
   },
   {
@@ -83,7 +73,7 @@ const expected: Shown[] = [
     file: "SearchBox.tsx",
     at: "setVisible(filterUsers(users, query))",
     message:
-      "`visible` is copied from `users` and `query` in an effect: an extra render with a stale value first",
+      "`visible` is copied from `users` and `query` in an effect: each change first renders a stale value",
     hint: "compute it while rendering (in `useMemo` if `filterUsers` is slow), and remove the state and the effect:\n    const visible = filterUsers(users, query);",
     notes: [],
     fixes: [],
@@ -94,7 +84,7 @@ const expected: Shown[] = [
     file: "SearchBox.tsx",
     at: "setFilters({ ...filters, page: 1 })",
     message:
-      "this effect sets `filters`, one of its own dependencies, to a new value each time: a render loop",
+      "render loop: the effect sets `filters`, one of its own dependencies, to a new value each time",
     hint: "set it only when it must change (`if (…) setFilters(…)`), or make the change in the event that causes it",
     notes: [],
     fixes: [],
@@ -104,20 +94,9 @@ const expected: Shown[] = [
     severity: "warning",
     file: "SearchBox.tsx",
     at: "setLabel(query)",
-    message:
-      "`label` is copied from `query` in an effect: an extra render with a stale value first",
+    message: "`label` is copied from `query` in an effect: each change first renders a stale value",
     hint: "compute it while rendering, and remove the state and the effect:\n    const label = query;",
     notes: [],
-    fixes: [],
-  },
-  {
-    rule: "react/effect-response-race",
-    severity: "warning",
-    file: "SearchBox.tsx",
-    at: "setResults(found)",
-    message: "a slow response for an old `query` can overwrite a newer one",
-    hint: "ignore a response that arrives after the effect is cleaned up:\n    let ignore = false;\n    … if (!ignore) setResults(…);\n    return () => { ignore = true; };",
-    notes: ["SearchBox.tsx: searchUsers(query): the request that can answer late"],
     fixes: [],
   },
   {
@@ -125,7 +104,7 @@ const expected: Shown[] = [
     severity: "warning",
     file: "Timer.tsx",
     at: "setInterval(() => setSeconds((current) => current + 1), 1000)",
-    message: "this effect starts an interval and never clears it: it keeps running after unmount",
+    message: "effect starts an interval and never clears it: it keeps running after unmount",
     hint: "keep its id and clear it in the cleanup: `const id = setInterval(…); return () => clearInterval(id);`",
     notes: [],
     fixes: [],
@@ -135,7 +114,7 @@ const expected: Shown[] = [
     severity: "warning",
     file: "Timer.tsx",
     at: "setTimeout(() => setVisible(false), 3000)",
-    message: "this effect starts a timeout that sets `visible` and never clears it",
+    message: "effect starts a timeout that sets `visible` and never clears it",
     hint: "keep its id and clear it in the cleanup: `const id = setTimeout(…); return () => clearTimeout(id);`",
     notes: [],
     fixes: [],
@@ -146,7 +125,7 @@ const expected: Shown[] = [
     file: "Timer.tsx",
     at: "setCount(count + 1)",
     message:
-      "this effect sets `count`, one of its own dependencies, to a new value each time: a render loop",
+      "render loop: the effect sets `count`, one of its own dependencies, to a new value each time",
     hint: "set it only when it must change (`if (…) setCount(…)`), or make the change in the event that causes it",
     notes: [],
     fixes: [],
@@ -156,8 +135,7 @@ const expected: Shown[] = [
     severity: "error",
     file: "Timer.tsx",
     at: "setRenders((current) => current + 1)",
-    message:
-      "this effect runs after every render and sets `renders` to a new value each time: a render loop",
+    message: "render loop: the effect runs after every render and sets `renders` to a new value",
     hint: "set it only when it must change (`if (…) setRenders(…)`), or make the change in the event that causes it",
     notes: [],
     fixes: [],
@@ -167,7 +145,7 @@ const expected: Shown[] = [
     severity: "warning",
     file: "WindowSize.tsx",
     at: 'window.addEventListener("resize", () => setWidth(window.innerWidth))',
-    message: "the `resize` listener on `window` is an inline function, so no cleanup can remove it",
+    message: "`resize` listener on `window` is an inline function: no cleanup can remove it",
     hint: 'keep the handler in a variable (`const onResize = …`), then `return () => window.removeEventListener("resize", onResize)`',
     notes: [],
     fixes: [],
@@ -177,7 +155,7 @@ const expected: Shown[] = [
     severity: "warning",
     file: "WindowSize.tsx",
     at: 'window.addEventListener("resize", onResize)',
-    message: "this effect adds a `resize` listener to `window` and never removes it",
+    message: "effect adds a `resize` listener to `window` and never removes it",
     hint: 'remove it in the cleanup: `return () => window.removeEventListener("resize", onResize)`',
     notes: [],
     fixes: [],
@@ -187,7 +165,7 @@ const expected: Shown[] = [
     severity: "warning",
     file: "WindowSize.tsx",
     at: "new ResizeObserver(([entry]) => setSize(entry?.contentRect.width ?? 0))",
-    message: "this effect creates a `ResizeObserver` and never disconnects it",
+    message: "effect creates a `ResizeObserver` and never disconnects it",
     hint: "disconnect it in the cleanup: `return () => observer.disconnect();`",
     notes: [],
     fixes: [],
@@ -200,8 +178,9 @@ const notChecked: Shown[] = [
     severity: "unknown",
     file: "Timer.tsx",
     at: "setInterval(() => setNow(Date.now()), 1000)",
-    message: "stateward cannot tell whether this effect's cleanup stops the interval",
-    hint: "undo it in the returned function itself (`removeEventListener`, `clearInterval`, `disconnect`, …) to make it checkable",
+    message:
+      "not checked: whether the cleanup stops the interval: the cleanup is not written in the effect",
+    hint: "undo it in the returned function itself (`removeEventListener`, `clearInterval`, `disconnect`, …), so it can be checked",
     notes: [],
     fixes: [],
   },
@@ -214,7 +193,7 @@ const compiled: Shown[] = [
     file: "Profile.tsx",
     at: "setFullName(`${first} ${last}`)",
     message:
-      "`fullName` is copied from `first` and `last` in an effect: an extra render with a stale value first",
+      "`fullName` is copied from `first` and `last` in an effect: each change first renders a stale value",
     hint: "compute it while rendering, and remove the state and the effect:\n    const fullName = `${first} ${last}`;",
     notes: [],
     fixes: [],
@@ -223,8 +202,8 @@ const compiled: Shown[] = [
     rule: "react/effect-response-race",
     severity: "warning",
     file: "Profile.tsx",
-    at: "setUser",
-    message: "a slow response for an old `userId` can overwrite a newer one",
+    at: "setUser(await fetchUser(userId))",
+    message: "response race: an answer for an old `userId` can overwrite a newer one",
     hint: "load it with `useQuery` from @tanstack/react-query, which drops late responses, or ignore them:\n    let ignore = false;\n    … if (!ignore) setUser(…);\n    return () => { ignore = true; };",
     notes: ["Profile.tsx: fetchUser(userId): the request that can answer late"],
     fixes: [],
@@ -278,13 +257,10 @@ describe("react/effect-missing-cleanup: a chat subscription, window resize, time
 });
 
 describe("react/effect-response-race: a profile card and a search box", () => {
-  it("reports a state set after a request with no flag or abort in the cleanup", () => {
-    expect(ofRule("effect-response-race")).toEqual(byRule("effect-response-race"));
-  });
-  it("is off until its add-on is listed", () => {
-    expect(
-      findings(EFFECTS, []).filter((finding) => finding.rule === "react/effect-response-race"),
-    ).toEqual([]);
+  it("guesses nothing about a `.then` on a call that takes no signal, or local state in the dependencies", () => {
+    // ProfileCard's `fetchUser(userId).then(…)` and SearchBox's `query` from useState: the add-on
+    // guesses only a write after an await with a prop or route parameter in the dependencies.
+    expect(ofRule("effect-response-race")).toEqual([]);
   });
   it("suggests the project's data-fetching hook, and stays on with the React Compiler, like the whole group", () => {
     expect(findings(QUERY)).toEqual(compiled);

@@ -13,6 +13,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { emptyCache, parseSnapshot, toSnapshot } from "./cache.js";
 import type { ResultCache } from "./cache.js";
@@ -32,16 +33,62 @@ import { statewardVersion } from "./package-cache.js";
 /** Where `stateward check` and the language server keep their cache, unless STATEWARD_CACHE_DIR says otherwise. */
 export const CACHE_SUBDIR = path.join("node_modules", ".cache", "stateward");
 
-/** The cache folder for a project: STATEWARD_CACHE_DIR, else node_modules/.cache/stateward when node_modules exists. */
+/** The folder beside the project used when there is neither node_modules nor a user cache folder. */
+export const PROJECT_CACHE_DIR = ".stateward-cache";
+
+/** What `defaultCacheDir` reads of the machine: the home folder ("" when unknown) and the platform. */
+export type CacheMachine = { readonly home: string; readonly platform: NodeJS.Platform };
+
+function thisMachine(): CacheMachine {
+  let home = "";
+  try {
+    home = homedir();
+  } catch {
+    // No home folder (a service account): the project's own folder is used.
+  }
+  return { home, platform: process.platform };
+}
+
+/**
+ * The user's cache folder of the platform: XDG_CACHE_HOME or ~/.cache on Linux and others,
+ * ~/Library/Caches on macOS, LOCALAPPDATA on Windows; undefined when none is known.
+ */
+export function userCacheDir(
+  env: { XDG_CACHE_HOME?: string | undefined; LOCALAPPDATA?: string | undefined },
+  machine: CacheMachine = thisMachine(),
+): string | undefined {
+  const given = (value: string | undefined): string | undefined =>
+    value !== undefined && path.isAbsolute(value) ? value : undefined;
+  if (machine.platform === "win32") return given(env.LOCALAPPDATA);
+  if (machine.home === "") return given(env.XDG_CACHE_HOME);
+  if (machine.platform === "darwin") return path.join(machine.home, "Library", "Caches");
+  return given(env.XDG_CACHE_HOME) ?? path.join(machine.home, ".cache");
+}
+
+/**
+ * The cache folder for a project: STATEWARD_CACHE_DIR; else node_modules/.cache/stateward when
+ * node_modules exists; else a folder of the user's cache folder named after the project's path
+ * (an app checked before its packages are installed, user trial 1.0.2); else
+ * `.stateward-cache` in the project.
+ */
 export function defaultCacheDir(
   project: string,
-  env: { STATEWARD_CACHE_DIR?: string | undefined },
-): string | undefined {
+  env: {
+    STATEWARD_CACHE_DIR?: string | undefined;
+    XDG_CACHE_HOME?: string | undefined;
+    LOCALAPPDATA?: string | undefined;
+  },
+  machine: CacheMachine = thisMachine(),
+): string {
   const override = env.STATEWARD_CACHE_DIR;
   if (override !== undefined && override !== "") return path.resolve(project, override);
-  return existsSync(path.join(project, "node_modules"))
-    ? path.join(project, CACHE_SUBDIR)
-    : undefined;
+  if (existsSync(path.join(project, "node_modules"))) return path.join(project, CACHE_SUBDIR);
+  const user = userCacheDir(env, machine);
+  if (user === undefined) return path.join(project, PROJECT_CACHE_DIR);
+  const resolved = path.resolve(project);
+  const key = createHash("sha256").update(resolved).digest("hex").slice(0, 16);
+  const name = path.basename(resolved).replace(/[^\w.-]/g, "_") || "project";
+  return path.join(user, "stateward", "results", `${name}-${key}`);
 }
 
 /** The results cache's size limit unless STATEWARD_CACHE_MAX_MB sets another. */

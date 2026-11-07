@@ -9,7 +9,7 @@ const CLEAN = fixture("state-written-outside-owner/clean");
 const OWNERS = fixture("state-written-outside-owner/owners");
 
 /** Where `reset` writes its parameter, which `settings` reaches through the callers. */
-const RESET_NOTE = "target.theme: `reset` changes its argument here";
+const RESET_NOTE = "target.theme: `reset` changes its argument";
 
 /** What a finding for a change of `name`, made in `file`, says; `example` is the owner's call. */
 function change(
@@ -24,9 +24,9 @@ function change(
   return {
     file,
     at,
-    message: `\`${name}\` belongs to \`${owner}\`; \`${file}\` changes it`,
-    hint: `add a function in \`${owner}\` that makes this change (e.g. \`${example}\`), and call it here`,
-    notes: [...through, `${declared}: \`${name}\` is declared here, and \`${owner}\` owns it`],
+    message: `\`${name}\` is changed outside its module, \`${owner}\``,
+    hint: `add a function in \`${owner}\` that makes the change (e.g. \`${example}\`), and call it instead`,
+    notes: [...through, `${declared}: \`${name}\` is declared in \`${owner}\`, which owns it`],
   };
 }
 
@@ -61,14 +61,15 @@ describe("ownership/state-written-outside-owner: changes from another module", (
     expect(findings.some((finding) => finding.location.file.endsWith("settings.ts"))).toBe(false);
   });
 
-  it("reports as an error, once per change, all of the rule", () => {
+  it("reports as an error, once per change, all of the rule, offering to declare the value owned", () => {
     expect(
       findings.every(
         (finding) =>
           finding.kind === "problem" &&
           finding.ruleId === "ownership/state-written-outside-owner" &&
           finding.severity === "error" &&
-          finding.fixes.length === 0,
+          finding.fixes.length === 1 &&
+          finding.fixes.every((fix) => /^Declare \w+ owned by [\w./-]+\.ts$/.test(fix.title)),
       ),
     ).toBe(true);
   });
@@ -133,9 +134,9 @@ describe("ownership/state-written-outside-owner option `owners`", () => {
       {
         file: "other.ts",
         at: "store.user.name",
-        message: "`store` belongs to `store.ts`; `other.ts` changes it",
-        hint: 'add a function in `store.ts` that makes this change (e.g. `setName("Grace")`), and call it here',
-        notes: ["store: `store` is declared here, and `store.ts` owns it"],
+        message: "`store` is changed outside its module, `store.ts`",
+        hint: 'add a function in `store.ts` that makes the change (e.g. `setName("Grace")`), and call it instead',
+        notes: ["store: `store` is declared in `store.ts`, which owns it"],
       },
     ]);
   });

@@ -48,7 +48,7 @@ const PACKS = [
     packageName: "@stateward/plugin-errors",
     importName: "errors",
     description:
-      "Errors are handled where they can happen: nothing swallowed, nothing lost in finally, no Result dropped.",
+      "Errors are handled where they can happen: none ignored, none replaced in `finally`, no `Result` dropped.",
     detect: { kind: "always" },
   },
   {

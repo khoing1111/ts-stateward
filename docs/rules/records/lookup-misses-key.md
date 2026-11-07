@@ -2,73 +2,71 @@
 
 # records/lookup-misses-key
 
-A lookup like labels[status] has an entry for every value of the key, or handles a missing one.
-
-- Group: records/keys
-- Tier: core (on in every preset)
-- Add-on: none
-- Heuristic: no
-- Severity under `recommended`: error
-- Severity under `strict`: error
-
-## Why
-
-`labels[status]` is typed `string`, so the code uses it as text. When `status` can be `"failed"` and `labels` has no `failed` entry, the read gives `undefined`: the page shows "undefined", or the next `.toUpperCase()` throws. The type promised a value that the object does not have.
-
-## When to use it
-
-Use it for any object or `Map`-like table keyed by a union: labels, colours, icons, handlers, routes. It is on as an error in every preset. Turn it off only in code where a missing key is normal and handled in a way the rule cannot see.
-
-## What it catches
-
-A read `table[key]` where `key` is a union of strings or numbers, some value of `key` has no entry of its own in `table` (or only a catch-all like `Record<string, string>`), and the result's type does not already include `undefined`.
-
-### Bad
+A lookup like `labels[status]` is typed as always present; a value with no entry gives `undefined`, and the page shows "undefined" or the next call throws.
 
 ```ts
 type Status = "idle" | "failed";
+
 const labels: Record<string, string> = { idle: "Idle" };
-const text = labels[status]; // typed string, undefined for "failed"
+
+export function title(status: Status): string {
+  return labels[status].toUpperCase();
+}
 ```
 
-### Good
+`stateward check` prints:
+
+```text
+error[records/lookup-misses-key]: `labels[status]` can be missing, but its type says it never is
+ --> example.ts:6:10
+  |
+6 |   return labels[status].toUpperCase();
+  |          ^^^^^^^^^^^^^^
+  = fix: declare `labels` with `satisfies Record<…>` over its real keys, or type `status` so a missing key is handled
+  = docs: stateward explain records/lookup-misses-key
+```
+
+Give the table an entry for every value, and say so with `satisfies`, so a missing one fails to compile where the table is written:
 
 ```ts
+type Status = "idle" | "failed";
+
 const labels = { idle: "Idle", failed: "Failed" } satisfies Record<Status, string>;
-const text = labels[status];
+
+export function title(status: Status): string {
+  return labels[status].toUpperCase();
+}
 ```
 
-With `satisfies Record<Status, string>`, a missing entry fails to compile where the table is written.
+When the table's own keys leave some values out, the message names the missing entries (the first 3, then a count). When the table has no fixed keys at all, as above (`Record<string, string>`, a registry a hook returns, a server response), it asks you to give the table its real keys or to handle a missing entry. When the table comes from a cast (`(value as Record<string, T>)[key]`), it points at the cast, which drops the keys. There is no quick fix, since the values are yours to write.
 
-### Fix
+## Why it matters
 
-Add the missing entries; the message names them (the first 3, then a count) and suggests `satisfies Record<…>`. There is no quick fix, since the values are yours to write. When the table has no fixed keys at all (a registry a hook returns, a server response), the message asks you to give it its real keys (`Record<"zoom-in" | …, …>`) or handle a missing entry. When the table comes from a cast (`(value as Record<string, T>)[key]`), the message points at the cast, which is what hides the keys.
+`labels[status]` is typed `string`, so the code uses it as text. When `status` is `"failed"` and `labels` has no `failed` entry, the read gives `undefined`: the page shows "undefined", or the next `.toUpperCase()` throws. The type promised a value the object does not have.
 
 ## What it does not catch
 
 - A read whose type already includes `undefined` (an optional property, `Partial<…>`, `noUncheckedIndexedAccess`): TypeScript already makes you handle it.
-- A read checked first with `key in table`, `Object.hasOwn(table, key)` or `hasOwnProperty`, in an `if`, before `&&`, or in a `?:` condition.
-- A read stored in a `const` whose first use checks for a missing entry (`toggle?.kbd`, `if (!asset)`, `Array.isArray(shades)`), also when it is the fallback of `??` or `||`.
-- A table whose keys come from a generic (`Record<K, string>`): the rule cannot see them.
-- An enum's reverse lookup (`Color[value]`).
-- Arrays, tuples and array-likes (`match[1]`, `files[0]`): they are read by position.
-- A key typed `string` or `number`, with no fixed set of values.
+- A read checked first with `key in table`, `Object.hasOwn(table, key)`, `hasOwnProperty`, or by testing the read itself (`table[key]`, `typeof table[key] === "object"`, `table[key] !== undefined`), in an `if`, before `&&`, or in a `?:` condition.
+- A read compared with a literal (`table[key] === true`): a missing entry is not equal.
+- A read stored in a `const` whose first use checks for a missing entry (`toggle?.kbd`, `if (!asset)`, `Array.isArray(shades)`), also as the fallback of `??` or `||`, and a read after `&&` whose result has a fallback (`(op && table[op]) ?? []`).
+- A key typed `string` or `number`, with no fixed set of values, and a table whose keys come from a generic (`Record<K, string>`).
+- An enum's reverse lookup (`Color[value]`), arrays, tuples and array-likes (`match[1]`, `files[0]`): they are read by position.
 - Writes (`labels[status] = …`).
 
 ## Turn it on or off
 
-In `stateward.config.ts`:
+Turn it off only in code where a missing key is normal and handled in a way the rule cannot see:
 
 ```ts
 rules: { "records/lookup-misses-key": "off" } // or "warning"
 rules: { "records/lookup-misses-key": ["error", { ignore: ["*_LABELS"] }] } // tables checked elsewhere
-groups: { "guards/lookups": "off" } // the whole group
 ```
 
-### Options
-
-Set as `rules: { "records/lookup-misses-key": ["error", { … }] }`.
+Options, set as `rules: { "records/lookup-misses-key": ["error", { … }] }`:
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `ignore` | list of strings | `[]` | Table names (globs like *_LABELS) whose lookups are not checked. |
+
+Core rule: error under `recommended` and `strict`. Group: `records/keys`.

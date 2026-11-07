@@ -4,11 +4,11 @@ import { checkOnly, fixture, says, shown } from "./helpers.js";
 const RULE = "tag-does-not-discriminate";
 
 function weak(property: string, literal: string, plain: string, alias: string): string {
-  return `\`${property}\` is ${literal} in one member of \`${alias}\` but \`${plain}\` in another, so it cannot tell them apart`;
+  return `\`${property}\` does not tell the members of \`${alias}\` apart: one member has ${literal}, another \`${plain}\``;
 }
 
 function fix(property: string, alias: string): string {
-  return `give every member of \`${alias}\` its own literal \`${property}\`, or move the catch-all member out of the union`;
+  return `give every member of \`${alias}\` its own literal \`${property}\`, or move the catch-all member out of the union, so a test on \`${property}\` picks one member`;
 }
 
 function expected(
@@ -43,8 +43,8 @@ describe(`unions/${RULE}: flagged`, () => {
     expect(shown(checkOnly(fixture(`${RULE}/long-names`), RULE))).toEqual([
       says(
         "events.ts",
-        '`aVeryLongPropertyNameForTheKindOfMessage` is "initialisingTheConnection" in one member of `UploadPipelineProgressMessageFromTheServer` but `string` in another, so it cannot tell them apart',
-        "give every member of `UploadPipelineProgressMessageFromTheServer` its own literal `aVeryLongPropertyNameForTheKindOfMessage`, or move the catch-all member out of the union",
+        '`aVeryLongPropertyNameForTheKindOfMessage` does not tell the members of `UploadPipelineProgressMessageFromTheServer` apart: one member has "initialisingTheConnection", another `string`',
+        "give every member of `UploadPipelineProgressMessageFromTheServer` its own literal `aVeryLongPropertyNameForTheKindOfMessage`, or move the catch-all member out of the union, so a test on `aVeryLongPropertyNameForTheKindOfMessage` picks one member",
       ),
     ]);
   });

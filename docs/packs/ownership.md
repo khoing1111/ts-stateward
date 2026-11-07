@@ -4,48 +4,60 @@
 
 One owner per piece of shared state and per brand: others call the owner's functions.
 
-## Rules
+## Turn it on
 
-Rules sit under their group. Set a whole group in the config, `groups: { "ownership/owners": "warning" }`, or one rule under `rules`; a rule's own entry wins.
-
-### owners
-
-| Rule | Kind | recommended | strict | What it checks |
-| --- | --- | --- | --- | --- |
-| [brand-built-outside-owner](../rules/ownership/brand-built-outside-owner.md) | Core | error | error | A branded value that has a check is built only by that check, in the file that declares the brand. |
-| [state-written-outside-owner](../rules/ownership/state-written-outside-owner.md) | Core | error | error | Shared module-level state is changed only by the module that declares it; others call its functions. |
-
-## Options
-
-Set in the config as `rules: { "<rule>": [severity, { option: value }] }`.
-
-### brand-built-outside-owner
-
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `owners` | object of names to lists of strings | `{}` | Other files that may build a brand, by brand name: `{ "Sku": ["src/codecs/**"] }` (globs from the project's folder). A brand named here is checked even when its file exports no constructor. |
-| `predicates` | boolean | `true` | Also report a type predicate or assertion function (`x is Positive`) outside the brand's owner. |
-
-### state-written-outside-owner
-
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `owners` | object of names to lists of strings | `{}` | Files that may also change the state a file declares: a declaring file glob and the globs of the files allowed to write it (paths relative to the project). |
-| `ignore` | list of strings | `[]` | Names of shared state (globs like *Registry) that any file may change, such as a registry built up by plugins. |
-| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per way the state is changed. Kinds: `direct`: the other file changes it itself: an assignment, `delete` or a changing method call; `through-call`: the other file passes it to a function of yours, declared elsewhere, that changes its argument. |
-
-## Add-ons
-
-None yet.
-
-## Settings
-
-Presets and add-ons are set in the config, not on the plugin:
+Install `@stateward/plugin-ownership` and add `ownership()` to `plugins` in `stateward.config.ts`, with a `preset` (`npx stateward init` does both):
 
 ```ts
-export default defineConfig({
-  plugins: [ownership()],
-  preset: "strict",
-  // addons: ["ownership/<addon>"],
-});
+plugins: [ownership()], preset: "recommended", // or "strict"
 ```
+
+Each rule's page has its options and what it does not catch. One rule or a whole group is set under `rules` or `groups`: `rules: { "ownership/<rule>": "warning" }`.
+
+## Rules
+
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [brand-built-outside-owner](../rules/ownership/brand-built-outside-owner.md) | a cast to a checked brand like `as Positive` outside the file that owns its check | A cast to a checked brand like `Positive` outside its check skips the validation the brand stands for, so the type promises more than the value holds. | Core | error | error |
+| [state-written-outside-owner](../rules/ownership/state-written-outside-owner.md) | shared module state changed by a file other than the one that declares it | When several modules change the same module-level state, each change must be read to know its value; one owning module with functions keeps that in one place. | Core | error | error |
+
+## [brand-built-outside-owner](../rules/ownership/brand-built-outside-owner.md)
+
+A cast to a checked brand like `Positive` outside its check skips the validation the brand stands for, so the type promises more than the value holds.
+
+```ts
+import type { Positive } from "./values.js";
+
+export function quantity(input: { qty: number }): Positive {
+  return input.qty as Positive;
+}
+```
+
+```text
+error[ownership/brand-built-outside-owner]: `Positive` is built without its check
+```
+
+Fix: in `cart.ts`, call the brand's check instead, and handle the value it rejects.
+
+Core rule: error under `recommended` and `strict`. Group: `ownership/owners`.
+
+## [state-written-outside-owner](../rules/ownership/state-written-outside-owner.md)
+
+When several modules change the same module-level state, each change must be read to know its value; one owning module with functions keeps that in one place.
+
+```ts
+import { session } from "./session.js";
+
+export function onExpired(): void {
+  const current = session;
+  current.user = null;
+}
+```
+
+```text
+error[ownership/state-written-outside-owner]: `session` is changed outside its owner, `session.ts`
+```
+
+Fix: in `toolbar.ts`, call the function the declaring file offers for the change.
+
+Core rule: error under `recommended` and `strict`. Group: `ownership/owners`.

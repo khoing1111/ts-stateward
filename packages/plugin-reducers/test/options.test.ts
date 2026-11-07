@@ -52,9 +52,7 @@ describe("reducers/reducer-not-readable option `severities`", () => {
     ]);
     expect(mixed).toHaveLength(7);
     expect(mixed).toContain('error: `@initial` names "queud", which is not a state of `JobState`');
-    expect(mixed).toContain(
-      'info: `@final` on `OrderState` should list states in quotes: `@final "done"`',
-    );
+    expect(mixed).toContain("info: `@final` on `OrderState` lists states without quotes");
   });
 });
 

@@ -83,8 +83,8 @@ describe("react/timer-runs-after-unmount", () => {
         file: "Cleared.tsx",
         at: "window.setTimeout(onClose, 150)",
         message:
-          "stateward cannot tell whether `closeTimer` is cleared when the component unmounts",
-        hint: "clear it in an effect cleanup written in the component (`clearTimeout(ref.current)`) to make it checkable",
+          "not checked: whether `closeTimer` is cleared on unmount: its cleanup is not in the component",
+        hint: "clear it in an effect cleanup written in the component (`clearTimeout(ref.current)`), so it can be checked",
         notes: [],
         fixes: [],
       },

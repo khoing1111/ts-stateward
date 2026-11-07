@@ -5,79 +5,75 @@ import { example, resultShapeOf, shorten, type ResultShape } from "./result-type
 
 const EXPLAIN = `# errors/result-unchecked
 
-A call that reports failure in its value, not by throwing, is checked before the code goes on as if it worked.
+A call that returns its failure instead of throwing never reaches the \`catch\`; without a check, the code after it runs as if the call worked.
 
-## Why
+\`\`\`ts example-bad
+type Result<T> = { ok: true; value: T } | { ok: false; error: Error };
 
-Some calls do not throw when they fail: they resolve to data or an error. An RTK Query trigger without \`.unwrap()\` is the common one. Wrap \`await deletePlan(id)\` in a \`try\` and the \`catch\` never runs: a failed delete still shows "Deleted" and closes the dialog. Store the result and show its error, and the lines after still run: "Saved" appears after a save that failed.
+declare function saveSettings(values: string): Promise<Result<void>>;
+declare function toast(text: string): void;
 
-## When to use it
-
-Use it if you call RTK Query triggers, or functions that return a Result (\`{ ok: true; value } | { ok: false; error }\`, zod's \`safeParse\`, neverthrow), and await them in event handlers. It is a warning in every preset.
-
-## What it catches
-
-A call whose value is data or an error: a promise with an \`unwrap()\` method that resolves to a union with an \`error\` member (RTK Query's triggers; found by the type, not by a name), or a Result recognised as \`errors/result-ignored\` recognises it. Then:
-
-- awaited as a statement inside a \`try\` whose \`catch\` nothing else can reach (no call before it, no other \`await\` or \`throw\` in the \`try\`): the \`catch\` never runs;
-- awaited as a statement inside a \`try\` after another call (an optimistic \`setFolders(…)\`, a \`parse(values)\`), with more lines after it: when it fails, those lines run (\`notify("Folder updated!")\`) and the \`catch\` (the rollback) does not;
-- a trigger awaited as a statement outside a \`try\`, with more lines after it (\`await sendReply(x); setText("")\`);
-- stored, then its data read before it is checked;
-- stored, its error read in an \`if\` that does not \`return\` or \`throw\` (\`"error" in result\`, \`result.error\`, or an \`error\` or \`isError\` taken out of it), with more lines after that \`if\`.
-
-### Bad
-
-\`\`\`ts
-try {
-  await deletePlan(id);
-  toast.success("Deleted");
-} catch {
-  toast.error("Could not delete");
+export async function submit(values: string): Promise<void> {
+  const result = await saveSettings(values);
+  if (!result.ok) toast("Could not save");
+  toast("Saved");
 }
-
-const result = await saveSettings(values);
-if ("error" in result) toast.error("Could not save");
-toast.success("Saved");
 \`\`\`
 
-### Good
+When it failed, stop there: \`return\` (or \`throw\`) in the check:
 
-\`\`\`ts
-try {
-  await deletePlan(id).unwrap();
-  toast.success("Deleted");
-} catch {
-  toast.error("Could not delete");
-}
+\`\`\`ts example-good
+type Result<T> = { ok: true; value: T } | { ok: false; error: Error };
 
-const result = await saveSettings(values);
-if ("error" in result) {
-  toast.error("Could not save");
-  return;
+declare function saveSettings(values: string): Promise<Result<void>>;
+declare function toast(text: string): void;
+
+export async function submit(values: string): Promise<void> {
+  const result = await saveSettings(values);
+  if (!result.ok) {
+    toast("Could not save");
+    return;
+  }
+  toast("Saved");
 }
-toast.success("Saved");
 \`\`\`
 
-### Fix
+For an RTK Query trigger, add \`.unwrap()\` so a failure throws: \`await deletePlan(id).unwrap()\`. Where the result is dropped, a quick fix adds it.
 
-Add \`.unwrap()\` so a failure throws (a quick fix where the result is dropped), or check the result and \`return\` (or \`throw\`) when it failed. Code that says what it means is left alone: \`void trigger(…)\`, \`.unwrap()\`, a check (\`"error" in result\`, \`if (result.error) return\`, \`isOk(result)\`, \`const { data, isError } = await dispatch(…); if (isError) throw …\`) before the success path, an \`if\` with an \`else\` for the success path, and a component that reads the trigger's own \`isError\` or \`error\` from its hook (\`const [save, { isError }] = useSaveMutation()\`).
+## Why it matters
+
+Some calls do not throw when they fail: they resolve to data or an error. An RTK Query trigger without \`.unwrap()\` is the common one. Wrap \`await deletePlan(id)\` in a \`try\` and the \`catch\` never runs: a failed delete still shows "Deleted" and closes the dialog. Store the result and show its error without stopping, and the lines after still run: "Saved" appears after a save that failed.
+
+## When it says “not checked”
+
+An \`if\` that tests the result in a way stateward cannot read (\`if (result.error && isApiError(result.error))\`) is listed as a place not checked. Test it in one of the ways below, then narrow further inside.
 
 ## What it does not catch
 
-- A Result (\`ok\`, \`success\`, neverthrow) dropped as a statement: that is \`errors/result-ignored\`'s.
-- Lines after the call that only set back a pending state set before it (\`setSaving(true)\` … \`setSaving(false)\`): they run either way on purpose.
-- A \`try\` with another \`await\` or a \`throw\` in it: the \`catch\` may be there for that.
-- A result passed on, returned or stored elsewhere, or checked in a callback.
-- A promise that rejects on failure (react-query's \`mutateAsync\`, \`fetch\`): it has no \`unwrap()\` that resolves to data or an error.
-- An \`if\` that tests the result in a way stateward cannot read (\`if (result.error && isApiError(result.error))\`): it is listed as a place not checked.
+It looks at a call whose value is data or an error: a promise with an \`unwrap()\` method that resolves to a union with an \`error\` member (RTK Query's triggers, found by the type, not by a name), or a Result as \`errors/result-ignored\` recognises it. It reports such a call when:
+
+- it is awaited as a statement inside a \`try\` whose \`catch\` nothing else can reach (no call before it, no other \`await\` or \`throw\` in the \`try\`): the \`catch\` never runs;
+- it is awaited as a statement inside a \`try\` after another call (an optimistic \`setFolders(…)\`), with more lines after it: when it fails, those lines run and the \`catch\` (the rollback) does not;
+- a trigger is awaited as a statement outside a \`try\`, with more lines after it (\`await sendReply(x); setText("")\`);
+- it is stored, then its data is read before it is checked;
+- it is stored, and its error is read in an \`if\` that does not \`return\` or \`throw\` (\`"error" in result\`, \`result.error\`, \`!result.ok\`, or an \`error\` or \`isError\` taken out of it), with more lines after that \`if\`.
+
+It is silent on:
+
+- a Result dropped as a statement: that is \`errors/result-ignored\`;
+- lines after the call that only set back a pending state set before it (\`setSaving(true)\` … \`setSaving(false)\`): they run either way on purpose;
+- a \`try\` with another \`await\` or a \`throw\` in it: the \`catch\` may be there for that;
+- a result passed on, returned, stored elsewhere, or checked in a callback;
+- a promise that rejects on failure (react-query's \`mutateAsync\`, \`fetch\`): it has no \`unwrap()\` that resolves to data or an error.
+
+## Getting the best from it
+
+Code that says what it means is left alone: \`void trigger(…)\`, \`.unwrap()\`, a check (\`"error" in result\`, \`if (result.error) return\`, \`isOk(result)\`, \`const { data, isError } = await dispatch(…); if (isError) throw …\`) before the success path, an \`if\` with an \`else\` for the success path, and a component that reads the trigger's own \`isError\` or \`error\` from its hook (\`const [save, { isError }] = useSaveMutation()\`).
 
 ## Turn it on or off
 
-In \`stateward.config.ts\`:
-
 \`\`\`ts
 rules: { "errors/result-unchecked": "off" } // or "error"
-groups: { "errors/callers": "off" } // the whole group
 \`\`\`
 `;
 
@@ -456,7 +452,7 @@ function checkTry(statement: ts.TryStatement, ctx: FileContext): void {
       if (hookStateRead(call, ctx)) continue;
       ctx.report({
         node: inner,
-        message: `the lines after this run even when \`${calleeText(call, ctx)}(…)\` failed, and the \`catch\` does not`,
+        message: `code after the call runs even when \`${calleeText(call, ctx)}(…)\` failed, and the \`catch\` does not`,
         hint: [
           'add `.unwrap()` so a failure reaches the `catch` (quick fix), or check `"error" in result` and return:',
           example([
@@ -473,9 +469,9 @@ function checkTry(statement: ts.TryStatement, ctx: FileContext): void {
     ctx.report({
       // The statement, as `errors/result-ignored` reports it, so that rule can yield to this one.
       node: inner,
-      message: `\`${calleeText(call, ctx)}(…)\` does not throw when it fails, so this \`catch\` never runs`,
+      message: `\`catch\` never runs for \`${calleeText(call, ctx)}(…)\`: it does not throw when it fails`,
       hint: [
-        'the lines after it still run on failure; add `.unwrap()` (quick fix), or check `"error" in result` and return:',
+        'add `.unwrap()` (quick fix), or check `"error" in result` and return, so the code after it does not run on failure:',
         example([`const result = await ${callText(call, ctx)};`, `if ("error" in result) return;`]),
       ].join("\n"),
       fixes: [unwrapFix(call, "Add `.unwrap()` so a failure reaches the `catch`", ctx)],
@@ -555,12 +551,12 @@ function checkDropped(statement: ts.ExpressionStatement, ctx: FileContext): void
   if (kindOf(call, true, ctx) !== "trigger" || hookStateRead(call, ctx)) return;
   ctx.report({
     node: statement,
-    message: `the lines after this run even when \`${calleeText(call, ctx)}(…)\` failed`,
+    message: `code after the call runs even when \`${calleeText(call, ctx)}(…)\` failed`,
     hint: [
       'add `.unwrap()` so a failure throws (quick fix), or check `"error" in result` and return:',
       example([`const result = await ${callText(call, ctx)};`, `if ("error" in result) return;`]),
     ].join("\n"),
-    fixes: [unwrapFix(call, "Add `.unwrap()` so a failure stops this function", ctx)],
+    fixes: [unwrapFix(call, "Add `.unwrap()` so a failure stops the function", ctx)],
   });
 }
 
@@ -588,8 +584,8 @@ function trackedOf(
 }
 
 function goesOnHeadline(tracked: Tracked, after: "statement" | "if"): string {
-  const what = after === "if" ? "this `if`" : "this";
-  return `the lines after ${what} run even when \`${tracked.callee}(…)\` failed`;
+  const what = after === "if" ? "the `if`" : "the call";
+  return `code after ${what} runs even when \`${tracked.callee}(…)\` failed`;
 }
 
 /**
@@ -688,8 +684,8 @@ function followStored(
     case "undecided":
       ctx.unknown({
         node: outcome.test,
-        message: `stateward cannot tell whether this \`if\` checks that \`${tracked.callee}(…)\` failed`,
-        hint: `test the result itself to make it checkable, as in \`${checkLine(tracked)}\``,
+        message: `not checked: whether the \`if\` tests that \`${tracked.callee}(…)\` failed: it does not test the result itself`,
+        hint: `test the result itself, as in \`${checkLine(tracked)}\`, so the check can be followed`,
       });
       return;
     case "goes-on": {
@@ -763,7 +759,9 @@ export const resultUnchecked = defineRule({
   kind: "file",
   meta: {
     description:
-      "A call that reports failure in its value, not by throwing, is checked before the code goes on as if it worked.",
+      "A call that returns its failure instead of throwing never reaches the `catch`; without a check, the code after it runs as if the call worked.",
+    summary:
+      "a call that fails in its value (an RTK Query trigger, a Result) used as if it had worked",
     defaultSeverity: "warning",
     tier: "core",
     group: "callers",

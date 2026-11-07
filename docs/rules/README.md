@@ -4,100 +4,98 @@
 
 Every rule of every pack, grouped by pack. Each pack is its own package; the [packs](../packs/README.md) page lists them.
 
-Kind: **Core** rules are on in every preset. **Coverage** rules ask your types to say more; they
-are info under `recommended` and errors under `strict`. **Add-on** rules stay off until you list
-their add-on in `addons`; the table shows their severity once it is listed. A heuristic rule
-guesses, so it is never an error unless you set it.
+**Core** rules are on in every preset. **Coverage** rules point at code whose types do not say
+enough for stateward to check it; they are info under `recommended` and errors under `strict`.
+**Add-on** rules stay off until you list their add-on in `addons`; the table shows their severity
+once it is listed. A rule marked (guess) judges from patterns in the code, not only from types, so
+it can be wrong and is never an error unless you make it one.
 
 ## [unions](../packs/unions.md)
 
 Every case of a union is handled, and its tag tells the cases apart. Package: `@stateward/plugin-unions`.
 
-| Rule | What it finds | Kind | `recommended` | `strict` |
-| --- | --- | --- | --- | --- |
-| [default-hides-cases](unions/default-hides-cases.md) | A switch over a union handles every case, so a value added later fails to compile instead of falling into the default. | Core | error | error |
-| [if-chain-misses-case](unions/if-chain-misses-case.md) | An if / else if chain over a union handles every case, so a value added later fails to compile. | Core | error | error |
-| [tag-does-not-discriminate](unions/tag-does-not-discriminate.md) | A property like kind that tells a union's members apart is a literal in every member, not string or number in one. | Coverage | info | error |
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [default-hides-cases](unions/default-hides-cases.md) | a `default` that handles cases the switch does not list, or that has no `never` check | A case added to the union later goes to the `default` with no compile error; listing the cases makes each switch fail to compile until it handles the new case. | Core | error | error |
+| [if-chain-misses-case](unions/if-chain-misses-case.md) | an `if` / `else if` chain over a union that misses a case or has no `never` check | A case added to the union later goes to the last `else` with no compile error; testing every case and checking the rest with `never` makes the chain fail to compile. | Core | error | error |
+| [tag-does-not-discriminate](unions/tag-does-not-discriminate.md) | a tag like `kind` that is `string` in one member, so a test on it does not pick a member | When `kind` is `string` in one member, testing `kind` does not narrow the union, so TypeScript cannot check which properties each branch reads. | Coverage | info | error |
 
 ## [records](../packs/records.md)
 
 Lookup tables and records keyed by a union have every key, once, under a type that names them. Package: `@stateward/plugin-records`.
 
-| Rule | What it finds | Kind | `recommended` | `strict` |
-| --- | --- | --- | --- | --- |
-| [duplicate-key](records/duplicate-key.md) | A new Map([...]) or new Set([...]) written out in code has the same key twice, so the second replaces the first. | Core | error | error |
-| [lookup-misses-key](records/lookup-misses-key.md) | A lookup like labels[status] has an entry for every value of the key, or handles a missing one. | Core | error | error |
-| [table-type-too-loose](records/table-type-too-loose.md) | A lookup table typed `Record<string, V>` says neither "these are all the keys" nor "keys come from outside"; say which in its type. | Core | error | error |
-| [keyed-maps-out-of-sync](records/keyed-maps-out-of-sync.md) | Two records kept in step must lose a key together: a key removed from one and forgotten in the other is reported. (heuristic) | Add-on `keyed-maps` | warning | warning |
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [duplicate-key](records/duplicate-key.md) | the same key twice in a `new Map([...])` or `new Set([...])` written out in code | The same key twice in a `new Map([...])` or `new Set([...])` keeps only the last entry, so the first one has no effect. | Core | error | error |
+| [lookup-misses-key](records/lookup-misses-key.md) | a lookup like `labels[status]` with no entry for some value of the key | A lookup like `labels[status]` is typed as always present; a value with no entry gives `undefined`, and the page shows "undefined" or the next call throws. | Core | error | error |
+| [table-type-too-loose](records/table-type-too-loose.md) | a lookup table typed `Record<string, V>` that says neither "all keys" nor "keys from outside" | A table typed `Record<string, V>` lets a misspelt or missing key compile; typing its keys, or its reads as possibly missing, lets TypeScript check each read. | Core | error | error |
 
 ## [async](../packs/async.md)
 
 An async failure is never lost: handlers catch their own, and state set before an await is set again when it fails. Package: `@stateward/plugin-async`.
 
-| Rule | What it finds | Kind | `recommended` | `strict` |
-| --- | --- | --- | --- | --- |
-| [handler-rejection-lost](async/handler-rejection-lost.md) | An async event handler, listener or timer callback catches its own failures, since nothing awaits it. | Core | error | error |
-| [pending-state-stuck-on-failure](async/pending-state-stuck-on-failure.md) | State set before an await and set again after it is also set again when the await fails, so a failure does not leave it pending. (heuristic) | Core | warning | warning |
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [handler-rejection-lost](async/handler-rejection-lost.md) | an async `onClick`, listener or timer callback whose failure is never caught | No code awaits an event handler or a timer callback, so its failure is an unhandled rejection the user never sees; a `catch` inside it can show the error. | Core | error | error |
+| [pending-state-stuck-on-failure](async/pending-state-stuck-on-failure.md) | a "loading" state set before an `await` that stays set when the call fails (guess) | When the awaited call fails, a state set to "loading" before it stays set and the spinner shows until reload; resetting it in `finally` prevents that. | Core | warning | warning |
 
 ## [react-context](../packs/react-context.md)
 
 A component that needs a context is always rendered under its Provider. Package: `@stateward/plugin-react-context`.
 
-| Rule | What it finds | Kind | `recommended` | `strict` |
-| --- | --- | --- | --- | --- |
-| [fake-default-value](react-context/fake-default-value.md) | A React context gets its value from a Provider, not from a fake default like {} as Theme. | Coverage | info | error |
-| [provider-missing](react-context/provider-missing.md) | A component that reads a required context is rendered under that context's Provider. | Core | error | error |
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [fake-default-value](react-context/fake-default-value.md) | a context created with a fake default like `{} as Theme` or `null!` | A default like `{} as Theme` is used when the Provider is missing, so the code reads an empty object typed as a full one and fails later. | Coverage | info | error |
+| [provider-missing](react-context/provider-missing.md) | a component that reads a required context, rendered with no Provider above it | A component that reads a required context outside its Provider gets the default value or an error at run time; the finding shows the render path without it. | Core | error | error |
 
 ## [errors](../packs/errors.md)
 
-Errors are handled where they can happen: nothing swallowed, nothing lost in finally, no Result dropped. Package: `@stateward/plugin-errors`.
+Errors are handled where they can happen: none ignored, none replaced in `finally`, no `Result` dropped. Package: `@stateward/plugin-errors`.
 
-| Rule | What it finds | Kind | `recommended` | `strict` |
-| --- | --- | --- | --- | --- |
-| [must-handle-error](errors/must-handle-error.md) | An error class marked @mustHandle is named in a catch or passed on with @throws by every call that can throw it. | Core | error | error |
-| [result-ignored](errors/result-ignored.md) | The Result of a call is checked or passed on, not dropped as a statement, after void or after await. | Core | error | error |
-| [result-unchecked](errors/result-unchecked.md) | A call that reports failure in its value, not by throwing, is checked before the code goes on as if it worked. (heuristic) | Core | warning | warning |
-| [throws-doc-mismatch](errors/throws-doc-mismatch.md) | A function's @throws tag lists exactly the error classes it can throw, as far as stateward can see. | Core | error | error |
-| [catch-hides-unexpected](errors/catch-hides-unexpected.md) | A catch that handles some errors with instanceof also rethrows or handles all the others. | Core | error | error |
-| [catch-misses-error](errors/catch-misses-error.md) | A catch that branches with instanceof handles every error class its try can throw, or rethrows the rest; so does an error boundary's fallback. | Core | error | error |
-| [finally-can-throw](errors/finally-can-throw.md) | A finally block does not call something that throws, so the error that led to it is not lost. | Core | error | error |
-| [catch-without-intent](errors/catch-without-intent.md) | Experimental: on real projects it is mostly wrong; it may change or be removed. A catch that handles every error says how: it narrows, reports, or falls back; one that only logs, or calls something stateward cannot judge, and carries on is reported. (heuristic) | Add-on `catch-intent` | warning | warning |
-| [narrow-try](errors/narrow-try.md) | Calls to your own code placed in a `try` after the call it is for: move them after the `try`. | Add-on `narrow-try` | warning | warning |
-| [render-throw-without-boundary](errors/render-throw-without-boundary.md) | A component that can throw a known error while rendering has an error boundary above it. | Core | warning | warning |
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [must-handle-error](errors/must-handle-error.md) | a call that can throw an error marked `@mustHandle`, with no code that handles or passes it on | An error marked `@mustHandle` needs a decision at each call, such as a message to the user; a call that neither catches it nor passes it on lets it reach the top. | Core | error | error |
+| [result-ignored](errors/result-ignored.md) | a `Result` dropped as a statement, after `void` or after `await` | A `Result` dropped as a statement discards its error, so a failed call looks the same as a successful one. | Core | error | error |
+| [result-unchecked](errors/result-unchecked.md) | a call that fails in its value (an RTK Query trigger, a Result) used as if it had worked (guess) | A call that returns its failure instead of throwing never reaches the `catch`; without a check, the code after it runs as if the call worked. | Core | warning | warning |
+| [throws-doc-mismatch](errors/throws-doc-mismatch.md) | a `@throws` tag that lists an error the function cannot throw, or misses one it can | Callers decide what to catch from `@throws`: a class it omits reaches them unhandled, and a class listed in excess asks them to handle a case that cannot happen. | Core | error | error |
+| [catch-hides-unexpected](errors/catch-hides-unexpected.md) | a `catch` that handles some error classes with `instanceof` and ignores the rest | A `catch` that tests some error classes and has no last branch ignores every other error, bugs included; rethrowing the rest keeps them visible. | Core | error | error |
+| [catch-misses-error](errors/catch-misses-error.md) | a `catch` that branches on error classes but misses one its `try` can throw | An error class the `try` can throw and the `catch` does not test goes to the generic branch, or is ignored; a branch for it, or a rethrow, handles it explicitly. | Core | error | error |
+| [finally-can-throw](errors/finally-can-throw.md) | a `finally` that calls something that can throw and replace the original error | An error thrown in `finally` replaces the error that was already thrown, so the report names the cleanup instead of the original cause. | Core | error | error |
+| [narrow-try](errors/narrow-try.md) | calls to your own code inside a `try` after the call it is for, so their bugs look like its failure | A bug in code inside a `try` meant for another call is caught and reported as that call's failure; moving the code after the `try` keeps the two apart. | Add-on `narrow-try` | warning | warning |
+| [render-throw-without-boundary](errors/render-throw-without-boundary.md) | a component that can throw a known error while rendering, with no error boundary above it | An error thrown while rendering, with no error boundary above the component, unmounts the whole React tree and leaves a blank page. | Core | warning | warning |
 
 ## [ownership](../packs/ownership.md)
 
 One owner per piece of shared state and per brand: others call the owner's functions. Package: `@stateward/plugin-ownership`.
 
-| Rule | What it finds | Kind | `recommended` | `strict` |
-| --- | --- | --- | --- | --- |
-| [brand-built-outside-owner](ownership/brand-built-outside-owner.md) | A branded value that has a check is built only by that check, in the file that declares the brand. | Core | error | error |
-| [state-written-outside-owner](ownership/state-written-outside-owner.md) | Shared module-level state is changed only by the module that declares it; others call its functions. | Core | error | error |
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [brand-built-outside-owner](ownership/brand-built-outside-owner.md) | a cast to a checked brand like `as Positive` outside the file that owns its check | A cast to a checked brand like `Positive` outside its check skips the validation the brand stands for, so the type promises more than the value holds. | Core | error | error |
+| [state-written-outside-owner](ownership/state-written-outside-owner.md) | shared module state changed by a file other than the one that declares it | When several modules change the same module-level state, each change must be read to know its value; one owning module with functions keeps that in one place. | Core | error | error |
 
 ## [reducers](../packs/reducers.md)
 
 A reducer reaches every state it declares and can leave every state it enters. Package: `@stateward/plugin-reducers`.
 
-| Rule | What it finds | Kind | `recommended` | `strict` |
-| --- | --- | --- | --- | --- |
-| [state-cannot-leave](reducers/state-cannot-leave.md) | A state a reducer reaches but never leaves is marked final, so a missing way out does not go unnoticed. | Core | warning | warning |
-| [state-unreachable](reducers/state-unreachable.md) | A state of a reducer that no event can lead to. | Core | error | error |
-| [reducer-not-readable](reducers/reducer-not-readable.md) | A place in or around a reducer that stateward cannot read, so its other reducer checks cannot cover it. | Coverage | info | error |
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [state-cannot-leave](reducers/state-cannot-leave.md) | a reducer state that nothing leaves and that is not marked final | A reducer state with no way out keeps the user there for good, such as a failed payment with no retry; marking it final records that this is intended. | Core | warning | warning |
+| [state-unreachable](reducers/state-unreachable.md) | a state of a reducer's union that no event can lead to | A reducer state that no event leads to is code that can never run, often a step that was planned and not written. | Core | error | error |
+| [reducer-not-readable](reducers/reducer-not-readable.md) | a reducer, or a `return` in one, whose states cannot be read, so the reducer checks skip it | The reducer checks skip a place whose states cannot be read; a type that names its states brings it back under those checks. | Coverage | info | error |
 
 ## [react](../packs/react.md)
 
 Values that effects and memoized components depend on keep their identity; effects do not copy state, loop, leak or race; state updates see the latest state; flags do not stand in for one state. Package: `@stateward/plugin-react`.
 
-| Rule | What it finds | Kind | `recommended` | `strict` |
-| --- | --- | --- | --- | --- |
-| [effect-copies-derived-value](react/effect-copies-derived-value.md) | A value computed from props or state is computed while rendering, not copied into state by an effect. | Core | warning | warning |
-| [effect-loops](react/effect-loops.md) | An effect does not set, every time it runs, a state it depends on to a new value: that is a render loop. | Core | error | error |
-| [effect-missing-cleanup](react/effect-missing-cleanup.md) | An effect that starts a listener, timer, subscription, observer or connection returns a cleanup that stops it. | Core | warning | warning |
-| [timer-runs-after-unmount](react/timer-runs-after-unmount.md) | A timer a component keeps in a ref is cleared when the component unmounts, so it cannot run after the component is gone. | Core | warning | warning |
-| [effect-response-race](react/effect-response-race.md) | An effect that loads data ignores a response that arrives after its inputs have changed. (heuristic) | Add-on `effect-race` | warning | warning |
-| [dependency-changes-every-render](react/dependency-changes-every-render.md) | A dependency of an effect, `useMemo` or `useCallback`, or a prop of a `memo` component, is not a new value that a custom hook creates on every render. | Core | warning | warning |
-| [index-key-on-reordered-list](react/index-key-on-reordered-list.md) | A list that is filtered, sorted, reversed, spliced or added to at the front is not keyed by the position of its rows. (heuristic) | Core | warning | warning |
-| [provider-value-changes-every-render](react/provider-value-changes-every-render.md) | A context Provider is not given a value created anew on every render. | Core | warning | warning |
-| [closure-reads-stale-state](react/closure-reads-stale-state.md) | A state setter called from a timer, a listener or a callback that outlives its render passes an updater function, not a value computed from the state. | Core | warning | warning |
-| [state-copies-prop](react/state-copies-prop.md) | A state is not a copy of a prop that an effect keeps in step: one value, one owner. | Core | warning | warning |
-| [flags-allow-impossible-combos](react/flags-allow-impossible-combos.md) | Boolean or nullable useState values that are read or set together become one state, so combinations that make no sense cannot happen. (heuristic) | Add-on `flag-combos` | warning | warning |
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [effect-copies-derived-value](react/effect-copies-derived-value.md) | an effect that only copies a value computed from props or state into state | Copying a computed value into state in an effect adds a render that shows the old value first; computing it while rendering shows the new value at once. | Core | warning | warning |
+| [effect-loops](react/effect-loops.md) | an effect that sets, every time it runs, a state it depends on: a render loop | An effect that sets one of its own dependencies to a new value each time it runs triggers itself again, so the component renders without end. | Core | error | error |
+| [effect-missing-cleanup](react/effect-missing-cleanup.md) | an effect that starts a listener, timer, subscription or connection and never stops it | A listener, timer or subscription that an effect starts and never stops keeps running after unmount, and each run of the effect adds another one. | Core | warning | warning |
+| [effect-response-race](react/effect-response-race.md) | an effect that calls a loader taking an `AbortSignal` and does not abort it in its cleanup | Without an abort in the cleanup, the response to an old request can arrive after a newer one and replace the newer data on screen. | Core | error | error |
+| [timer-runs-after-unmount](react/timer-runs-after-unmount.md) | a timer kept in a ref, never cleared on unmount, that navigates or calls out later | A timer kept in a ref and not cleared on unmount still runs after the component is gone, and can navigate or call out from a page the user left. | Core | warning | warning |
+| [dependency-changes-every-render](react/dependency-changes-every-render.md) | an effect or memo dependency that a hook in the project creates anew on every render | A dependency that a hook in the project creates on every render makes the effect or `useMemo` run on every render, and a `memo` child render every time. | Core | warning | warning |
+| [index-key-on-reordered-list](react/index-key-on-reordered-list.md) | `key={index}` on a list that is filtered, sorted or added to at the front (guess) | With `key={index}` on a list that is filtered or reordered, React keeps each row's state by position, so the state moves to a different item. | Core | warning | warning |
+| [provider-value-changes-every-render](react/provider-value-changes-every-render.md) | a context Provider given a new object or function on every render | A Provider value created on every render re-renders every component that reads the context, even when nothing in the value changed. | Core | warning | warning |
+| [closure-reads-stale-state](react/closure-reads-stale-state.md) | a timer, listener or callback that sets state from a value captured in an old render | A timer or listener created in an earlier render reads the state of that render; setting state from it overwrites newer values, which an updater avoids. | Core | warning | warning |
+| [state-copies-prop](react/state-copies-prop.md) | a state copied from a prop and kept in sync by an effect | A state that copies a prop, kept in sync by an effect, differs from the prop for one render after each change and can overwrite what the user typed. | Core | warning | warning |

@@ -86,7 +86,7 @@ export function checkFallbacks(
       }));
       related.push({
         location: { file: chain.file, start: chain.at[0], end: chain.at[1] },
-        message: `\`${fallback.name}\` branches on the error here`,
+        message: `\`${fallback.name}\` branches on the error`,
       });
       report({
         message: fitted(
@@ -94,7 +94,7 @@ export function checkFallbacks(
             `\`${cut(fallback.name)}\` does not handle ${codeList(
               missing.map((one) => one.name),
               cut,
-            )}, which this boundary can catch`,
+            )}, which its boundary can catch`,
         ),
         hint: hint(fallback, chain, catchName(first.id, classes), missing.length),
         location: { file, start: fallback.at[0], end: fallback.at[1] },

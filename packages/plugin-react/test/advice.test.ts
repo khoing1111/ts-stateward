@@ -38,46 +38,46 @@ const MOVE_FIX =
 
 const skip = found(
   "onSkip",
-  "`onSkip` from `useSkip()` is a new function every render, so this effect runs after every render",
-  "move `onSkip` to module scope; it then never changes (quick fix)",
-  '() => {\n    console.info("skipped");\n  }: `onSkip` is created here on every render of `useSkip`',
+  "effect runs after every render: `onSkip` from `useSkip()` is a new function each time",
+  "move `onSkip` to module scope, so it never changes (quick fix)",
+  '() => {\n    console.info("skipped");\n  }: `onSkip` is created on every render of `useSkip`',
   { fixes: [MOVE_FIX] },
 );
 const log = found(
   "onLog",
-  "`onLog` from `useLog()` is a new function every render, so this effect runs after every render",
-  "move `onLog` to module scope; it then never changes",
-  '() => console.info("logged"): `onLog` is created here on every render of `useLog`',
+  "effect runs after every render: `onLog` from `useLog()` is a new function each time",
+  "move `onLog` to module scope, so it never changes",
+  '() => console.info("logged"): `onLog` is created on every render of `useLog`',
 );
 const index = found(
   "index",
-  "`index` from `resolveIndexState(…)` is a new object every render, so this effect runs after every render",
+  "effect runs after every render: `index` from `resolveIndexState(…)` is a new object each time",
   "wrap the call in `useMemo` on its inputs: `useMemo(() => resolveIndexState(urlState, saved), [urlState, saved])`",
-  "{ page: urlState.length, filter: saved.filter }: a new object is created here on every call of `resolveIndexState`",
+  "{ page: urlState.length, filter: saved.filter }: a new object is created on every call of `resolveIndexState`",
 );
 const undo = found(
   "onUndo",
-  "`onUndo` from `useUndo(…)` is a new function every render, so this effect runs after every render",
+  "effect runs after every render: `onUndo` from `useUndo(…)` is a new function each time",
   "make `entries` and `position` parameters of `onUndo` and pass them where it is called",
-  "() => restore(entries, position): `onUndo` is created here on every render of `useUndo`",
+  "() => restore(entries, position): `onUndo` is created on every render of `useUndo`",
 );
 const toolbar = found(
   "onUndo",
-  "`onUndo` from `useUndo(…)` is a new function every render, so `<Toolbar>` re-renders every time",
+  "`<Toolbar>` re-renders every time: `onUndo` from `useUndo(…)` is a new function each time",
   "wrap `onUndo` in `useCallback` inside `useUndo` (hooks.ts:25)",
-  "() => restore(entries, position): `onUndo` is created here on every render of `useUndo`",
+  "() => restore(entries, position): `onUndo` is created on every render of `useUndo`",
 );
 const select = found(
   "onSelect",
-  "`onSelect` from `useRows()` is a new function every render, so `<RowList>` re-renders every time",
+  "`<RowList>` re-renders every time: `onSelect` from `useRows()` is a new function each time",
   "keep the latest handler in a ref (React's `useEffectEvent`, or your own hook)",
-  "(id: string) => setRows(rows.filter((row) => row !== id)): `onSelect` is created here on every render of `useRows`",
+  "(id: string) => setRows(rows.filter((row) => row !== id)): `onSelect` is created on every render of `useRows`",
 );
 const swatch = found(
   "swatch",
-  "`swatch` from `useColor()` is built from `hsva`, so it changes whenever that does",
-  "stabilising it gains nothing: it really changes with `hsva`",
-  "{ hue: hsva.h, shade: hsva.v }: `swatch` is created here on every render of `useColor`",
+  "`swatch` from `useColor()` changes whenever `hsva` does: it is built from it",
+  "leave it as it is: it really changes with `hsva`",
+  "{ hue: hsva.h, shade: hsva.v }: `swatch` is created on every render of `useColor`",
   { severity: "info" },
 );
 
@@ -114,7 +114,7 @@ describe("one `stableHooks` setting for react/dependency-changes-every-render an
   const REDUX = fixture("real-b-redux");
   const RACE = "react/effect-response-race";
   const raced = (rules: Record<string, RuleConfig>): string[] =>
-    shown(REDUX, check(REDUX, rules, [react()], ["react/effect-race"]))
+    shown(REDUX, check(REDUX, rules, [react()], []))
       .filter((finding) => finding.rule === RACE)
       .map((finding) => finding.at);
 
@@ -122,7 +122,7 @@ describe("one `stableHooks` setting for react/dependency-changes-every-render an
     expect(raced({ [RACE]: ["warning", {}] })).toHaveLength(3);
     expect(
       raced({ [RACE]: ["warning", {}], [RULE]: ["warning", { stableHooks: ["use*Store"] }] }),
-    ).toEqual(["setOrders(found.filter((order) => order.includes(filter)))"]);
+    ).toEqual(["fetchOrders()"]);
   });
 });
 

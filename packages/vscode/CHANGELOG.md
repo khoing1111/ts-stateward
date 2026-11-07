@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.0
+
+- Hover a declaration typed `RequiredContext` or `Owned` to see whether it is proven, and for
+  which readers or writers. The code lens above it lists them; "Show the proof path" on an error
+  goes through each step from the error to the declaration.
+- Messages, quick-fix titles and labels state the problem first, in plain words ("Check again").
+
 ## 1.0.0
 
 The first release: findings as you type, quick fixes that are tried before they are offered,

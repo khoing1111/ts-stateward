@@ -268,6 +268,7 @@ describe("parseConfig", () => {
     [{ tier: "addon", addon: "Not Kebab" }, ".meta.addon must name the add-on in kebab-case"],
     [{ tier: "core", addon: "x" }, '.meta.addon is only for tier "addon", not "core"'],
     [{ tier: "core", heuristic: false }, ".meta.heuristic must be true when present"],
+    [{ summary: 3 }, ".meta.summary must be a string when present"],
   ])("rejects rule meta %j", (change, error) => {
     const rule = { ...probe.rules.calls, meta: { ...probe.rules.calls?.meta, ...change } };
     const result = parseConfig({ plugins: [{ ...probe, rules: { r: rule } }] }, dir);
@@ -284,6 +285,13 @@ describe("parseConfig", () => {
       addon: "sinks-and-registries",
       heuristic: true,
     };
+    const rule = { ...probe.rules.calls, meta };
+    const result = parseConfig({ plugins: [{ ...probe, rules: { r: rule } }] }, dir);
+    expect(result.ok && result.value.plugins[0]?.rules.r?.meta).toEqual(meta);
+  });
+
+  it("keeps a rule's summary", () => {
+    const meta = { ...probe.rules.calls?.meta, summary: "a call the probe finds" };
     const rule = { ...probe.rules.calls, meta };
     const result = parseConfig({ plugins: [{ ...probe, rules: { r: rule } }] }, dir);
     expect(result.ok && result.value.plugins[0]?.rules.r?.meta).toEqual(meta);

@@ -149,6 +149,36 @@ describe("stateward baseline", { timeout: 30_000 }, () => {
     expect(again.stdout).toBe("nothing to prune: all 3 baselined findings are still found\n");
   });
 
+  it("--prune drops entries of a rule its pack no longer has, and keeps those of a pack not loaded", async () => {
+    await run(["baseline"]);
+    const parsed: unknown = JSON.parse(readFileSync(baselinePath(), "utf8"));
+    if (typeof parsed !== "object" || parsed === null || !("findings" in parsed)) {
+      throw new Error("the baseline has no findings");
+    }
+    const findings: unknown[] = Array.isArray(parsed.findings) ? parsed.findings : [];
+    const [first] = findings;
+    if (typeof first !== "object" || first === null) throw new Error("the baseline is empty");
+    writeFileSync(
+      baselinePath(),
+      JSON.stringify({
+        ...parsed,
+        findings: [
+          ...findings,
+          { ...first, ruleId: "records/keyed-maps-out-of-sync", fingerprint: "a1" },
+          { ...first, ruleId: "elsewhere/kept-rule", fingerprint: "b2" },
+        ],
+      }),
+    );
+    const pruned = await run(["baseline", "--prune"]);
+    expect(pruned.code).toBe(0);
+    expect(pruned.stdout).toBe(
+      "pruned 0 fixed findings, and 1 finding of rules that no longer exist (records/keyed-maps-out-of-sync) from stateward.baseline.json; 5 still baselined\n",
+    );
+    const ids = entries().map((entry) => entry.ruleId);
+    expect(ids).not.toContain("records/keyed-maps-out-of-sync");
+    expect(ids).toContain("elsewhere/kept-rule");
+  });
+
   it("--prune without a baseline says what to run", async () => {
     const { code, stderr } = await run(["baseline", "--prune"]);
     expect(code).toBe(2);

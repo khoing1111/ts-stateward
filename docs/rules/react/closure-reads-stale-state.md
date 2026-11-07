@@ -2,77 +2,82 @@
 
 # react/closure-reads-stale-state
 
-A state setter called from a timer, a listener or a callback that outlives its render passes an updater function, not a value computed from the state.
-
-- Group: react/state
-- Tier: core (on in every preset)
-- Add-on: none
-- Heuristic: no
-- Severity under `recommended`: warning
-- Severity under `strict`: warning
-
-## Why
-
-`useEffect(() => { setInterval(() => setCount(count + 1), 1000); }, [])` reads `count` once, from the first render, and the interval keeps that function for as long as it runs. `count` is 0 every time the interval fires, so it sets 1 again and again and the counter stops at 1. The same happens to a chat listener that does `setMessages([...messages, message])`: every message replaces the list with the first render's messages plus one. Nothing is reported at runtime, and the code reads correctly.
-
-## When to use it
-
-Use it in any React app. It is a warning in every preset. It stays on with the React Compiler: the compiler memoizes values, but it does not change which render's value a timer or listener captured. A plain event handler written in JSX (`onClick={() => setCount(count + 1)}`) is not reported: React makes a new one on every render.
-
-## What it catches
-
-A setter called with an expression that reads its own state (`setCount(count + 1)`, `setItems([...items, item])`, `setFilters({ ...filters, page })`), inside a function that keeps running after its render:
-
-- the callback of `setInterval` or `setTimeout` started in an effect whose dependencies do not list the state (`[]` or other values), or an interval started anywhere else;
-- a listener added in an effect with `addEventListener`, `on`, `once`, `subscribe` or `addListener`, when the effect's dependencies do not list the state;
-- a `useCallback` whose dependencies do not list the state.
-
-### Bad
+A timer or listener created in an earlier render reads the state of that render; setting state from it overwrites newer values, which an updater avoids.
 
 ```tsx
-useEffect(() => {
-  const id = setInterval(() => setCount(count + 1), 1000);
-  return () => clearInterval(id);
-}, []);
+import { useEffect, useState } from "react";
+
+export function Counter() {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setCount(count + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <p>{count}</p>;
+}
 ```
 
-### Good
+`stateward check` prints:
+
+```text
+warning[react/closure-reads-stale-state]: the interval always sets 1: `count` is the value from the first render
+ --> example.tsx:6:34
+  |
+6 |     const id = setInterval(() => setCount(count + 1), 1000);
+  |                                  ^^^^^^^^^^^^^^^^^^^
+  = fix: pass an updater, which gets the latest value: `setCount((count) => count + 1)` (quick fix)
+  = docs: stateward explain react/closure-reads-stale-state
+```
+
+Pass an updater function, which React calls with the latest value:
 
 ```tsx
-useEffect(() => {
-  const id = setInterval(() => setCount((count) => count + 1), 1000);
-  return () => clearInterval(id);
-}, []);
+import { useEffect, useState } from "react";
+
+export function Counter() {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setCount((current) => current + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <p>{count}</p>;
+}
 ```
 
-### Fix
+The quick fix writes it for you. `check --fix` does not apply it, because the callback can read other values from the old render too, which only you can judge.
 
-Pass a function: `setCount((count) => count + 1)`. React calls it with the latest value. The quick fix writes it for you; it is not applied by `check --fix`, because the new function can read other values from the old render too, which only you can judge.
+## Why it matters
+
+The interval keeps the function it was given for as long as it runs, and that function read `count` once, from the first render. `count` is 0 every time the interval fires, so it sets 1 again and again and the counter stops at 1. The same happens to a chat listener that does `setMessages([...messages, message])`: every message replaces the list with the first render's messages plus one. Nothing fails at run time, and the code reads correctly.
+
+## When it says “not checked”
+
+When the effect's or callback's dependencies are not written as an array in the call, which render's value the function keeps is not known, and the rule lists the place as not checked. Write the array in the call.
 
 ## What it does not catch
 
-- A value computed first and set after (`const next = count + 1; setCount(next)`).
-- A setter that reads the state inside an updater function (`setCount((c) => c + count)`).
-- A state set after an `await` in an effect: the late response is the `react/effect-response-race` add-on's case.
-- A timer or listener started in a function the effect only calls, or one whose dependencies are not written as an array in the call (stateward says it cannot tell).
-- A `setTimeout` started in an event handler: it runs once, soon after the click.
+It reports a setter called with an expression that reads its own state (`setCount(count + 1)`, `setItems([...items, item])`, `setFilters({ ...filters, page })`), inside a function that outlives its render: the callback of `setInterval` or `setTimeout` started in an effect whose dependencies do not list the state (or an interval started anywhere else); a listener added in such an effect with `addEventListener`, `on`, `once`, `subscribe` or `addListener`; or a `useCallback` whose dependencies do not list the state. It is silent on:
 
-When the rule cannot read the dependency array, it reports an info finding with how to make it checkable.
+- a plain event handler written in JSX (`onClick={() => setCount(count + 1)}`): React makes a new one on every render;
+- a `setTimeout` started in an event handler: it runs once, soon after the click;
+- a value computed first and set after (`const next = count + 1; setCount(next)`);
+- a setter that reads the state inside an updater function (`setCount((c) => c + count)`);
+- a state set after an `await` in an effect: a late response is the case of the `react/effect-response-race` add-on;
+- a timer or listener started in a function the effect only calls.
+
+It stays on with the React Compiler: the compiler memoizes values, but it does not change which render's value a timer or listener keeps.
 
 ## Turn it on or off
 
-In `stateward.config.ts`:
-
 ```ts
 rules: { "react/closure-reads-stale-state": "off" } // or "error"
-groups: { "react/state-updates": "off" } // the whole group
 rules: { "react/closure-reads-stale-state": ["warning", { listenerMethods: ["addEventListener", "on", "listen"] }] } // your event bus
 ```
 
-### Options
-
-Set as `rules: { "react/closure-reads-stale-state": ["warning", { … }] }`.
+Options, set as `rules: { "react/closure-reads-stale-state": ["warning", { … }] }`:
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `listenerMethods` | list of strings | `["addEventListener","on","once","subscribe","addListener"]` | Methods that keep a function to call later, like a listener (add your event bus's `listen`…). |
+
+Core rule: warning under `recommended` and `strict`. Group: `react/state`.

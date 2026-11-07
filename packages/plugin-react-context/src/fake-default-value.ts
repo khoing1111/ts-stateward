@@ -5,32 +5,27 @@ const REACT_PACKAGE = /[\\/]node_modules[\\/](?:@types[\\/])?react[\\/]/;
 
 const EXPLAIN = `# react-context/fake-default-value
 
-A React context gets its value from a Provider, not from a fake default like {} as Theme.
+A default like \`{} as Theme\` is used when the Provider is missing, so the code reads an empty object typed as a full one and fails later.
 
-## Why
+\`\`\`tsx example-bad
+import { createContext, useContext } from "react";
 
-\`createContext({} as Theme)\`, or \`createContext<Theme>(null!)\`, hands every component a fake value when the Provider is missing. The type says a theme is there; at run time it is not. \`useContext(ThemeContext).colors\` then fails far from where the Provider is missing, or quietly reads an empty object.
+type Theme = { colors: { text: string } };
 
-## When to use it
-
-Use it in any React app. It shows as info under \`recommended\` (a hint in the editor that does not fail the check) and as an error under \`strict\`. It is the first step towards \`react-context/provider-missing\`, which then checks that every reader has a Provider above it. Turn it off if your defaults are real values (a default theme, a logger that does nothing).
-
-## What it catches
-
-React's \`createContext\` (also as \`React.createContext\`) called with a fake default: a cast (\`{} as Theme\`, \`[] as Item[]\`, \`null!\`, \`<Theme>{}\`) or an empty object \`{}\`.
-
-### Bad
-
-\`\`\`tsx
 const ThemeContext = createContext({} as Theme);
-const ThemeContext = createContext<Theme>(null!);
+
+export function Title() {
+  return <h1 style={{ color: useContext(ThemeContext).colors.text }}>Hello</h1>;
+}
 \`\`\`
 
-### Good
+Create the context with \`undefined\`, so its type says the value can be missing, and read it through a hook that throws when it is:
 
-Create the context with \`undefined\` (or \`null\`), so its type says the value can be missing, and read it through a hook that throws when it is:
+\`\`\`tsx example-good
+import { createContext, useContext } from "react";
 
-\`\`\`tsx
+type Theme = { colors: { text: string } };
+
 const ThemeContext = createContext<Theme | undefined>(undefined);
 
 function useTheme(): Theme {
@@ -38,30 +33,35 @@ function useTheme(): Theme {
   if (theme === undefined) throw new Error("useTheme needs a ThemeContext Provider");
   return theme;
 }
+
+export function Title() {
+  return <h1 style={{ color: useTheme().colors.text }}>Hello</h1>;
+}
 \`\`\`
 
-\`react-context/provider-missing\` then checks that every component reading it through \`useTheme\` has a Provider above it.
+There is no quick fix, since every read changes. Once the context says it can be missing, \`react-context/provider-missing\` checks that every component reading it has a Provider above it. Its quick fix then states the context required (\`requiredContext<Theme>()\`), and the readers need no check at all.
 
-### Fix
+## Why it matters
 
-Create the context with \`undefined\` and read it through a hook that throws when it is missing. There is no quick fix, since every read changes.
+\`createContext({} as Theme)\`, or \`createContext<Theme>(null!)\`, hands every component a fake value when the Provider is missing. The type says a theme is there; at run time it is not. \`useContext(ThemeContext).colors.text\` then throws far from where the Provider is missing, or quietly reads an empty object.
 
 ## What it does not catch
 
-- A real default: \`createContext({ colors: defaultColors })\`, or \`createContext([])\`.
-- \`createContext<Callbacks>({})\` when no property of \`Callbacks\` is required: \`{}\` is then a complete value of the type.
-- \`undefined\` or \`null\` as the default (\`createContext<Theme | null>(null)\`, \`createContext(null as Theme | null)\`): the context's type then says the value can be missing, an optional or a required context on purpose, and TypeScript makes the readers check it. \`null!\` and \`undefined as unknown as Theme\` hide it, and are reported.
-- A cast deeper inside the default (\`{ user: null as User }\`): only the value as a whole is read.
-- Contexts from other libraries' \`createContext\`.
-- Whether a Provider is missing: that is \`react-context/provider-missing\`.
+It looks at React's \`createContext\` (also \`React.createContext\`) called with a cast (\`{} as Theme\`, \`[] as Item[]\`, \`null!\`, \`<Theme>{}\`) or an empty object \`{}\`. It is silent on:
+
+- a real default: \`createContext({ colors: defaultColors })\`, or \`createContext([])\`;
+- \`createContext<Callbacks>({})\` when no property of \`Callbacks\` is required: \`{}\` is then a complete value of the type;
+- \`undefined\` or \`null\` as the default (\`createContext<Theme | null>(null)\`, \`createContext(null as Theme | null)\`): the type then says the value can be missing, and TypeScript makes the readers check it. \`null!\` and \`undefined as unknown as Theme\` hide that, and are reported;
+- a cast deeper inside the default (\`{ user: null as User }\`): only the value as a whole is read;
+- contexts from other libraries' \`createContext\`;
+- the one cast of a helper that returns a \`RequiredContext\` (\`requiredContext<T>()\` in your \`guarantees.ts\`): \`react-context/provider-missing\` proves every reader of such a context is under its Provider, so its default is never read. A context stated required but made with a cast anywhere else is still reported, and the fix line points at the helper.
 
 ## Turn it on or off
 
-In \`stateward.config.ts\`:
+It shows as info under \`recommended\` (a hint in the editor that does not fail the check) and as an error under \`strict\`. Turn it off if your defaults are real values (a default theme, a logger that does nothing):
 
 \`\`\`ts
 rules: { "react-context/fake-default-value": "off" } // or "warning"
-groups: { "react-context/defaults": "off" } // the whole group
 rules: { "react-context/fake-default-value": ["error", { severities: { empty: "info" } }] } // only casts are errors
 \`\`\`
 `;
@@ -191,12 +191,15 @@ function statesMissing(argument: ts.Expression): boolean {
 
 const MAX_ARGUMENT_LENGTH = 30;
 
-/** The variable the call initialises (`const X = createContext(...)`), else a generic phrase. */
+/** The name of a context that initialises no variable, as the `ignore` option matches it. */
+const UNNAMED = "this context";
+
+/** The variable the call initialises (`const X = createContext(...)`), else `UNNAMED`. */
 function contextName(call: ts.CallExpression): string {
   const parent = call.parent;
   return ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)
     ? parent.name.text
-    : "this context";
+    : UNNAMED;
 }
 
 /** The argument on one line and at most 30 characters. */
@@ -209,7 +212,8 @@ function argumentText(argument: ts.Expression, sourceFile: ts.SourceFile): strin
 
 /** Code is written in backticks, so the message standard reads only the prose around it. */
 function headline(name: string, argument: string): string {
-  return `\`${name}\` gets a placeholder value (\`${argument}\`) when its Provider is missing`;
+  const context = name === UNNAMED ? "context" : `\`${name}\``;
+  return `${context} defaults to a fake value, \`${argument}\``;
 }
 
 /**
@@ -232,20 +236,58 @@ function hint(name: string, call: ts.CallExpression, sourceFile: ts.SourceFile):
   ].map((line) =>
     line.length <= MAX_EXAMPLE_LINE ? line : `${line.slice(0, MAX_EXAMPLE_LINE - 1)}\u2026`,
   );
-  const head = "create it with `undefined` and read it in a hook that throws when it is missing:";
+  const head =
+    "create it with `undefined` and read it in a hook that throws, so a missing Provider fails at once:";
   return [head, ...lines].join("\n");
 }
 
 const MAX_EXAMPLE_LINE = 100;
 
+/** The guarantee of a `RequiredContext` (`TypeQueries.guaranteesOf`). */
+const REQUIRED_CONTEXT = "required-context";
+
+/**
+ * Whether the call is the helper's one cast: written in a function declared to return a
+ * `RequiredContext` (`function requiredContext<T>(): RequiredContext<T>`), whose readers stateward
+ * proves are all under a Provider, so the default is never read.
+ */
+function inRequiredHelper(call: ts.CallExpression, ctx: FileContext): boolean {
+  let current: ts.Node = call.parent;
+  while (!ts.isSourceFile(current) && !ts.isFunctionLike(current)) current = current.parent;
+  if (!ts.isFunctionLike(current) || current.type === undefined) return false;
+  return ctx.types.guaranteesOf(current.type).includes(REQUIRED_CONTEXT);
+}
+
+/** Whether the call initialises a variable stated required (`const X: RequiredContext<T> = …`). */
+function statedRequired(call: ts.CallExpression, ctx: FileContext): boolean {
+  let parent = call.parent;
+  while (ts.isParenthesizedExpression(parent) || ts.isAsExpression(parent)) parent = parent.parent;
+  return (
+    ts.isVariableDeclaration(parent) &&
+    ctx.types.guaranteesOf(parent.name).includes(REQUIRED_CONTEXT)
+  );
+}
+
+/** For a context stated required: the helper that makes one without a placeholder in sight. */
+function statedHint(call: ts.CallExpression, sourceFile: ts.SourceFile): string {
+  const type = call.typeArguments?.[0]?.getText(sourceFile).replace(/\s+/g, " ").trim() ?? "T";
+  const line = `    requiredContext<${type}>()`;
+  return [
+    "create it with the helper of the guarantees file, which holds the one cast:",
+    line.length <= MAX_EXAMPLE_LINE ? line : `${line.slice(0, MAX_EXAMPLE_LINE - 1)}\u2026`,
+  ].join("\n");
+}
+
 export const fakeDefaultValue = defineRule({
   kind: "file",
   meta: {
     description:
-      "A React context gets its value from a Provider, not from a fake default like {} as Theme.",
+      "A default like `{} as Theme` is used when the Provider is missing, so the code reads an empty object typed as a full one and fails later.",
+    summary: "a context created with a fake default like `{} as Theme` or `null!`",
     defaultSeverity: "error",
     tier: "coverage",
     group: "defaults",
+    needsTypes: { library: "React", modules: ["react"] },
     options: {
       severities: option.severities({
         kinds: {
@@ -271,12 +313,15 @@ export const fakeDefaultValue = defineRule({
         if (
           argument !== undefined &&
           kind !== undefined &&
-          !matchesName(name, ctx.options.ignore)
+          !matchesName(name, ctx.options.ignore) &&
+          !(kind === "cast" && inRequiredHelper(node, ctx))
         ) {
           ctx.report({
             node,
             message: headline(name, argumentText(argument, ctx.sourceFile)),
-            hint: hint(name, node, ctx.sourceFile),
+            hint: statedRequired(node, ctx)
+              ? statedHint(node, ctx.sourceFile)
+              : hint(name, node, ctx.sourceFile),
             findingKind: kind,
           });
         }

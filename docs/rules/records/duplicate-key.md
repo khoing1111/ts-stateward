@@ -2,74 +2,65 @@
 
 # records/duplicate-key
 
-A new Map([...]) or new Set([...]) written out in code has the same key twice, so the second replaces the first.
-
-- Group: records/keys
-- Tier: core (on in every preset)
-- Add-on: none
-- Heuristic: no
-- Severity under `recommended`: error
-- Severity under `strict`: error
-
-A `new Map([...])` or `new Set([...])` written out in code has the same key twice.
-
-## Why
-
-`new Map([["recent", a], ["recent", b]])` keeps only `b`. Nothing fails: `a` is gone, and the code that read `a` from the map gets `b`. It usually happens when a long list of entries is copied and one key is not renamed. A `Set` with a repeated item works, but the repeat is a leftover that hides a mistake (a missing item).
-
-## When to use it
-
-Use it in any project. It only reports keys that are plain constants, so it does not guess, and it is an error under every preset.
-
-## What it catches
-
-A `new Map([...])` whose entries are written out as `[key, value]` pairs, or a `new Set([...])`, when two keys are the same constant: a string, a number, an enum member, or a `const` whose type is one value (`const RECENT = "recent"`). The finding is on the second key, and the first is listed as a related place. `"recent"` and `RECENT` are the same key when `RECENT` is `"recent"`.
-
-### Bad
+The same key twice in a `new Map([...])` or `new Set([...])` keeps only the last entry, so the first one has no effect.
 
 ```ts
-const groups = new Map([
-  ["recent", recentEmojis],
-  ["people", peopleEmojis],
-  ["recent", otherEmojis],
+export const shortcuts = new Map([
+  ["save", "Ctrl+S"],
+  ["open", "Ctrl+O"],
+  ["save", "Ctrl+Shift+S"],
 ]);
 ```
 
-### Good
+`stateward check` prints:
+
+```text
+error[records/duplicate-key]: `"save"` is in the Map twice; the second value replaces the first (first at line 2)
+ --> example.ts:4:4
+  |
+4 |   ["save", "Ctrl+Shift+S"],
+  |    ^^^^^^
+  = fix: remove the entry that should not win, or give it the key it was meant to have
+  = note: example.ts:2: first "save"
+  = docs: stateward explain records/duplicate-key
+```
+
+Give the entry the key it was meant to have, or remove the one that should lose:
 
 ```ts
-const groups = new Map([
-  ["recent", recentEmojis],
-  ["people", peopleEmojis],
-  ["custom", otherEmojis],
+export const shortcuts = new Map([
+  ["save", "Ctrl+S"],
+  ["open", "Ctrl+O"],
+  ["saveAs", "Ctrl+Shift+S"],
 ]);
 ```
 
-### Fix
+There is no quick fix: which of the two values is right is your call. The finding is on the second key, with the first listed as a related place.
 
-Remove the entry that should lose, or give it the key it was meant to have. There is no quick fix: which of the two values is right is your call.
+## Why it matters
+
+`new Map([["save", a], ["save", b]])` keeps only `b`. Nothing fails: `a` is gone, and the code that reads `"save"` gets `b`. It usually happens when a long list of entries is copied and one key is not renamed. A `Set` with a repeated item works, but the repeat is a leftover that hides a mistake, often an item that is missing.
 
 ## What it does not catch
 
-- An object literal with the same property twice: ESLint's `no-dupe-keys` (and TypeScript itself) reports that.
-- A key that is not a constant (a variable of type `string`, a call), and entries added later with `.set()` or `.add()`.
-- A list built elsewhere (`new Map(entries)`, `new Map(Object.entries(x))`) and entries that come from a spread.
-- A `Map` or `Set` class of your own, and `WeakMap` / `WeakSet`.
+It compares only keys that are constants: a string, a number, an enum member, or a `const` whose type is one value (`"save"` and `SAVE` are the same key when `const SAVE = "save"`). So it never guesses, and it does not see:
+
+- a key that is not a constant (a variable of type `string`, a call), or entries added later with `.set()` or `.add()`;
+- a list built elsewhere (`new Map(entries)`, `new Map(Object.entries(x))`), or entries from a spread;
+- a `Map` or `Set` class of your own, and `WeakMap` / `WeakSet`;
+- an object literal with the same property twice: TypeScript and ESLint's `no-dupe-keys` report that.
 
 ## Turn it on or off
-
-In `stateward.config.ts`:
 
 ```ts
 rules: { "records/duplicate-key": "off" } // or "warning"
 rules: { "records/duplicate-key": ["error", { ignore: ["*_ALIASES"] }] } // generated tables
-groups: { "guards/lookups": "off" } // the whole group
 ```
 
-### Options
-
-Set as `rules: { "records/duplicate-key": ["error", { … }] }`.
+Options, set as `rules: { "records/duplicate-key": ["error", { … }] }`:
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `ignore` | list of strings | `[]` | Names of maps and sets (globs like *_ALIASES) whose repeats are deliberate, such as generated tables. |
+
+Core rule: error under `recommended` and `strict`. Group: `records/keys`.

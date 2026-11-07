@@ -5,62 +5,55 @@ import { example, resultShapeOf, shorten, type ResultShape } from "./result-type
 
 const EXPLAIN = `# errors/result-ignored
 
-The Result of a call is checked or passed on, not dropped as a statement, after void or after await.
+A \`Result\` dropped as a statement discards its error, so a failed call looks the same as a successful one.
 
-## Why
-
-A \`Result\` is how a function says "this can fail". Call \`saveUser(user)\` as a statement and the answer is thrown away: nobody sees the error, and the code goes on as if the user was saved. The failure shows up later, as missing data.
-
-## When to use it
-
-Use it if your functions return a \`Result\` instead of throwing: your own, neverthrow's, or a \`safeParse\` result. It is on as an error in every preset. To drop a result on purpose, list the function in \`ignore\`, or set \`allowVoid\` and write \`void save()\`.
-
-## What it catches
-
-A call whose value is a Result (or a \`Promise\` of one) that is dropped: written as a statement, after \`void\`, or after \`await\` on its own. A Result is recognised by its shape, so no library is needed:
-
-- a union told apart by \`ok: true\` and \`ok: false\` (\`{ ok: true; value: T } | { ok: false; error: E }\`);
-- a union told apart by \`success: true\` and \`success: false\` (zod's \`safeParse\`);
-- a type with \`isOk()\` and \`isErr()\` methods (neverthrow);
-- a type the \`resultTypes\` option names (\`["Result", "Either"]\`), whatever its shape.
-
-### Bad
-
-\`\`\`ts
+\`\`\`ts example-bad
 type Result<T> = { ok: true; value: T } | { ok: false; error: Error };
-declare function saveUser(user: User): Promise<Result<void>>;
 
-await saveUser(user);
+declare function saveUser(name: string): Promise<Result<void>>;
+
+export async function rename(name: string): Promise<void> {
+  await saveUser(name);
+}
 \`\`\`
 
-### Good
+Check the result, or return it to your caller:
 
-\`\`\`ts
-const saved = await saveUser(user);
-if (!saved.ok) return saved;
+\`\`\`ts example-good
+type Result<T> = { ok: true; value: T } | { ok: false; error: Error };
+
+declare function saveUser(name: string): Promise<Result<void>>;
+
+export async function rename(name: string): Promise<Result<void>> {
+  const saved = await saveUser(name);
+  if (!saved.ok) return saved;
+  return { ok: true, value: undefined };
+}
 \`\`\`
 
-### Fix
+The message shows how, with your names and your Result's shape. There is no quick fix.
 
-Check the result, or return it to your caller; the message shows how with your names and your Result's shape. There is no quick fix.
+## Why it matters
+
+A \`Result\` is how a function says "this can fail". Call \`saveUser(name)\` as a statement and the answer is discarded: no code reads the error, and the code goes on as if the user was saved. The failure shows up later, as missing data.
 
 ## What it does not catch
 
-- A result that is assigned, returned, passed on, used in a condition or spread.
-- A Result of another shape (an \`Either\` with \`_tag\`, a tuple \`[error, value]\`), unless \`resultTypes\` names it.
-- A result dropped in a callback that returns nothing (\`items.forEach((item) => save(item))\`), or after \`&&\` or \`?.\`.
-- A result stored and never looked at (\`const saved = saveUser(user);\` with \`saved\` unused).
-- Reading \`.value\` without checking \`.ok\`.
+A Result is recognised by its shape, so no library is needed: a union told apart by \`ok: true\` and \`ok: false\`, or by \`success: true\` and \`success: false\` (zod's \`safeParse\`); a type with \`isOk()\` and \`isErr()\` methods (neverthrow); or a type the \`resultTypes\` option names. It is silent on:
+
+- a result that is assigned, returned, passed on, used in a condition or spread;
+- a Result of another shape (an \`Either\` with \`_tag\`, a tuple \`[error, value]\`), unless \`resultTypes\` names it;
+- a result dropped in a callback that returns nothing (\`items.forEach((item) => save(item))\`), or after \`&&\` or \`?.\`;
+- a result stored and never looked at (\`const saved = saveUser(name);\` with \`saved\` unused), and reading \`.value\` without checking \`.ok\`: \`errors/result-unchecked\` looks at those reads.
 
 ## Turn it on or off
 
-In \`stateward.config.ts\`:
+To drop a result on purpose, list the function in \`ignore\`, or set \`allowVoid\` and write \`void save()\`:
 
 \`\`\`ts
-rules: { "errors/result-ignored": "off" } // or "warning"
-groups: { "values/results": "off" } // the whole group
 rules: { "errors/result-ignored": ["error", { allowVoid: true }] } // \`void save()\` drops it on purpose
 rules: { "errors/result-ignored": ["error", { resultTypes: ["Either"] }] } // your own name for a Result
+rules: { "errors/result-ignored": "off" }
 \`\`\`
 `;
 
@@ -149,7 +142,7 @@ function checkStatement(statement: ts.ExpressionStatement, ctx: FileContext<Sett
   ctx.report({
     node: statement,
     about: statement,
-    message: `the result of \`${calleeText(call, ctx)}(…)\` is dropped, so its error is never handled`,
+    message: `the \`Result\` of \`${calleeText(call, ctx)}(…)\` is dropped: its error is never handled`,
     hint: [
       "check it, or pass it on:",
       example([`const saved = ${promised ? "await " : ""}${callText};`, checkLine(shape)]),
@@ -161,7 +154,8 @@ export const resultIgnored = defineRule({
   kind: "file",
   meta: {
     description:
-      "The Result of a call is checked or passed on, not dropped as a statement, after void or after await.",
+      "A `Result` dropped as a statement discards its error, so a failed call looks the same as a successful one.",
+    summary: "a `Result` dropped as a statement, after `void` or after `await`",
     defaultSeverity: "error",
     tier: "core",
     group: "callers",

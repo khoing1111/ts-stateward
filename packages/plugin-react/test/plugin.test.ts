@@ -16,12 +16,11 @@ describe("react", () => {
       "timer-runs-after-unmount",
       "closure-reads-stale-state",
       "index-key-on-reordered-list",
-      "flags-allow-impossible-combos",
     ]);
     expect(plugin.editor).toBeUndefined();
   });
 
-  it("gives each rule its kind, tier, group and severity; effect-response-race is a heuristic add-on, and index-key a heuristic core rule", () => {
+  it("gives each rule its kind, tier, group and severity; effect-response-race is a core proof its add-on widens, and index-key a heuristic core rule", () => {
     expect(
       Object.entries(react().rules).map(([key, rule]) => [
         key,
@@ -40,11 +39,11 @@ describe("react", () => {
       ["state-copies-prop", "file", "core", "state", "warning", null, false],
       ["effect-loops", "file", "core", "effects", "error", null, false],
       ["effect-missing-cleanup", "file", "core", "effects", "warning", null, false],
-      ["effect-response-race", "file", "addon", "effects", "warning", "effect-race", true],
+      ["effect-response-race", "file", "core", "effects", "error", null, false],
       ["timer-runs-after-unmount", "file", "core", "effects", "warning", null, false],
       ["closure-reads-stale-state", "file", "core", "state", "warning", null, false],
       ["index-key-on-reordered-list", "file", "core", "render", "warning", null, true],
-      ["flags-allow-impossible-combos", "file", "addon", "state", "warning", "flag-combos", true],
     ]);
+    expect(react().rules["effect-response-race"].meta.widenedBy).toEqual(["effect-race"]);
   });
 });

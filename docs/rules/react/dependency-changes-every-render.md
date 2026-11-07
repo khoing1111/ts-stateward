@@ -2,103 +2,108 @@
 
 # react/dependency-changes-every-render
 
-A dependency of an effect, `useMemo` or `useCallback`, or a prop of a `memo` component, is not a new value that a custom hook creates on every render.
+A dependency that a hook in the project creates on every render makes the effect or `useMemo` run on every render, and a `memo` child render every time.
 
-- Group: react/render
-- Tier: core (on in every preset)
-- Add-on: none
-- Heuristic: no
-- Severity under `recommended`: warning
-- Severity under `strict`: warning
-
-## Why
-
-An effect runs again whenever a dependency is a different value from the last render. A function or object that a custom hook creates inline is a new value on every render, so an effect that depends on it runs after every render: a request sent again and again, a subscription torn down and set up again, or a `setState` that loops. Nothing in the component shows it: the cause is inside the hook, often in another file.
+The hook in `cart.ts` creates a function inline:
 
 ```ts
-// cart.ts
+import { useState } from "react";
+
+declare function saveCart(items: string[]): void;
+
 export function useCart() {
-  const [items, setItems] = useState<Item[]>([]);
-  const onSave = () => api.save(items); // new function on every render
-  return { items, onSave };
+  const [items, setItems] = useState<string[]>([]);
+  const onSave = () => saveCart(items);
+  return { items, setItems, onSave };
 }
-
-// CartPage.tsx
-const { onSave } = useCart();
-useEffect(() => autosave(onSave), [onSave]); // runs after every render
 ```
 
-## When to use it
+`CartPage.tsx` depends on it in an effect:
 
-Use it in any React app that does not use the React Compiler. It is a warning in every preset. If your app uses the React Compiler (`babel-plugin-react-compiler` or `react-compiler-runtime` in the nearest `package.json`), the compiler keeps these values stable, so this rule and the rest of the `react/render-stability` group stay quiet.
+```tsx
+import { useEffect } from "react";
+import { useCart } from "./cart.js";
 
-## What it catches
+export function CartPage() {
+  const { items, onSave } = useCart();
+  useEffect(() => {
+    const timer = setInterval(onSave, 5000);
+    return () => clearInterval(timer);
+  }, [onSave]);
+  return <p>{items.length} items</p>;
+}
+```
 
-A dependency of `useEffect`, `useLayoutEffect`, `useInsertionEffect`, `useMemo` or `useCallback`, or a prop passed to a `memo` component, whose value one of your own functions creates on every render: an inline function, an object or array literal, `new X()`, or a new array from `map`, `filter`, `Object.keys` and the like. The value is followed through destructuring, property access and hooks calling hooks, across files. The finding is at the dependency, where the cost shows; a note points at the place in the hook that creates the value, and the fix line says how to stabilise it there, which fixes every caller at once.
+`stateward check` prints:
 
-A value from a plain function of yours (not a hook), such as `const columns = getColumns(prefix)`, is reported too. Since a hook cannot be called inside that function, the fix wraps the call instead.
+```text
+warning[react/dependency-changes-every-render]: effect runs after every render: `onSave` from `useCart()` is a new function each time
+ --> CartPage.tsx:9:7
+  |
+9 |   }, [onSave]);
+  |       ^^^^^^
+  = fix: wrap `onSave` in `useCallback` inside `useCart` (cart.ts:7)
+  = note: cart.ts:7: `onSave` is created on every render of `useCart`
+  = docs: stateward explain react/dependency-changes-every-render
+```
 
-### Bad
+Make the value stable where the hook creates it, in `cart.ts`, which fixes every caller at once:
 
 ```ts
-const { onSave } = useCart(); // useCart creates onSave inline
-useEffect(() => autosave(onSave), [onSave]);
+import { useCallback, useState } from "react";
+
+declare function saveCart(items: string[]): void;
+
+export function useCart() {
+  const [items, setItems] = useState<string[]>([]);
+  const onSave = useCallback(() => saveCart(items), [items]);
+  return { items, setItems, onSave };
+}
 ```
 
-### Good
+The finding is at the dependency, where the cost shows; a note points at the place in the hook that creates the value, and the fix line says how to make it stable there, depending on why it is new:
 
-```ts
-// cart.ts
-const onSave = useCallback(() => api.save(items), [items]);
-```
+- a function that uses nothing from its hook or component: move it to module scope, where it never changes (a quick fix, when it is a `const` or `function` in the body that calls no hook);
+- a fresh result of a plain function of yours (`const columns = getColumns(prefix)`): wrap the call in `useMemo` on its inputs (`useMemo(() => getColumns(prefix), [prefix])`); when an argument is itself new every render, the message says to make that argument stable first;
+- a function that uses only parameters of its hook, and that your code calls where it uses it: make those parameters of the function, and pass them at the call;
+- a function passed as an `on…` prop to a `memo` component: keep the latest handler in a ref (React's `useEffectEvent`, or your own hook, named when `stableHooks` lists it);
+- any other function, object or array: wrap it in `useCallback` or `useMemo` where it is created.
 
-### Fix
+## Why it matters
 
-The fix line depends on why the value is new:
+An effect runs again whenever a dependency is a different value from the last render. A function or object that a custom hook creates inline is a new value on every render, so the effect above clears and restarts its timer after every render, and a request sent from one would be sent again and again, or a `setState` would loop. Nothing in the component shows it: the cause is inside the hook, often in another file.
 
-- A function that uses nothing from its hook or component: move it to module scope (`move onSkip to module scope; it then never changes`). When it is a `const` or a `function` written in the body and calls no hook, the move is a quick fix.
-- A fresh result of a function of yours: wrap the call in `useMemo` on its inputs.
+## When it says “not checked”
 
-  ```ts
-  const columns = useMemo(() => getColumns(prefix), [prefix]);
-  ```
-
-  When an argument is itself new every render, the message says so: make that argument stable first.
-- A function that uses only parameters of its hook, and that your code calls where it uses it: make those parameters of the function and pass them at the call.
-- A function passed as an `on…` prop to a `memo` component: keep the latest handler in a ref (React's `useEffectEvent`, or your own hook). When `stableHooks` lists a hook of yours, the message names it.
-- Any other function, object or array: wrap it in `useCallback` or `useMemo` where it is created; the message says where.
-- A data value built only from the state whose change causes the render (`swatch` built from `hsva`): stabilising it gains nothing, since it really changes with that state. This is reported as info (the `derived` kind of `severities`).
+When the value comes from a hook in the project that stateward cannot read (built by a factory, `const useCart = createStore(…)`, or returning another object's method result), it lists the place as not checked, with how to make it checkable. `stateward check` counts these places in its summary and lists them with `--verbose` (or `stateward coverage`). When you know such a hook returns the same values on each render, name it in `stableHooks`.
 
 ## What it does not catch
 
-- A value declared next to the effect, in the same component or hook (`const onSave = () => …`): turn on `exhaustive-deps` from `eslint-plugin-react-hooks` for those. It does not see through a custom hook's return, which is why this rule exists.
-- A value from a package's hook (a data-fetching or form library), including hooks a package builds for you (`const useStore = create<State>()(…)`, `useSelector.withTypes<State>()`, `export const { useGetItemsQuery } = api` from RTK Query) and your own names for them (`const useAppDispatch: () => AppDispatch = useDispatch`): package code is not read.
+It looks at the dependencies of `useEffect`, `useLayoutEffect`, `useInsertionEffect`, `useMemo` and `useCallback`, and the props of a `memo` component, whose value one of your functions creates on every render: an inline function, an object or array literal, `new X()`, or a new array from `map`, `filter`, `Object.keys` and the like. It follows the value through destructuring, property access and hooks calling hooks, across files. It is silent on:
 
-Some package hooks are known to return the same value each render, recognised by the package they come from (not by name): react-redux `useDispatch()` and `useStore()` (and hooks made with `.withTypes<…>()`), react-router `useNavigate()`, React's state setters and `dispatch`. From RTK Query hooks, the trigger of `use…Mutation()` and `useLazy…Query()`, `refetch`, and `data` (RTK keeps it the same object while the cached result does not change) are fine as dependencies.
-- A prop of a component with its own comparison, `memo(Row, compare)`.
-- A value from a parameter or a prop: it comes from the caller's code.
-- A `let` assigned in a branch the rule cannot see, and a destructuring default (`const { items = [] } = useCart()`).
-- Apps built with the React Compiler.
+- a value declared next to the effect, in the same component or hook: `exhaustive-deps` from `eslint-plugin-react-hooks` covers those, but it does not see through a custom hook's return, which is why this rule exists;
+- a value from a package's hook (a data-fetching or form library), including hooks a package builds for you (`create<State>()(…)`, `useSelector.withTypes<State>()`, RTK Query's `export const { useGetItemsQuery } = api`) and your own names for them: package code is not read. Some are known to return the same value each render, by the package they come from: react-redux's `useDispatch()` and `useStore()`, react-router's `useNavigate()`, React's state setters and `dispatch`, and from RTK Query hooks the trigger of `use…Mutation()` and `useLazy…Query()`, `refetch` and `data`;
+- a prop of a component with its own comparison, `memo(Row, compare)`;
+- a value from a parameter or a prop: it comes from the caller's code;
+- a `let` assigned in a branch the rule cannot see, and a destructuring default (`const { items = [] } = useCart()`);
+- apps built with the React Compiler (`babel-plugin-react-compiler` or `react-compiler-runtime` in the nearest `package.json`): the compiler keeps these values stable.
 
-When the value comes from one of your hooks that stateward cannot read (built by a factory, `const useCart = createStore(…)`, or returning another object's method result), it lists it as a place not checked, with how to make it checkable. `stateward check` counts these places in its summary and lists them with `--verbose` (or `stateward coverage`). When you know such a hook returns the same values each render, name it in `stableHooks`.
+A data value built only from the state whose change causes the render (`swatch` built from `hsva`) really changes with that state, so making it stable gains nothing: it is reported as info only (the `derived` kind of `severities`).
+
+## Getting the best from it
 
 A plain function of yours that memoizes its result (a `WeakMap` or `Map` per argument, `memoize-one`) returns the same value for the same arguments, which stateward cannot see. Name it in `stableFunctions`: its value then counts as stable when none of its arguments is new every render (`bindRunHandlers(run)` is, `bindRunHandlers({ ...run })` is not).
 
 ## Turn it on or off
 
-In `stateward.config.ts`:
-
 ```ts
-rules: { "react/dependency-changes-every-render": "off" } // or "error"
-groups: { "react/render-stability": "off" } // the whole group
-rules: { "react/dependency-changes-every-render": ["warning", { ignore: ["useLegacyForm"] }] } // accept one hook's new values
 rules: { "react/dependency-changes-every-render": ["warning", { stableHooks: ["useStableCardHandlers", "use*Store"] }] } // your hooks whose values never change
 rules: { "react/dependency-changes-every-render": ["warning", { stableFunctions: ["bindRunHandlers"] }] } // your memoized functions
+rules: { "react/dependency-changes-every-render": ["warning", { ignore: ["useLegacyForm"] }] } // accept one hook's new values
+rules: { "react/dependency-changes-every-render": "off" }
 ```
 
-### Options
-
-Set as `rules: { "react/dependency-changes-every-render": ["warning", { … }] }`.
+Options, set as `rules: { "react/dependency-changes-every-render": ["warning", { … }] }`:
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
@@ -106,4 +111,6 @@ Set as `rules: { "react/dependency-changes-every-render": ["warning", { … }] }
 | `ignore` | list of strings | `[]` | Your hooks and functions (names or globs like use*Form) whose new values you accept. |
 | `stableHooks` | list of strings | `[]` | Your hooks (names or globs like use*Store) whose every returned value is the same each render. `react/effect-response-race` reads this list too; a name here is also the hook the advice for a handler on a `memo` child suggests. |
 | `stableFunctions` | list of strings | `[]` | Your memoized functions (names or globs like bind*Handlers) that return the same value for the same arguments. |
-| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per place the new value comes from. Kinds: `from-hook`: the value is created inside one of your hooks: wrap it there; `from-function`: the value comes from a plain function of yours (`getColumns(prefix)`), called here or in a hook: wrap the call; `derived`: the value is built from the state whose change causes the render, so stabilising it gains nothing (reported as info). |
+| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per place the new value comes from. Kinds: `from-hook`: the value is created inside a hook in the project: wrap it there; `from-function`: the value comes from a plain function of yours (`getColumns(prefix)`), called here or in a hook: wrap the call; `derived`: the value is built from the state whose change causes the render, so stabilising it gains nothing (reported as info). |
+
+Core rule: warning under `recommended` and `strict`. Group: `react/render`.

@@ -19,6 +19,11 @@ export type PlanRow = {
    * phrase after "silent: "; left out when it can.
    */
   silent?: string;
+  /**
+   * Why the rule could not run in this project (`CheckResult.notes`: its library's types do not
+   * resolve), so its count of findings says nothing: it is never "clean". Left out when it ran.
+   */
+  notChecked?: string;
 };
 
 export type Plan = { rules: readonly PlanRow[] };
@@ -66,6 +71,10 @@ export function buildPlan(
     if (finding.fixes.length > 0) bump(fixable, finding.ruleId, 1);
   }
   for (const entry of result.hidden) bump(findings, entry.ruleId, entry.count);
+  const notChecked = new Map<string, string>();
+  for (const missing of result.notes?.missingTypes ?? []) {
+    for (const ruleId of missing.rules) notChecked.set(ruleId, missing.reason);
+  }
 
   const candidates: Candidate[] = config.plugins.flatMap((plugin, packIndex) =>
     Object.entries(plugin.rules).flatMap(([key, rule]) => {
@@ -95,6 +104,9 @@ export function buildPlan(
       fixable: candidate.fixable,
       protects: candidate.protects,
       ...(silent.has(candidate.ruleId) ? { silent: silent.get(candidate.ruleId) ?? "" } : {}),
+      ...(notChecked.has(candidate.ruleId)
+        ? { notChecked: notChecked.get(candidate.ruleId) ?? "" }
+        : {}),
     })),
   };
 }
@@ -108,7 +120,17 @@ export type Advance =
   | { kind: "turn-on"; row: PlanRow | undefined; clean: readonly PlanRow[] }
   /** The rule turned on last still has findings. */
   | { kind: "blocked"; row: PlanRow }
+  /**
+   * Every rule not on yet could not run here (`PlanRow.notChecked`): nothing is turned on until
+   * they can, since "nothing to fix" would not be known.
+   */
+  | { kind: "not-checked"; rows: readonly PlanRow[] }
   | { kind: "all-on" };
+
+/** Whether a row has nothing to fix as far as anyone knows: no finding, and the rule ran. */
+export function isClean(row: PlanRow): boolean {
+  return row.findings === 0 && row.notChecked === undefined;
+}
 
 /** The next step from the rules turned on so far (in the order they were turned on). */
 export function advance(plan: Plan, enabled: readonly string[], anyway: boolean): Advance {
@@ -117,15 +139,20 @@ export function advance(plan: Plan, enabled: readonly string[], anyway: boolean)
   const lastId = enabled.at(-1);
   const last = plan.rules.find((row) => row.ruleId === lastId);
   if (!anyway && last !== undefined && last.findings > 0) return { kind: "blocked", row: last };
-  return {
-    kind: "turn-on",
-    row: off.find((row) => row.findings > 0),
-    clean: off.filter((row) => row.findings === 0),
-  };
+  const row = off.find((candidate) => candidate.findings > 0);
+  const clean = off.filter(isClean);
+  if (row === undefined && clean.length === 0) return { kind: "not-checked", rows: off };
+  return { kind: "turn-on", row, clean };
 }
 
 function countOf(count: number, noun: string): string {
   return `${String(count)} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/** What `next` says when only rules that could not run are left, in one line. */
+export function describeNotChecked(rows: readonly PlanRow[]): string {
+  const reasons = [...new Set(rows.map((row) => row.notChecked ?? ""))].join("; ");
+  return `the ${countOf(rows.length, "rule")} left could not run here: ${reasons}; then run \`stateward next\` again`;
 }
 
 /**

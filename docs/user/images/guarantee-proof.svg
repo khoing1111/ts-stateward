@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="270" viewBox="0 0 760 270" role="img" aria-labelledby="t d">
+  <title id="t">How a guarantee works</title>
+  <desc id="d">You state a promise in a type. stateward checks every reader or writer of it. Each one is proven, or reported as an error with the path to the place.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#475569"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; fill: #0f172a; }
+    .h { font-size: 15px; font-weight: 600; }
+    .s { font-size: 13px; fill: #334155; }
+    .c { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; fill: #0f172a; }
+    .box { fill: #f8fafc; stroke: #94a3b8; stroke-width: 1.5; }
+    .ok { fill: #ecfdf5; stroke: #059669; stroke-width: 1.5; }
+    .bad { fill: #fef2f2; stroke: #dc2626; stroke-width: 1.5; }
+    .ln { stroke: #475569; stroke-width: 1.8; fill: none; }
+  </style>
+  <rect width="760" height="270" rx="10" fill="#ffffff"/>
+
+  <rect class="box" x="20" y="80" width="230" height="110" rx="8"/>
+  <text class="h" x="36" y="108">1. You state it in a type</text>
+  <text class="c" x="36" y="136">ThemeContext =</text>
+  <text class="c" x="36" y="154">  requiredContext&lt;Theme&gt;()</text>
+  <text class="s" x="36" y="178">also: Owned&lt;T&gt;, AbortSignal</text>
+
+  <path class="ln" d="M250 135H284" marker-end="url(#a)"/>
+
+  <rect class="box" x="290" y="80" width="214" height="110" rx="8"/>
+  <text class="h" x="306" y="108">2. stateward checks</text>
+  <text class="h" x="306" y="127">every use of it</text>
+  <text class="s" x="306" y="152">each component that reads it,</text>
+  <text class="s" x="306" y="170">each module that changes it</text>
+
+  <path class="ln" d="M504 120C524 120 524 70 542 70" marker-end="url(#a)"/>
+  <path class="ln" d="M504 150C524 150 524 200 542 200" marker-end="url(#a)"/>
+
+  <rect class="ok" x="548" y="22" width="196" height="96" rx="8"/>
+  <text class="h" x="564" y="50">Proven</text>
+  <text class="s" x="564" y="74">no run-time check needed;</text>
+  <text class="s" x="564" y="92">listed by</text>
+  <text class="c" x="564" y="110">stateward guarantees</text>
+
+  <rect class="bad" x="548" y="152" width="196" height="96" rx="8"/>
+  <text class="h" x="564" y="180">Not proven: an error</text>
+  <text class="s" x="564" y="204">where it fails, with the path</text>
+  <text class="s" x="564" y="222">to it; a place stateward</text>
+  <text class="s" x="564" y="240">cannot follow is one too</text>
+</svg>

@@ -2,72 +2,94 @@
 
 # reducers/reducer-not-readable
 
-A place in or around a reducer that stateward cannot read, so its other reducer checks cannot cover it.
-
-- Group: reducers/graph
-- Tier: coverage (info under `recommended`, an error under `strict`)
-- Add-on: none
-- Heuristic: no
-- Severity under `recommended`: info
-- Severity under `strict`: error
-
-## Why
-
-`reducers/state-unreachable` and `reducers/state-cannot-leave` read which state each `return` of a reducer gives, and where it starts. Where they cannot tell (a helper typed as the whole union, a start loaded from storage), they assume any state can follow or come first, and say nothing. This rule lists those places, each with the change that makes the reducer fully checked.
-
-## When to use it
-
-Use it when you want every reducer fully checked. It shows as info under `recommended` (a hint in the editor that does not fail the check) and as an error under `strict`.
-
-## What it catches
-
-- A `return` typed as the whole state union, like `return applyPromo(state, event)` where `applyPromo` returns `CheckoutState`. A returned constant is read from its value (`const initialState: State = { status: "idle" }`), and reported only when that value cannot be read either (`const restored: State = restore()`).
-- A `useReducer` start that is not a known state: a parameter, a call, data from storage.
-- A reducer-like function passed around as a value (`reducers = [queueReducer]`), without `useReducer` or `@initial`.
-- A reducer also called or passed around elsewhere (outside tests), or exported from your package, without `@initial`: it may start in any state.
-- A name in `@initial` that is not a state.
-- A `@final` or `@initial` that does not start with a quoted state (`@final the order is done`): it is read as a comment. Write states in quotes, separated by `|`, commas or spaces: `@final "delivered" | "refunded"`.
-
-### Bad
+The reducer checks skip a place whose states cannot be read; a type that names its states brings it back under those checks.
 
 ```ts
-function jobReducer(state: JobState, event: JobEvent): JobState {
-  return applyEvent(state, event); // `applyEvent` is typed `: JobState`
+import { useReducer } from "react";
+
+type JobState = { status: "queued" } | { status: "running" } | { status: "done" };
+type JobEvent = { type: "start" } | { type: "finish" };
+
+function advance(state: JobState, event: JobEvent): JobState {
+  if (event.type === "start") return state.status === "queued" ? { status: "running" } : state;
+  return state.status === "running" ? { status: "done" } : state;
+}
+
+function job(state: JobState, event: JobEvent): JobState {
+  return advance(state, event);
+}
+
+export function useJob() {
+  return useReducer(job, { status: "queued" });
 }
 ```
 
-### Good
+`stateward check` prints:
 
-```ts
-function applyEvent(state: JobState, event: JobEvent): Extract<JobState, { status: "running" }> { … }
+```text
+info[reducers/reducer-not-readable]: `advance(state, event)` can return any state of `JobState`
+  --> example.ts:12:10
+   |
+12 |   return advance(state, event);
+   |          ^^^^^^^^^^^^^^^^^^^^^
+   = fix: declare its return type as the states it returns, e.g. `Extract<JobState, { status: "done" }>`
+   = note: example.ts:11: in `job`
+   = docs: stateward explain reducers/reducer-not-readable
 ```
 
-And for a reducer that does not run through `useReducer`, give its state a default (`state = initialQueue`), or put `/** @initial "queued" */` above it.
+Write the steps in the reducer itself, or give the helper a return type that names its states (`Extract<JobState, { status: "running" | "done" }>`):
 
-### Fix
+```ts
+import { useReducer } from "react";
 
-Give the helper or constant a return type that names its states, such as `Extract<State, { status: "idle" }>`, or add `@initial`. There is no quick fix: only you know which states they are.
+type JobState = { status: "queued" } | { status: "running" } | { status: "done" };
+type JobEvent = { type: "start" } | { type: "finish" };
+
+function job(state: JobState, event: JobEvent): JobState {
+  if (event.type === "start") return state.status === "queued" ? { status: "running" } : state;
+  return state.status === "running" ? { status: "done" } : state;
+}
+
+export function useJob() {
+  return useReducer(job, { status: "queued" });
+}
+```
+
+There is no quick fix: only you know which states the helper gives.
+
+## Why it matters
+
+`reducers/state-unreachable` and `reducers/state-cannot-leave` read which state each `return` of a reducer gives, and where it starts. Where they cannot read it (a helper typed as the whole union, a start loaded from storage), they assume any state can follow or come first, and say nothing. This rule lists those places, each with the change that makes the reducer fully checked. It is what those two rules would otherwise pass over in silence.
 
 ## What it does not catch
 
-- A function with a reducer's signature that is never used, or only called as a helper.
-- A `return` typed `any`: `reducers/state-unreachable` reports that one.
-- State in `useState` or class fields: they do not have to become reducers.
+It reports:
+
+- a `return` typed as the whole state union, like `return advance(state, event)` above. A returned constant is read from its value (`const initialState: State = { status: "idle" }`), and reported only when that value cannot be read either (`const restored: State = restore()`);
+- a `useReducer` start that is not a known state: a parameter, a call, data from storage;
+- a reducer-like function passed around as a value (`reducers = [queueReducer]`), without `useReducer` or `@initial`;
+- a reducer also called or passed around elsewhere (outside tests), or exported from your package, without `@initial`: it may start in any state;
+- a name in `@initial` that is not a state, and a `@final` or `@initial` that does not start with a quoted state (`@final the order is done` is read as a comment; write `@final "delivered" | "refunded"`).
+
+It leaves alone a function with a reducer's signature that is never used or only called as a helper, a `return` typed `any` (`reducers/state-unreachable` reports that one), and state in `useState` or class fields, which do not have to become reducers.
+
+## Getting the best from it
+
+For a reducer that does not run through `useReducer`, give its state a default (`state = initialQueue`), or put `/** @initial "queued" */` above it.
 
 ## Turn it on or off
 
-In `stateward.config.ts`:
+It shows as info under `recommended` (a hint in the editor that does not fail the check) and as an error under `strict`, for projects where every reducer must be fully checked.
 
 ```ts
 rules: { "reducers/reducer-not-readable": "off" } // or "warning"
-groups: { "machines/graph": "off" } // the whole group
 rules: { "reducers/reducer-not-readable": ["info", { severities: { "may-start-anywhere": "off" } }] } // a library's exported reducers
 ```
 
-### Options
-
-Set as `rules: { "reducers/reducer-not-readable": ["info", { … }] }`.
+Options, set as `rules: { "reducers/reducer-not-readable": ["info", { … }] }`:
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of place stateward cannot read. Kinds: `whole-return`: a `return` typed as the whole state union, or a constant whose state cannot be read; `unknown-start`: a `useReducer` start that is not a known state; `may-start-anywhere`: a reducer used outside `useReducer`, or exported from your package, with no `@initial`; `unquoted-tag`: an `@initial` or `@final` tag that lists states without quotes; `unknown-initial`: a name in `@initial` that is not a state. |
+
+Coverage rule (it points at code whose types do not say enough to check it): info under `recommended`, error under `strict`. Group: `reducers/graph`.

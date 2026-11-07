@@ -1,6 +1,3 @@
-/** Longest path shown in a headline; a longer one is cut from the left. */
-export const MAX_SHOWN = 30;
-
 /** The most keys a note lists; the rest are counted. */
 const MAX_KEYS = 5;
 
@@ -17,8 +14,6 @@ export function keysNote(labels: readonly string[]): string {
   return `keys: ${shown.join(", ")}${more > 0 ? ` and ${String(more)} more` : ""}`;
 }
 
-/** A headline is at most this long. */
-export const MAX_HEADLINE = 100;
 /** The first line of a fix is at most this long. */
 export const MAX_HINT = 140;
 
@@ -29,19 +24,4 @@ export const MAX_HINT = 140;
  */
 export function fitted(build: (cut: (text: string) => string) => string): string {
   return build((inserted) => shorten(inserted));
-}
-
-/** The most names a headline lists; the rest are counted. */
-const MAX_NAMES = 3;
-
-/** `a`, `b` and `c`, or the first three and `and N more`, each name cut by `cut`. */
-export function namesText(names: readonly string[], cut: (text: string) => string): string {
-  const quoted = names.map((name) => `\`${cut(name)}\``);
-  if (quoted.length <= MAX_NAMES) {
-    const last = quoted.at(-1);
-    return quoted.length < 2 || last === undefined
-      ? quoted.join("")
-      : `${quoted.slice(0, -1).join(", ")} and ${last}`;
-  }
-  return `${quoted.slice(0, MAX_NAMES).join(", ")} and ${String(quoted.length - MAX_NAMES)} more`;
 }

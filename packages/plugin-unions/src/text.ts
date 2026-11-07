@@ -87,11 +87,12 @@ export function memberName(label: string): string {
 export const NAMED_ABOVE_MAX = 3;
 
 /**
- * A headline that names a subject and lists case labels, as `: a, b and c` after the part `build`
- * writes. Every hidden case is listed, `undefined` and `null` first, up to `maxHidden`; above it
- * the first 3 are named and the rest counted (`: undefined, null, "a" and 9 more`), so the
- * developer still sees which kind of case it is. When the list is too long, enum members go by
- * their own name (`DATABASE` for `StorageType.DATABASE`); a case is never dropped silently.
+ * A headline that starts with the case labels, as `"a", "b" and "c"` before the part `build`
+ * writes (M18: the cases first, as the reader scans for them). Every hidden case is listed,
+ * `undefined` and `null` first, up to `maxHidden`; above it the first 3 are named and the rest
+ * counted (`undefined, null, "a" and 9 more`), so the developer still sees which kind of case it
+ * is. When the list is too long, enum members go by their own name (`DATABASE` for
+ * `StorageType.DATABASE`); a case is never dropped silently.
  */
 export function fittedCases(
   max: number,
@@ -103,13 +104,13 @@ export function fittedCases(
   if (labels.length > maxHidden && labels.length > NAMED_ABOVE_MAX) {
     const more = labels.length - NAMED_ABOVE_MAX;
     const first = (items: readonly string[]): string =>
-      `: ${items.slice(0, NAMED_ABOVE_MAX).join(", ")} and ${String(more)} more`;
+      `${items.slice(0, NAMED_ABOVE_MAX).join(", ")} and ${String(more)} more`;
     return fittedOneOf(max, [
       (cut) => build(cut, first(ordered)),
       (cut) => build(cut, first(ordered.map(memberName))),
     ]);
   }
-  const list = (items: readonly string[]): string => `: ${listItems(items)}`;
+  const list = (items: readonly string[]): string => listItems(items, " and ");
   return fittedOneOf(max, [
     (cut) => build(cut, list(ordered)),
     (cut) => build(cut, list(ordered.map(memberName))),

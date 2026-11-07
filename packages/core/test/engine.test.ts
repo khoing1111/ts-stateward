@@ -333,6 +333,24 @@ describe("check", () => {
     ]);
   });
 
+  it("keeps a rule's errors over its places not checked when the cap cuts", () => {
+    const unknownsThenError: Rule = {
+      kind: "file",
+      meta,
+      check: (ctx) => {
+        if (!ctx.file.endsWith("a.ts")) return;
+        for (let i = 0; i < MAX_FINDINGS_PER_RULE_PER_FILE + 5; i++)
+          ctx.unknown({ message: `a${String(i)}`, hint: "h", node: ctx.sourceFile });
+        ctx.report({ message: "z the error", hint: "h", node: ctx.sourceFile });
+      },
+    };
+    const { findings, hidden } = checkFixture(probeDir, [plugin({ mixed: unknownsThenError })]);
+    const mine = findings.filter((f) => f.ruleId === "probe/mixed");
+    expect(mine).toHaveLength(MAX_FINDINGS_PER_RULE_PER_FILE);
+    expect(mine.some((f) => f.kind === "problem" && f.message === "z the error")).toBe(true);
+    expect(hidden.map((h) => h.count)).toEqual([6]);
+  });
+
   it("reports no hidden findings when nothing is over the limit", () => {
     expect(checkFixture(probeDir, [probe]).hidden).toEqual([]);
   });

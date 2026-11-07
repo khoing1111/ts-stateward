@@ -2,75 +2,64 @@
 
 # unions/tag-does-not-discriminate
 
-A property like kind that tells a union's members apart is a literal in every member, not string or number in one.
-
-- Group: unions/cases
-- Tier: coverage (info under `recommended`, an error under `strict`)
-- Add-on: none
-- Heuristic: no
-- Severity under `recommended`: info
-- Severity under `strict`: error
-
-## Why
-
-In `{ kind: "a"; id: number } | { kind: string; raw: unknown }`, checking `event.kind === "a"` does not rule out the second member, because `string` includes `"a"`. So `event.id` is still an error or needs a cast, and a `switch` over `kind` is not checked for missing cases. The union looks like each `kind` picks one member, and it does not.
-
-## When to use it
-
-Use it alongside the other `guards` rules: on a union like this, they cannot check anything and stay quiet. It shows as info under `recommended` (a hint in the editor that does not fail the check) and as an error under `strict`. Turn it off if such catch-all members are deliberate in your API types.
-
-## What it catches
-
-In a `type` written as a union of `{ … }` object types, a property that is a literal (`"a"`, `1`) in some members and plain `string` or `number` in another, when nothing else tells the members apart: no other property has its own literal in every member, or the code narrows on this property. Code narrows on it when it tests it (`row.depth === 0`, `switch (row.depth)`, or a destructured `depth`) and then, where the test decides what runs, reads a property only some members have, as if the test had picked one: through a cast, since TypeScript does not narrow on such a property. A read that another check has narrowed (`row.kind === "turn" && row.turn`) does not count.
-
-A union another property already tells apart is fine, as long as no code narrows on the weak one:
+When `kind` is `string` in one member, testing `kind` does not narrow the union, so TypeScript cannot check which properties each branch reads.
 
 ```ts
-type ShapedRow = { kind: "root"; depth: 0; title: string } | { kind: "child"; depth: number; turn: number };
-// fine: `kind` tells every member apart, and `row.depth === 0 && row.kind` only compares a value
-// reported: `row.depth === 0 && (row as Root).title` relies on `depth` picking the root
+export type Message =
+  | { kind: "chat"; text: string }
+  | { kind: string; payload: unknown };
 ```
 
-### Bad
+`stateward check` prints:
+
+```text
+info[unions/tag-does-not-discriminate]: `kind` does not tell the members of `Message` apart: one member has "chat", another `string`
+ --> example.ts:3:7
+  |
+3 |   | { kind: string; payload: unknown };
+  |       ^^^^
+  = fix: give every member of `Message` its own literal `kind`, or move the catch-all member out of the union, so a test on `kind` picks one member
+  = docs: stateward explain unions/tag-does-not-discriminate
+```
+
+Give every member its own literal, and keep the catch-all apart from the union:
 
 ```ts
-type Event = { kind: "a"; id: number } | { kind: string; raw: unknown };
+export type Message = { kind: "chat"; text: string } | { kind: "join"; user: string };
+
+/** What the server may send that this app does not know yet. */
+export type UnknownMessage = { kind: string; payload: unknown };
 ```
 
-### Good
+There is no quick fix: which members the union really has is yours to say.
 
-```ts
-type Event = { kind: "a"; id: number } | { kind: "b"; raw: unknown };
-type UnknownEvent = { kind: string; raw: unknown }; // kept apart, not in the union
-```
+## Why it matters
 
-### Fix
-
-Give every member its own literal, or move the catch-all member out of the union. There is no quick fix.
+In the bad `Message`, testing `message.kind === "chat"` does not rule out the second member, because `string` includes `"chat"`. So `message.text` is still an error after the test, or needs a cast, and a `switch` over `kind` is not checked for missing cases: the other `unions` rules have nothing to check and stay quiet. The union looks as if each `kind` picks one member, and it does not.
 
 ## What it does not catch
 
 It reads only the `type` declaration as written:
 
-- members named by type (`type Event = Click | Key`) are not looked into, only members written inline as `{ … }`;
+- members named by type (`type Message = Chat | Other`) are not looked into, only members written inline as `{ … }`;
 - interfaces, and unions built with generics or mapped types, are not read;
-- a property that is `string` in every member, or a literal in every member, is fine;
-- narrowing is seen on a value whose type is the union itself (not `ShapedRow | undefined`), through `===`, `!==`, `==`, `!=`, `switch` and `const { depth } = row`.
+- a property that is `string` in every member, or a literal in every member, is fine.
+
+A union that another property already tells apart is fine too (`{ kind: "root"; depth: 0 } | { kind: "child"; depth: number }`: `kind` decides), unless your code narrows on the weak one: it tests it (`row.depth === 0`, `switch (row.depth)`, or a destructured `depth`) and then reads a property only some members have, through a cast, as if the test had picked one. A read that another test has narrowed (`row.kind === "root" && row.title`) does not count. Narrowing is seen only on a value whose type is the union itself (not `Row | undefined`), through `===`, `!==`, `==`, `!=`, `switch` and `const { depth } = row`.
 
 ## Turn it on or off
 
-In `stateward.config.ts`:
+It shows as info under `recommended` (a hint in the editor that does not fail the check) and as an error under `strict`. Turn it off if such catch-all members are deliberate in your API types, or name those types:
 
 ```ts
 rules: { "unions/tag-does-not-discriminate": "off" } // or "warning"
 rules: { "unions/tag-does-not-discriminate": ["warning", { ignore: ["*Response"] }] } // API types
-groups: { "guards/unions": "off" } // the whole group
 ```
 
-### Options
-
-Set as `rules: { "unions/tag-does-not-discriminate": ["info", { … }] }`.
+Options, set as `rules: { "unions/tag-does-not-discriminate": ["info", { … }] }`:
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `ignore` | list of strings | `[]` | Union type names (globs like *Response) whose catch-all member is deliberate, such as API types. |
+
+Coverage rule (it points at code whose types do not say enough to check it): info under `recommended`, error under `strict`. Group: `unions/cases`.

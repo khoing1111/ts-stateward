@@ -1,6 +1,6 @@
 {
   "name": "stateward-monorepo",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -18,7 +18,8 @@
     "gate": "node scripts/gate.mjs",
     "pack": "node scripts/pack.mjs",
     "install-into": "node scripts/install-into.mjs",
-    "pack:smoke": "node scripts/pack-smoke.mjs"
+    "pack:smoke": "node scripts/pack-smoke.mjs",
+    "test:changed": "pnpm run build && vitest run --changed"
   },
   "devDependencies": {
     "@eslint-community/eslint-plugin-eslint-comments": "^4.8.1",

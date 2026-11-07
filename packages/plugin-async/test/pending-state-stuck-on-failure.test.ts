@@ -25,8 +25,8 @@ function leak(name: string, call: string, flag: string, reset: string, fix?: str
   return {
     file: "save.ts",
     name,
-    message: `if \`${call}()\` fails, \`${flag}\` stays \`true\`: nothing sets it again`,
-    hint: `set it again in a \`finally\`: \`try { await ${call}(); } finally { ${reset} }\``,
+    message: `\`${flag}\` stays \`true\` when \`${call}()\` fails`,
+    hint: `set \`${flag}\` again in a \`finally\`, so a failure resets it too: \`try { await ${call}(); } finally { ${reset} }\``,
     notes: [],
     fix,
   };
@@ -37,14 +37,14 @@ function stuck(name: string, call: string, state: string, value: string, write: 
   return {
     file: "save.ts",
     name,
-    message: `if \`${call}()\` fails, \`${state}\` stays \`${value}\`: nothing sets it again`,
-    hint: `set it in a \`catch\` too: \`try { await ${call}(); … } catch (error) { ${write} throw error; }\``,
+    message: `\`${state}\` stays \`${value}\` when \`${call}()\` fails`,
+    hint: `set \`${state}\` in a \`catch\` too, so a failure resets it: \`try { await ${call}(); … } catch (error) { ${write} throw error; }\``,
     notes: [],
     fix: undefined,
   };
 }
 
-const FIX = "Set it again in a finally";
+const FIX = "Reset the state in a finally";
 
 describe("async/pending-state-stuck-on-failure", () => {
   it("names what fails and the state, whatever it is called, and shows the finally or catch", () => {
@@ -137,9 +137,9 @@ describe("async/pending-state-stuck-on-failure", () => {
   it("explains itself, and points at one union instead of a flag", () => {
     const explain = ruleCode(asyncFlow(), "pending-state-stuck-on-failure").meta.explain;
     expect(explain).toContain("# async/pending-state-stuck-on-failure");
-    expect(explain).toContain("## Bad");
-    expect(explain).toContain("## Good");
-    expect(explain).toContain("Or keep the request in one union");
+    expect(explain).toContain("example-bad");
+    expect(explain).toContain("example-good");
+    expect(explain).toContain("Keep a request in one union");
     expect(explain).toContain('rules: { "async/pending-state-stuck-on-failure": "off" }');
   });
 
@@ -203,7 +203,7 @@ describe("async/pending-state-stuck-on-failure: a call that cannot fail, said in
   it("takes `rejects: []` to mean the package function never rejects", () => {
     expect(
       withFacts({ "quiet-client": { send: { rejects: ["Error"] } } }).map((f) => f.message),
-    ).toEqual(["if `send()` fails, `sending` stays `true`: nothing sets it again"]);
+    ).toEqual(["`sending` stays `true` when `send()` fails"]);
     expect(withFacts({ "quiet-client": { send: { rejects: [] } } })).toEqual([]);
   });
 });

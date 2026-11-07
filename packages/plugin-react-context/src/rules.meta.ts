@@ -7,10 +7,12 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "A React context gets its value from a Provider, not from a fake default like {} as Theme.",
+        "A default like `{} as Theme` is used when the Provider is missing, so the code reads an empty object typed as a full one and fails later.",
+      summary: "a context created with a fake default like `{} as Theme` or `null!`",
       defaultSeverity: "error",
       tier: "coverage",
       group: "defaults",
+      needsTypes: { library: "React", modules: ["react"] },
       options: {
         severities: {
           kind: "severities",
@@ -33,10 +35,12 @@ export const RULES = {
     kind: "project",
     meta: {
       description:
-        "A component that reads a required context is rendered under that context's Provider.",
+        "A component that reads a required context outside its Provider gets the default value or an error at run time; the finding shows the render path without it.",
+      summary: "a component that reads a required context, rendered with no Provider above it",
       defaultSeverity: "error",
       tier: "core",
       group: "providers",
+      needsTypes: { library: "React", modules: ["react"] },
       widenedBy: ["react-router", "dynamic-components"],
       options: {
         ignore: {

@@ -13,56 +13,63 @@ import { fitted, MAX_HEADLINE } from "./text.js";
 
 const EXPLAIN = `# react/index-key-on-reordered-list
 
-A list that is filtered, sorted, reversed, spliced or added to at the front is not keyed by the position of its rows.
+With \`key={index}\` on a list that is filtered or reordered, React keeps each row's state by position, so the state moves to a different item.
 
-## Why
+\`\`\`tsx example-bad
+import { useState } from "react";
 
-React matches a row of the new render to a row of the old one by its \`key\`. With \`key={index}\`, the row at position 2 is always "the same row", whatever item it shows now. Remove the first todo from \`todos.filter(…)\` and every row below it moves up one position: React keeps each row's state (a checked box, text typed into an input, an open menu) at its position, so it now belongs to the next item. The page shows the right text with the wrong state, and nothing reports it.
+type Todo = { id: string; text: string };
 
-## When to use it
-
-Use it in any React app that keeps state in its rows or in inputs. A row made only of plain elements and text (no input, select, textarea or component) has no state to move, so it is not reported. It is a warning in every preset and a heuristic: stateward sees that the list changes order or content in this component, not whether the rows keep any state, The React Compiler does not change keys, so it stays on with the compiler. Turn it off for a list that is only ever appended to.
-
-\`eslint-plugin-react\` has \`react/no-array-index-key\`, which reports every index key. This rule reports only a list that changes, so it can stay on where the ESLint rule is too strict.
-
-## What it catches
-
-\`key={index}\` (the second parameter of the \`.map\` callback), also when the key is built from nothing else (\`String(index)\`, or a template with only the index), on a list that:
-
-- is filtered, sorted, reversed or spliced in the same expression (\`todos.filter(…).map(…)\`), or in a variable the component declares (\`const visible = todos.filter(…)\`, also inside \`useMemo\`);
-- comes from a state that the component sets with \`filter\`, \`sort\`, \`reverse\`, \`splice\`, \`toSorted\`, \`toReversed\`, \`toSpliced\`, \`unshift\`, or a new item put before the old ones (\`[item, ...todos]\`), anywhere in the component, also in an updater.
-
-### Bad
-
-\`\`\`tsx
-const remove = (id: string) => setTodos(todos.filter((todo) => todo.id !== id));
-return todos.map((todo, index) => <TodoRow key={index} todo={todo} />);
+export function Todos({ initial }: { initial: Todo[] }) {
+  const [todos, setTodos] = useState(initial);
+  const remove = (id: string) => setTodos(todos.filter((todo) => todo.id !== id));
+  return todos.map((todo, index) => (
+    <label key={index}>
+      <input type="checkbox" onChange={() => remove(todo.id)} /> {todo.text}
+    </label>
+  ));
+}
 \`\`\`
 
-### Good
+Key each row by something that belongs to the item and does not change:
 
-\`\`\`tsx
-return todos.map((todo) => <TodoRow key={todo.id} todo={todo} />);
+\`\`\`tsx example-good
+import { useState } from "react";
+
+type Todo = { id: string; text: string };
+
+export function Todos({ initial }: { initial: Todo[] }) {
+  const [todos, setTodos] = useState(initial);
+  const remove = (id: string) => setTodos(todos.filter((todo) => todo.id !== id));
+  return todos.map((todo) => (
+    <label key={todo.id}>
+      <input type="checkbox" onChange={() => remove(todo.id)} /> {todo.text}
+    </label>
+  ));
+}
 \`\`\`
 
-### Fix
+If the items have no id, give each one when it is created (\`crypto.randomUUID()\`). There is no quick fix: only you know which field identifies the item.
 
-Key each row by something that belongs to the item and does not change: an id, or another unique value the data has. If the items have no id, give each one when it is created (\`crypto.randomUUID()\`). There is no quick fix: only you know which field identifies the item.
+## Why it matters
+
+React matches a row of the new render to a row of the old one by its \`key\`. With \`key={index}\`, the row at position 2 is always "the same row", whatever item it shows now. Remove the first todo and every row below it moves up one position, but React keeps each row's state (a checked box, text typed into an input, an open menu) at its position, so it now belongs to the next item. The page shows the right text with the wrong state, and nothing reports it.
 
 ## What it does not catch
 
-- A list that comes from props, a hook or a query: stateward does not see what its owner does to it.
-- A list changed in another file, or by a function that returns a new list (\`setTodos(removeDone(todos))\`).
-- A list set from a variable computed earlier (\`const next = todos.filter(…); setTodos(next)\`).
-- An index key on a list that is only appended to: its rows keep their positions, so it is not reported.
+It reports \`key={index}\` (the second parameter of the \`.map\` callback, also \`String(index)\` or a template with only the index) on a list that is filtered, sorted, reversed or spliced in the same expression or in a variable the component declares (also inside \`useMemo\`), or that comes from a state the component sets with \`filter\`, \`sort\`, \`reverse\`, \`splice\`, \`toSorted\`, \`toReversed\`, \`toSpliced\`, \`unshift\`, or a new item put before the old ones (\`[item, ...todos]\`). It is silent on:
+
+- a row made only of plain elements and text (no input, select, textarea or component): it has no state to move (\`textOnlyRows: true\` reports those too);
+- a list that is only appended to: its rows keep their positions;
+- a list that comes from props, a hook or a query: stateward does not see what its owner does to it;
+- a list changed in another file, by a function that returns a new list (\`setTodos(removeDone(todos))\`), or set from a variable computed earlier (\`const next = todos.filter(…); setTodos(next)\`).
+
+It guesses: it sees that the list changes order or content in this component, not whether the rows keep any state. \`react/no-array-index-key\` from \`eslint-plugin-react\` reports every index key; this rule reports only a list that changes, so it can stay on where that one is too strict. The React Compiler does not change keys, so it stays on with the compiler.
 
 ## Turn it on or off
 
-In \`stateward.config.ts\`:
-
 \`\`\`ts
 rules: { "react/index-key-on-reordered-list": "off" } // or "error"
-groups: { "react/state-updates": "off" } // the whole group
 rules: { "react/index-key-on-reordered-list": ["warning", { textOnlyRows: true }] } // text rows too
 \`\`\`
 `;
@@ -306,10 +313,12 @@ export const indexKeyOnReorderedList = defineRule({
   kind: "file",
   meta: {
     description:
-      "A list that is filtered, sorted, reversed, spliced or added to at the front is not keyed by the position of its rows.",
+      "With `key={index}` on a list that is filtered or reordered, React keeps each row's state by position, so the state moves to a different item.",
+    summary: "`key={index}` on a list that is filtered, sorted or added to at the front",
     defaultSeverity: "warning",
     tier: "core",
     group: "render",
+    needsTypes: { library: "React", modules: ["react"] },
     heuristic: true,
     options: {
       textOnlyRows: option.boolean({
@@ -350,13 +359,13 @@ export const indexKeyOnReorderedList = defineRule({
           const item = itemName(map.callback);
           const example = item === undefined ? "an id" : `${item}.id`;
           const tails = [
-            "so a row's state moves to the wrong item",
-            "so row state moves to the wrong item",
+            "a row's state can move to the wrong item",
+            "row state can move to the wrong item",
           ];
           const build = (tail: string) =>
             fitted(
               (cut) =>
-                `rows here are keyed by position, but \`${cut.name(change.name)}\` is ${change.operation}, ${tail}`,
+                `list keyed by index, but \`${cut.name(change.name)}\` is ${change.operation}: ${tail}`,
             );
           const full = build(tails[0] ?? "");
           ctx.report({

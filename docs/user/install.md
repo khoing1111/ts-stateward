@@ -1,7 +1,7 @@
 # Install stateward
 
-You need Node 20 or newer and your app's packages installed. Your app can use any TypeScript
-version: stateward brings its own TypeScript 6.
+stateward needs Node 20 or newer and the app's packages installed. The app can use any
+TypeScript version, because stateward ships its own TypeScript 6.
 
 ## Install the command
 
@@ -45,7 +45,8 @@ Install what it imports (npm, from your lockfile; stateward does not run it):
 ```
 
 Run the install command it prints. Each pack is its own package, and `stateward` depends only on
-`@stateward/core`, so you install only the packs you use: an app without React gets no React pack.
+`@stateward/core`, so an app installs only the packs it uses. An app without React has no React
+pack.
 
 Commit `package.json`, the lockfile and `stateward.config.ts`. CI installs them as usual.
 
@@ -61,13 +62,14 @@ Search for "Stateward" in the Extensions view, or run:
 code --install-extension stateward.stateward-vscode
 ```
 
-Open your app's folder. The extension checks it when it has a `stateward.config.ts`, using the
-stateward installed in your app (else its own copy). What it shows and its settings:
-[the extension's page](../../packages/vscode/README.md).
+Open your app's folder. The extension checks it when it has a `stateward.config.ts`. It uses the
+stateward installed in the app, or its own copy when there is none. The
+[extension's page](../../packages/vscode/README.md) describes what it shows and its settings.
 
 ## Update
 
-Update `stateward` and the packs you use together (`npm outdated` lists them):
+Update `stateward` and the packs you use together (`npm outdated` lists them).
+[upgrading.md](upgrading.md) lists the changes between versions.
 
 ```bash
 npm install --save-dev stateward@latest
@@ -92,13 +94,19 @@ code --uninstall-extension stateward.stateward-vscode
 
 - **`no stateward.config.{ts,mts,js,mjs} found`.** Run `npx stateward init` in the app's folder, or
   name the folder with `--cwd ~/code/my-app`.
-- **`No rules are on`.** The config has packs but turns no rule on: add `preset: "recommended"`, a
+- **`No rules are on`.** The config has packs but turns no rule on. Add `preset: "recommended"`, a
   group or a rule ([config.md](config.md)).
 - **Findings are missing or look wrong.** Install your app's packages first, so stateward can follow
   its imports. `npx stateward check --verbose` says which config and tsconfig projects it used.
+- **`not checked: 12 rules of the react-context and react packs: React's types are not installed`.**
+  The React rules read React's types from your app's `node_modules`. Run your package manager's
+  install, then check again.
+- **`` `strictNullChecks` is off in `tsconfig.json` ``.** TypeScript then does not check `null` and
+  `undefined`, so fixes such as `satisfies never` prove less. Set `strict: true` (or
+  `strictNullChecks: true`) when you can; stateward works either way.
 - **`turn on rollout: true ... first`** from `next`. Set `rollout: true` in `stateward.config.ts`.
-- **`unknown rule "..."`.** Rule ids include the pack: `records/lookup-misses-key`. The message
-  suggests the id you meant, then lists every id.
+- **`unknown rule "..."`.** Rule ids include the pack, as in `records/lookup-misses-key`. The
+  message suggests the closest id, then lists every id.
 - **Out of memory, or slow.** See [Big projects](ci.md#big-projects) and
   [Why is it slow?](ci.md#why-is-it-slow).
 - **Exit code 2 with a `failure`.** A rule crashed, so the result is incomplete. Please

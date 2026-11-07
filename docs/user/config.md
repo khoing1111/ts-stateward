@@ -1,12 +1,12 @@
 # The config file
 
-Nothing is on until you choose. Adding a pack to `plugins` only makes its rules available; a
-`preset`, a group or a rule by name turns them on. `stateward init` writes `preset: "recommended"`;
+No rule is on by default. Adding a pack to `plugins` only makes its rules available; a `preset`, a
+group or a rule by name turns them on. `stateward init` writes `preset: "recommended"`;
 remove it to choose rules one by one.
 
 `stateward.config.ts` (or `.mts`, `.js`, `.mjs`) sits in your project's folder. stateward uses the
 nearest one in the folder you run it in or above, up to the repository's root; `--config <file>`
-names another. Wrap it in `defineConfig` and your editor completes every key, rule id and option.
+names another. With `defineConfig`, the editor completes every key, rule id and option.
 
 ```ts
 import { defineConfig, defaults } from "stateward";
@@ -27,11 +27,11 @@ A mistake in the file stops `stateward` with a message that names the key and sa
 | Key         | Default                                      | What it does                                      |
 | ----------- | -------------------------------------------- | ------------------------------------------------- |
 | `plugins`   | none                                         | the packs and your own rules (required)           |
-| `preset`    | none: no rule is on                          | turns the packs' rules on, and how strict         |
+| `preset`    | none: no rule is on                          | turns on the packs' rules, at a strictness level  |
 | `addons`    | `[]`                                         | extra rule sets a pack offers by name             |
 | `rules`     | from the preset                              | one rule's severity and options                   |
 | `groups`    | from the preset                              | a severity for all rules of a group               |
-| `unknowns`  | `"info"`                                     | how places stateward could not check show         |
+| `unknowns`  | `"info"`                                     | how places stateward could not check are reported |
 | `overrides` | `[]`                                         | other settings for some folders or files          |
 | `extends`   | `[]`                                         | shared configs to start from                      |
 | `tsconfig`  | `"tsconfig.json"`                            | the TypeScript projects to check                  |
@@ -44,14 +44,14 @@ A mistake in the file stops `stateward` with a message that names the key and sa
 
 ### plugins
 
-The packs you use, each a function call. Install only these: each pack is its own package.
+The packs you use, each a function call. Each pack is its own package; install only these.
 
 ```ts
 plugins: [unions(), records()],
 ```
 
-A rule that is off is never loaded, so it costs no start-up time or memory. The packs and their
-rules: [unions](../packs/unions.md), [records](../packs/records.md), [async](../packs/async.md),
+A rule that is off is never loaded, so it costs no start-up time or memory. Each pack's page lists
+its rules: [unions](../packs/unions.md), [records](../packs/records.md), [async](../packs/async.md),
 [errors](../packs/errors.md), [ownership](../packs/ownership.md),
 [reducers](../packs/reducers.md), [react-context](../packs/react-context.md),
 [react](../packs/react.md).
@@ -61,13 +61,19 @@ rules: [unions](../packs/unions.md), [records](../packs/records.md), [async](../
 Turns on the rules of every pack in `plugins`. `"recommended"` reports what a rule can only
 suspect as info; `"strict"` makes those errors. Without a preset no rule is on, and `check` says so.
 
+Start an existing app on `recommended`. `strict` suits new code, or a part with a clear boundary
+such as a package or a payments folder. Set it there with [`overrides`](#overrides).
+
 ```ts
 preset: "strict",
 ```
 
 ### addons
 
-Rules a pack keeps off until you ask, named `<pack>/<add-on>`. The rule's page names its add-on.
+Rules a pack keeps off unless they are listed here, named `<pack>/<add-on>`. The rule's page names its add-on.
+An add-on is either a guess that is right too rarely to be on by default, or a check that fits only
+some apps. An unknown name stops the run and lists the valid ones. Version 1.1 removed three add-ons
+([upgrading.md](upgrading.md#from-10-to-11)).
 
 ```ts
 addons: ["react/effect-race"],
@@ -84,8 +90,9 @@ rules: {
 },
 ```
 
-Each rule's page lists its options. Lists of names take `*` as "any characters": `"use*Query"`. A
-rule that reports several kinds of finding takes a severity per kind, named on its page:
+Each rule's page lists its options. In lists of names, `*` matches any characters, as in
+`"use*Query"`. A rule that reports several kinds of finding takes a severity per kind, named on its
+page:
 
 ```ts
 "errors/throws-doc-mismatch": ["error", { severities: { extra: "warning" } }],
@@ -117,12 +124,12 @@ A rule's severity in a file comes from the config's `preset`, `addons`, `groups`
 from each matching entry in order, the same way, the later winning. A `preset` or `addons` in an
 entry only changes a rule's default: a severity you set for the rule or its group stays.
 
-Rules that look at the whole project (is this context provided somewhere?) still read every file,
-and report only in files where they are on. `plan` and `coverage` count the same way.
+Rules that look at the whole project, such as whether a context is provided anywhere, still read
+every file, and report only in files where they are on. `plan` and `coverage` count the same way.
 
 ### extends
 
-Start from a shared config: a package that exports `defineConfig({ ... })`.
+Start from a shared config, which is a package that exports `defineConfig({ ... })`.
 
 ```ts
 import team from "@acme/stateward-config";
@@ -133,7 +140,7 @@ export default defineConfig({
 });
 ```
 
-Configs merge in order and your file wins:
+Configs merge in order, and the local file wins:
 
 - `plugins` are joined by name; one name from two different packages is an error.
 - `rules`, `groups` and `facts` merge key by key; `addons` are joined; `ignores` merge option by
@@ -175,8 +182,8 @@ ignores: { requireReason: true, reportUnused: "warning" },
 ```
 
 - `requireReason` (default `true`): a comment without a reason is a warning.
-- `reportUnused` (default `"warning"`): the level for a comment that no longer covers a finding:
-  `"error"`, `"warning"` or `"off"`.
+- `reportUnused` (default `"warning"`): the level (`"error"`, `"warning"` or `"off"`) for a
+  comment that no longer covers a finding.
 
 ### rollout
 
@@ -189,13 +196,13 @@ rollout: true,
 
 ### unknowns
 
-Where a rule cannot decide, it reports a "place not checked" instead of passing silently.
+Where a rule cannot decide, it reports a "place not checked" instead of passing the code.
 
 - `"info"` (default): `check` counts them in one line and lists them with `--verbose`.
   `--format github` annotates them as notices only with `--verbose`; `--format json` always has
   them. The editor shows them as faint hints.
 - `"warning"`: listed as warnings everywhere, and counted by `--max-warnings`.
-- `"off"`: not listed. The summary still counts them, so a gap is never silent.
+- `"off"`: not listed. The summary still counts them.
 
 A file stateward could not read at all (`stateward/syntax`, `stateward/imports`) is always listed.
 
@@ -244,5 +251,5 @@ In VS Code each file is checked with the nearest config above it.
 
 ## Files beside the config
 
-`stateward.rollout.json` and `stateward.baseline.json` are written by stateward; commit them, and do
-not edit them by hand.
+stateward writes `stateward.rollout.json` and `stateward.baseline.json`. Commit them, and do not
+edit them by hand.

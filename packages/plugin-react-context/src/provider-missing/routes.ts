@@ -257,6 +257,7 @@ export function createRoutes(deps: {
           return;
         case "intrinsic":
         case "provider":
+        case "consumer":
         case "prop":
         case "route":
         case "router-provider":

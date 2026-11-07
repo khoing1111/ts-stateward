@@ -16,6 +16,10 @@ export type TextEdit = { location: Location; newText: string };
  */
 export type FixForm = {
   title: string;
+  /**
+   * The edits, in any files. Edits at offset 0 of a file that does not exist create it (a helper
+   * file the fix writes once); the file's own errors then count against the fix.
+   */
   edits: readonly TextEdit[];
   safe?: boolean;
   /**
@@ -198,6 +202,11 @@ export type OptionsOf<S extends OptionSpecs> = { readonly [K in keyof S]: Option
  */
 export type RuleInfo<S extends OptionSpecs = OptionSpecs, G extends string = string> = {
   description: string;
+  /**
+   * What the rule finds, as a short phrase for the rules tables of the docs ("a `default` that
+   * hides cases of a union"); `description` is the sentence that opens the rule's page.
+   */
+  summary?: string;
   defaultSeverity: Severity;
   tier: RuleTier;
   /**
@@ -245,6 +254,26 @@ export type RuleInfo<S extends OptionSpecs = OptionSpecs, G extends string = str
    * (`ctx.options` holds both). Only list options (`option.strings`) can be shared.
    */
   sharedOptions?: Readonly<Record<string, string>>;
+  /**
+   * A library whose types the rule needs to see anything (`React` from `react`): where none of
+   * `modules` resolves to declarations from the project, the rule could not run there, and
+   * `check`, `plan` and `next` say so instead of calling it clean (never silent). Core only
+   * resolves the names; what they are is the pack's knowledge.
+   */
+  needsTypes?: LibraryTypes;
+  /**
+   * The rule's fixes prove what they say only with `strictNullChecks` (a `Partial<…>` or a `??`
+   * TypeScript then checks): in a project without it, each finding's fix line says so.
+   */
+  fixNeedsStrictNulls?: true;
+};
+
+/** A library a rule reads by its types: its name as people say it, and the modules that give them. */
+export type LibraryTypes = {
+  /** As people say it: "React". */
+  readonly library: string;
+  /** The module names that bring its types, any one is enough: `["react"]`. */
+  readonly modules: readonly string[];
 };
 
 export type RuleMeta<S extends OptionSpecs = OptionSpecs, G extends string = string> = RuleInfo<
@@ -274,6 +303,12 @@ export type NarrowingTest =
  * member when one of them removes it).
  */
 export type NarrowedMembers = { members: readonly string[]; removed: readonly string[] };
+
+/**
+ * Where a call's callee takes an abort signal: the index of the parameter, and `"signal"` when the
+ * signal is the `signal` property of an options object at that index (`fetch(url, { signal })`).
+ */
+export type SignalParameter = { readonly index: number; readonly property: "signal" | undefined };
 
 /**
  * `id` is the qualified id "<file relative to the project>#<path>" (`src/cart.ts#useCart.onAdd`;
@@ -364,6 +399,17 @@ export type TypeQueries = {
    * recognised by where that symbol is declared.
    */
   uniqueSymbolKeyFiles(node: ts.Node): readonly string[];
+  /**
+   * The guarantees a type states: the string literals of its optional `__guarantee` property
+   * (`Context<T> & { readonly __guarantee?: "required-context" }`), sorted. The type is the one
+   * of an expression or type node, or the declared type of a symbol (a variable's type, a type
+   * alias's type), resolved through aliases, generics and re-exports. A type parameter is widened
+   * to its constraint; `null` and `undefined` members are left out, and every other member of a
+   * union must state a guarantee for it to count. Empty for a type that states none, or whose
+   * `__guarantee` is required or not a string literal (that is a brand, not a guarantee). The
+   * names mean nothing to core; each plugin reads its own.
+   */
+  guaranteesOf(target: ts.Node | SymbolRef): readonly string[];
   /**
    * The type alias a value's type is an instance of, found from its declaration: after awaiting a
    * `Promise`, every member of the type must be written in the same alias (`Result<T, E>` and
@@ -551,6 +597,17 @@ export type TypeQueries = {
    * The project's JSDoc is parsed only when a rule that is on sets `needsJsDoc`.
    */
   calleeTags(call: ts.CallExpression): readonly string[];
+  /**
+   * Where the function a call resolves to takes an abort signal: the first parameter whose type
+   * (without `null` and `undefined`, a type parameter widened to its constraint) is a signal, or
+   * an object type with a writable `signal` property that is one (an options object; a `Request`,
+   * whose `signal` is readonly, is not). A signal is an object type with an
+   * `aborted` property of type `boolean`: the platform's `AbortSignal`, and a library's own
+   * (`GenericAbortSignal`). Read from the signature TypeScript picks for the call as written, so
+   * an optional parameter the call leaves out counts (`fetch(url)`). Undefined when no parameter
+   * takes one, the call does not resolve, or the parameter is a rest parameter.
+   */
+  signalParameterOf(call: ts.CallExpression): SignalParameter | undefined;
 };
 
 export type ReportProblem = {
@@ -604,6 +661,41 @@ export type LibraryUse = {
     /** Why the function is not fully known; empty when it is. */
     readonly unknown: readonly string[];
   }[];
+};
+
+/** A place a stated guarantee covers: a reader of a required context, a writer of owned state. */
+export type CoveredPlace = {
+  /** How the place is named in a list: `<Profile>`, `useTheme()`. */
+  readonly name: string;
+  readonly location: Location;
+};
+
+/**
+ * A guarantee stated in the project's code, as the plugin that proves it reads it
+ * (`EditorContributions.guarantees`): for `stateward guarantees` and the editor's hover and code
+ * lens. Whether it is proven is not said here: core counts the findings of `ruleId` that name the
+ * declaration (a related note at `location`), so the list and the check never disagree.
+ */
+export type StatedGuarantee = {
+  /** The guarantee's name, as `__guarantee` writes it: `required-context`. */
+  readonly guarantee: string;
+  /** The marker type as the declaration's type names it: `RequiredContext`. */
+  readonly marker: string;
+  /** The declaration that states it: `ThemeContext`. */
+  readonly name: string;
+  /**
+   * The declaration. Every error of `ruleId` about this guarantee has a related note here (the
+   * note that says where the guarantee is stated): that is how its errors are counted.
+   */
+  readonly location: Location;
+  /** The rule that proves it. */
+  readonly ruleId: string;
+  /** What it promises, after "Guaranteed: ": "every reader is rendered under its Provider". */
+  readonly promise: string;
+  /** What `covered` holds, as a plural noun: "readers", "writers". */
+  readonly covers: string;
+  /** The places the proof covers, in file and offset order; empty when nothing uses it. */
+  readonly covered: readonly CoveredPlace[];
 };
 
 export type FileContext<O extends Options = Options> = {
@@ -714,7 +806,12 @@ export type EditorHint = {
  * (`EditorContributions.codeActions`). Core tries its edits on a copy of the code like a fix's,
  * and offers it only when they compile (`Checker.refactors`).
  */
-export type EditorAction = { title: string; edits: readonly TextEdit[] };
+export type EditorAction = {
+  title: string;
+  edits: readonly TextEdit[];
+  /** Other ways to write it, in order, as a fix's `alternatives`: the first that compiles is offered. */
+  alternatives?: readonly { edits: readonly TextEdit[] }[];
+};
 
 export type EditorContributions = {
   /** Returns markdown. */
@@ -766,6 +863,14 @@ export type EditorContributions = {
   libraryFacts?(input: {
     projectSummaries(ruleId: string): ReadonlyMap<string, Json> | undefined;
   }): readonly LibraryUse[];
+  /**
+   * The guarantees stated in the project that this plugin proves, from the last full check's
+   * summaries (as `hover`: no new type checking): `stateward guarantees`, and the editor's hover
+   * and code lens on a marked declaration. Each is listed even when nothing uses it.
+   */
+  guarantees?(input: {
+    projectSummaries(ruleId: string): ReadonlyMap<string, Json> | undefined;
+  }): readonly StatedGuarantee[];
 };
 
 /** Rule ids are "<plugin name>/<rule key>". */
@@ -1037,4 +1142,24 @@ export type CheckResult = {
      */
     projects?: readonly { tsconfig: string; files: number }[];
   };
+  /**
+   * What the run could not check as a whole, said once (not part of the JSON contract yet).
+   * `missingTypes`: rules that ran where their library's types do not resolve
+   * (`RuleInfo.needsTypes`), by library, rule ids sorted. `looseNulls`: the tsconfigs, absolute,
+   * whose projects check without `strictNullChecks`. Left out when there is nothing to say.
+   */
+  notes?: CheckNotes;
+};
+
+export type CheckNotes = {
+  readonly missingTypes: readonly MissingTypes[];
+  readonly looseNulls: readonly string[];
+};
+
+/** Rules that could not run because a library's types do not resolve, and the reason in words. */
+export type MissingTypes = {
+  readonly library: string;
+  /** "React's types are not installed (install the app's dependencies)". */
+  readonly reason: string;
+  readonly rules: readonly string[];
 };

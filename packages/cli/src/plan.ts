@@ -1,5 +1,5 @@
 import type { Plan, PlanRow } from "@stateward/core/internal";
-import { ROLLOUT_FILE, advance } from "@stateward/core/internal";
+import { ROLLOUT_FILE, advance, describeNotChecked, isClean } from "@stateward/core/internal";
 import { plural } from "./format.js";
 
 /** Where the project stands in the rollout: what is on, and the one thing to do now. */
@@ -26,6 +26,8 @@ function nextStep(plan: Plan, rollout: boolean, enabled: readonly string[]): str
         : `run \`stateward next\` to turn on rule ${String(step.row.order)} (${step.row.ruleId})`;
     case "blocked":
       return `fix the ${plural(step.row.findings, "finding")} of \`${step.row.ruleId}\`, then run \`stateward next\``;
+    case "not-checked":
+      return describeNotChecked(step.rows);
     case "all-on":
       return `every rule is on; you can remove ${ROLLOUT_FILE} and \`rollout\` from your config`;
     default: {
@@ -75,7 +77,7 @@ export function formatPlanPretty(report: PlanReport): string {
     row.ruleId,
     String(row.findings),
     String(row.fixable),
-    row.findings === 0 ? `${row.protects} (${CLEAN})` : row.protects,
+    isClean(row) ? `${row.protects} (${CLEAN})` : row.protects,
   ];
   const groups = byGroup(report.rules);
   const widths = header.map((title, column) =>
@@ -98,6 +100,7 @@ export function formatPlanPretty(report: PlanReport): string {
     entry.group,
     ...entry.rows.flatMap((row) => [
       line(cells(row)),
+      ...(row.notChecked === undefined ? [] : [`    not checked: ${row.notChecked}`]),
       ...(row.silent === undefined ? [] : [`    silent: ${row.silent}`]),
     ]),
   ]);

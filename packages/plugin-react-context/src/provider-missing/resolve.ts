@@ -1,6 +1,6 @@
 import ts from "@stateward/core/typescript";
 import type { SymbolRef, TypeQueries } from "@stateward/core";
-import type { Origin } from "./summary.js";
+import type { Loc, Origin } from "./summary.js";
 import {
   calleeName,
   containsJsxOrHookCall,
@@ -24,6 +24,8 @@ export type Tag =
   | { kind: "intrinsic" }
   | { kind: "library" }
   | { kind: "provider"; context: string }
+  /** `<X.Consumer>` of a context stated required: it reads the context where it stands. */
+  | { kind: "consumer"; context: string; name: string; loc: Loc }
   | { kind: "prop"; name: string }
   | { kind: "component"; id: string }
   /** An own class component: stateward does not look inside it. */
@@ -73,9 +75,19 @@ const CREATE_ROUTER_CALLS: ReadonlySet<string> = new Set([
 
 type Resolved = { symbol: SymbolRef; file: string; node: ts.Node };
 
-/** A checked read: of a context of the project, or of one declared outside the checked files. */
+/**
+ * A read stateward checks: a checked read of a context of the project (`own`), one of a context
+ * declared outside the checked files (`external`), or any read of a context stated required
+ * (`stated`: its type is a `RequiredContext`, wherever it is declared). `guard` is the `if` that
+ * checks the value is missing, when the read is checked where it is held.
+ */
 export type ContextRead =
-  { kind: "own"; id: string } | { kind: "external"; id: string; name: string };
+  | { kind: "own"; id: string }
+  | { kind: "external"; id: string; name: string }
+  | { kind: "stated"; id: string; name: string; loc: Loc; guard: ts.IfStatement | undefined };
+
+/** The guarantee a context states when its type is a `RequiredContext` (`TypeQueries.guaranteesOf`). */
+export const REQUIRED_CONTEXT = "required-context";
 
 /**
  * The declaration behind a name or `a.b` expression (the checker resolves aliases and imports).
@@ -116,6 +128,8 @@ function createResolver(types: TypeQueries, lazyFunctions: readonly string[] = [
 
   const CREATE_CONTEXT: ReadonlySet<string> = new Set(["createContext"]);
   const USE_CONTEXT: ReadonlySet<string> = new Set(["useContext"]);
+  /** What reads a context: `useContext(X)`, and React 19's `use(X)`. */
+  const READS: ReadonlySet<string> = new Set(["useContext", "use"]);
 
   /**
    * React's `createContext(undefined)` or `createContext(null)` (no argument too): a context with
@@ -231,9 +245,40 @@ function createResolver(types: TypeQueries, lazyFunctions: readonly string[] = [
     const found = resolve(expression);
     if (found === undefined || !ts.isVariableDeclaration(found.node)) return undefined;
     const initializer = found.node.initializer && skipWrappers(found.node.initializer);
-    return initializer !== undefined && isMissingDefaultContextCall(initializer)
-      ? found.symbol.id
-      : undefined;
+    if (initializer !== undefined && isMissingDefaultContextCall(initializer))
+      return found.symbol.id;
+    return isStated(found) ? found.symbol.id : undefined;
+  }
+
+  const statedCache = new Map<string, boolean>();
+
+  /**
+   * Whether a variable's type states `required-context` (`RequiredContext<T>`). Only a variable
+   * with a type written on it or made by a call is asked (a component or a plain value never is),
+   * so the type checker is not asked about every tag.
+   */
+  function isStated(found: Resolved): boolean {
+    const declaration = found.node;
+    if (!ts.isVariableDeclaration(declaration)) return false;
+    const initializer = declaration.initializer && skipWrappers(declaration.initializer);
+    const candidate =
+      declaration.type !== undefined ||
+      (initializer !== undefined && ts.isCallExpression(initializer));
+    if (!candidate) return false;
+    const known = statedCache.get(found.symbol.id);
+    if (known !== undefined) return known;
+    const stated = types.guaranteesOf(found.symbol).includes(REQUIRED_CONTEXT);
+    statedCache.set(found.symbol.id, stated);
+    return stated;
+  }
+
+  /** The context an expression names when its type states `required-context`. */
+  function statedContext(
+    expression: ts.Expression,
+  ): { id: string; name: string; loc: Loc } | undefined {
+    const found = resolve(expression);
+    if (found === undefined || !isStated(found)) return undefined;
+    return { id: found.symbol.id, name: found.symbol.name, loc: locOf(found.node) };
   }
 
   /**
@@ -255,12 +300,17 @@ function createResolver(types: TypeQueries, lazyFunctions: readonly string[] = [
    * checks for a missing Provider (`if (!value) throw …`, `if (value === undefined) return null`).
    */
   function isCheckedRead(call: ts.CallExpression): boolean {
+    return guardOf(call) !== undefined;
+  }
+
+  /** The `if` that checks the value of a read is missing and leaves (`isCheckedRead`). */
+  function guardOf(call: ts.CallExpression): ts.IfStatement | undefined {
     let holder: ts.Node = call.parent;
     while (ts.isParenthesizedExpression(holder)) holder = holder.parent;
-    if (!ts.isVariableDeclaration(holder) || !ts.isIdentifier(holder.name)) return false;
+    if (!ts.isVariableDeclaration(holder) || !ts.isIdentifier(holder.name)) return undefined;
     const variable = types.symbolAt(holder.name);
     const fn = enclosingFunction(holder);
-    if (variable === undefined || !isFunctionLike(fn) || fn.body === undefined) return false;
+    if (variable === undefined || !isFunctionLike(fn) || fn.body === undefined) return undefined;
     const isValue = (node: ts.Expression): boolean => {
       const inner = skipWrappers(node);
       return ts.isIdentifier(inner) && types.symbolAt(inner)?.id === variable.id;
@@ -272,7 +322,9 @@ function createResolver(types: TypeQueries, lazyFunctions: readonly string[] = [
    * The parameter of an own helper (`useRequired(context)`) that it reads with `useContext` and
    * checks: a call of the helper is a checked read of the context it is given.
    */
-  function helperParameter(call: ts.CallExpression): number | undefined {
+  function helperParameter(
+    call: ts.CallExpression,
+  ): { checked: number | undefined; read: number | undefined } | undefined {
     // A helper that calls `useContext` is a hook, so only a hook's name is looked into.
     const name = calleeName(call);
     if (name === undefined || !isHookName(name) || name === "useContext") return undefined;
@@ -286,25 +338,28 @@ function createResolver(types: TypeQueries, lazyFunctions: readonly string[] = [
     const parameters = value.parameters.map((parameter) =>
       ts.isIdentifier(parameter.name) ? types.symbolAt(parameter.name)?.id : undefined,
     );
-    let index: number | undefined;
+    let checked: number | undefined;
+    let read: number | undefined;
     const visit = (node: ts.Node): void => {
-      if (index !== undefined || isFunctionLike(node)) return;
+      if (checked !== undefined || isFunctionLike(node)) return;
       const argument = ts.isCallExpression(node) ? node.arguments[0] : undefined;
       if (
         ts.isCallExpression(node) &&
         argument !== undefined &&
         ts.isIdentifier(argument) &&
-        isFrom(node.expression, REACT_FILE, USE_CONTEXT) &&
-        isCheckedRead(node)
+        isFrom(node.expression, REACT_FILE, READS)
       ) {
         const id = types.symbolAt(argument)?.id;
         const at = id === undefined ? -1 : parameters.indexOf(id);
-        if (at >= 0) index = at;
+        if (at >= 0) {
+          read ??= at;
+          if (isFrom(node.expression, REACT_FILE, USE_CONTEXT) && isCheckedRead(node)) checked = at;
+        }
       }
       ts.forEachChild(node, visit);
     };
     ts.forEachChild(value.body, visit);
-    return index;
+    return { checked, read };
   }
 
   /**
@@ -314,14 +369,28 @@ function createResolver(types: TypeQueries, lazyFunctions: readonly string[] = [
    * undefined for any other call, or an unchecked read.
    */
   function checkedContextRead(call: ts.CallExpression): ContextRead | undefined {
-    if (isFrom(call.expression, REACT_FILE, USE_CONTEXT)) {
+    if (isFrom(call.expression, REACT_FILE, READS)) {
       const argument = call.arguments[0];
-      const context = argument === undefined ? undefined : readContext(argument);
+      if (argument === undefined) return undefined;
+      // A context stated required is read by any `useContext` or `use`, checked or not.
+      const stated = statedContext(argument);
+      if (stated !== undefined) return { kind: "stated", ...stated, guard: guardOf(call) };
+      if (!isFrom(call.expression, REACT_FILE, USE_CONTEXT)) return undefined;
+      const context = readContext(argument);
       return context !== undefined && isCheckedRead(call) ? context : undefined;
     }
     const index = helperParameter(call);
-    const argument = index === undefined ? undefined : call.arguments[index];
-    return argument === undefined ? undefined : readContext(argument);
+    if (index === undefined) return undefined;
+    const checked = index.checked === undefined ? undefined : call.arguments[index.checked];
+    if (checked !== undefined) {
+      const stated = statedContext(checked);
+      return stated === undefined
+        ? readContext(checked)
+        : { kind: "stated", ...stated, guard: undefined };
+    }
+    const read = index.read === undefined ? undefined : call.arguments[index.read];
+    const stated = read === undefined ? undefined : statedContext(read);
+    return stated === undefined ? undefined : { kind: "stated", ...stated, guard: undefined };
   }
 
   /** A `never` call (`fail("…")`, `invariant(…)` typed so): it does not come back. */
@@ -338,16 +407,19 @@ function createResolver(types: TypeQueries, lazyFunctions: readonly string[] = [
   }
 
   /** An `if` in the body (not in a nested function) that checks the value is missing, then leaves. */
-  function checksMissingIn(body: ts.Node, isValue: (node: ts.Expression) => boolean): boolean {
-    let found = false;
+  function checksMissingIn(
+    body: ts.Node,
+    isValue: (node: ts.Expression) => boolean,
+  ): ts.IfStatement | undefined {
+    let found: ts.IfStatement | undefined;
     const visit = (node: ts.Node): void => {
-      if (found || isFunctionLike(node)) return;
+      if (found !== undefined || isFunctionLike(node)) return;
       if (
         ts.isIfStatement(node) &&
         checksMissing(node.expression, isValue) &&
         exitsIn(node.thenStatement)
       ) {
-        found = true;
+        found = node;
         return;
       }
       ts.forEachChild(node, visit);
@@ -603,6 +675,12 @@ function createResolver(types: TypeQueries, lazyFunctions: readonly string[] = [
     if (ts.isPropertyAccessExpression(tag) && tag.name.text === "Provider") {
       const context = contextIdOf(tag.expression);
       if (context !== undefined) return { kind: "provider", context };
+    }
+    if (ts.isPropertyAccessExpression(tag) && tag.name.text === "Consumer") {
+      const stated = statedContext(tag.expression);
+      if (stated !== undefined) {
+        return { kind: "consumer", context: stated.id, name: stated.name, loc: stated.loc };
+      }
     }
     if (ts.isJsxNamespacedName(tag)) return { kind: "intrinsic" };
     if (ts.isIdentifier(tag) && !startsUpperCase(tag.text)) return { kind: "intrinsic" };
@@ -926,6 +1004,7 @@ function createResolver(types: TypeQueries, lazyFunctions: readonly string[] = [
     resolve,
     isMissingDefaultContextCall,
     checkedContextRead,
+    statedContext,
     isChildrenCall,
     contextIdOf,
     entryArgument,

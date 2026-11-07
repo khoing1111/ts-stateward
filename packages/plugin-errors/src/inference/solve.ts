@@ -416,7 +416,7 @@ function declared(entry: FunctionEntry): Collected {
       addSource(made, {
         ...locationOf(entry.file, item.at),
         text: item.name,
-        reason: "`@throws` names no class stateward can find",
+        reason: "`@throws` names a class that is not found",
       });
     }
   }

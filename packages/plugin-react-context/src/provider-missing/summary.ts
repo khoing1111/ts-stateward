@@ -131,12 +131,43 @@ export type RouteSummary = {
 
 export type HookSummary = { id: string; name: string; reads: Read[]; hooks: HookCall[] };
 
+/** A text edit of a fix, as plain JSON. */
+export type Edit = { file: string; start: number; end: number; newText: string };
+
+/**
+ * The quick fix that states a context is required: the declaration rewritten to
+ * `requiredContext<User>()`, its import, and the guarantees file when it is missing. `forms` are
+ * the ways to write it, in order (the guarantees file exists, or it is written now): the first
+ * that compiles is offered. `call` is the new declaration's call, for messages.
+ */
+export type DeclareFix = { call: string; forms: Edit[][] };
+
+/**
+ * A context that needs a Provider: made with no default and read through a check (guessed), or
+ * whose type states it (`stated`: a `RequiredContext`, proven strictly).
+ */
+export type ContextDeclaration = {
+  id: string;
+  name: string;
+  loc: Loc;
+  stated: boolean;
+  /** For a guessed context with a type argument: the fix that states it. */
+  declare: DeclareFix | null;
+};
+
+/**
+ * The run-time check of a stated context in a hook (`if (theme === undefined) throw …`): once
+ * every reader is proven, the proof replaces it and a fix removes it.
+ */
+export type Guard = { context: string; hook: string; loc: Loc; removal: Edit };
+
 export type Summary = {
   /**
    * React's `createContext` calls with no default: each needs a Provider once some component or
-   * hook reads it and checks the value (`if (!v) throw …`).
+   * hook reads it and checks the value (`if (!v) throw …`). And the contexts stated required that
+   * this file reads, wherever they are declared.
    */
-  contexts: { id: string; name: string; loc: Loc }[];
+  contexts: ContextDeclaration[];
   components: ComponentSummary[];
   hooks: HookSummary[];
   /** Elements rendered by `createRoot(…).render(…)` and `hydrateRoot(…)`, one per element. */
@@ -148,4 +179,14 @@ export type Summary = {
   routes: RouteSummary[];
   /** Checked reads of a context declared outside the checked files. */
   externalContexts: { id: string; name: string; loc: Loc }[];
+  /** Run-time checks of stated contexts in hooks. */
+  guards: Guard[];
+  /**
+   * The contexts this file declares at its top level whose type states `required-context`, read
+   * or not (`marker`: the declaration's type as written): what `stateward guarantees` lists. The
+   * proof reads `contexts`, never this.
+   */
+  declared: StatedDeclaration[];
 };
+
+export type StatedDeclaration = { id: string; name: string; loc: Loc; marker: string };

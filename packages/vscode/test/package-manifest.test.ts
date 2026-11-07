@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { PYTHON_RESTART_COMMAND } from "../src/python-folders.js";
 import { COMMANDS } from "../src/quick-pick.js";
 import { STATUS_COMMAND } from "../src/status.js";
 import { CONFIG_FILE_NAMES } from "../src/workspace-config.js";
@@ -10,7 +11,7 @@ const manifest: unknown = JSON.parse(
 );
 
 describe("the extension manifest", () => {
-  it("activates in a workspace with a stateward config at any depth (a package two levels down too), or a root tsconfig (only to offer setup)", () => {
+  it("activates in a workspace with a stateward config at any depth (a package two levels down too), a root tsconfig (only to offer setup), a pyproject.toml or a Python file", () => {
     const events =
       typeof manifest === "object" && manifest !== null && "activationEvents" in manifest
         ? manifest.activationEvents
@@ -21,8 +22,10 @@ describe("the extension manifest", () => {
       "workspaceContains:**/stateward.config.js",
       "workspaceContains:**/stateward.config.mjs",
       "workspaceContains:tsconfig.json",
+      "workspaceContains:**/pyproject.toml",
+      "onLanguage:python",
     ]);
-    expect(Array.isArray(events) ? events.slice(0, -1) : events).toEqual(
+    expect(Array.isArray(events) ? events.slice(0, 4) : events).toEqual(
       CONFIG_FILE_NAMES.map((name) => `workspaceContains:**/${name}`),
     );
   });
@@ -54,10 +57,12 @@ describe("the extension manifest", () => {
         ? manifest.contributes
         : undefined;
     expect(commands).toMatchObject({
-      commands: [...Object.values(COMMANDS), STATUS_COMMAND].map((command) => ({
-        command,
-        category: "Stateward",
-      })),
+      commands: [...Object.values(COMMANDS), PYTHON_RESTART_COMMAND, STATUS_COMMAND].map(
+        (command) => ({
+          command,
+          category: "Stateward",
+        }),
+      ),
     });
     expect(commands).toMatchObject({
       menus: { commandPalette: [{ command: STATUS_COMMAND, when: "false" }] },
@@ -81,6 +86,29 @@ describe("the extension manifest", () => {
       "stateward.inlayHints.throws": { type: "boolean", default: true },
       "stateward.inlayHints.catchVariable": { type: "boolean", default: true },
     });
+  });
+
+  it("declares the Python settings the extension reads, each with a description", () => {
+    const properties: unknown = Reflect.get(
+      Reflect.get(Reflect.get(Object(manifest), "contributes") ?? {}, "configuration") ?? {},
+      "properties",
+    );
+    expect(properties).toMatchObject({
+      "stateward.python.enabled": { type: "boolean", default: false, scope: "resource" },
+      "stateward.python.serverPath": { type: "string", default: "" },
+      "stateward.python.pyrefly": { type: "string", default: "", scope: "resource" },
+      "stateward.python.checkerProcesses": { type: "integer", default: 1, scope: "resource" },
+    });
+    for (const name of [
+      "stateward.python.enabled",
+      "stateward.python.serverPath",
+      "stateward.python.pyrefly",
+      "stateward.python.checkerProcesses",
+    ]) {
+      expect(
+        Reflect.get(Object(Reflect.get(Object(properties), name)), "markdownDescription"),
+      ).toEqual(expect.any(String));
+    }
   });
 });
 

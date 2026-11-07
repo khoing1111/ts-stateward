@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createChecker, parseConfig } from "@stateward/core";
 import type { Checker, Finding, PackageFactsConfig, RuleSetting } from "@stateward/core";
 import { errors } from "../src/index.js";
@@ -120,28 +120,28 @@ describe("library facts: where a package's errors come from", () => {
     [
       "inferred, with what it cannot follow",
       "useCallback",
-      "throws: others stateward cannot see (from each: inferred-lib 2.0.1: calls a callback)",
+      "throws: others not known (from each: inferred-lib 2.0.1: calls a callback)",
     ],
     [
       "not exported by the source",
       "useMissing",
-      "throws: others stateward cannot see (from missing: inferred-lib 2.0.1: not found in its source)",
+      "throws: others not known (from missing: inferred-lib 2.0.1: not found in its source)",
     ],
     [
       "minified",
       "useMinified",
-      "throws: others stateward cannot see (from get: minified-lib 4.17.21: minified)",
+      "throws: others not known (from get: minified-lib 4.17.21: minified)",
     ],
     [
       "a native addon",
       "useNative",
-      "throws: others stateward cannot see (from hash: native-lib 1.0.0: native addon)",
+      "throws: others not known (from hash: native-lib 1.0.0: native addon)",
     ],
-    ["eval", "useEval", "throws: others stateward cannot see (from run: eval-lib 0.1.0: eval)"],
+    ["eval", "useEval", "throws: others not known (from run: eval-lib 0.1.0: eval)"],
     [
       "too large to follow",
       "useLarge",
-      "throws: others stateward cannot see (from deep: large-lib 9.9.9: too large to follow)",
+      "throws: others not known (from deep: large-lib 9.9.9: too large to follow)",
     ],
   ];
 
@@ -177,12 +177,10 @@ describe("library facts: where a package's errors come from", () => {
     const caught = findings.filter((one) => one.ruleId === "errors/catch-misses-error");
     expect(caught).toHaveLength(1);
     const [finding] = caught;
-    expect(finding?.message).toBe(
-      "this catch does not handle `SyntaxError`, which `load(…)` can throw",
-    );
+    expect(finding?.message).toBe("`catch` does not handle `SyntaxError` from `load(…)`");
     expect(finding?.kind === "problem" ? finding.related.map((one) => one.message) : []).toEqual([
       "`load(…)` can throw `SyntaxError`",
-      "`get` may also throw errors stateward cannot list (minified-lib 4.17.21: minified); rethrow what you do not handle",
+      "`get` may also throw errors that are not known (minified-lib 4.17.21: minified); rethrow what you do not handle",
     ]);
   });
 
@@ -281,7 +279,7 @@ describe("library facts: the global cache", () => {
 });
 
 describe("library facts: a package that changes", () => {
-  /** A copy of the project of its own: the package is changed in place. */
+  /** A copy of the project for each test: the package is changed in place. */
   let changed = "";
   const lib = (...parts: string[]): string =>
     path.join(changed, "node_modules", "inferred-lib", ...parts);
@@ -301,7 +299,7 @@ describe("library facts: a package that changes", () => {
     return target.hover(file, at).join("\n\n") || undefined;
   }
 
-  beforeAll(() => {
+  beforeEach(() => {
     changed = mkdtempSync(path.join(path.dirname(project), "changed-"));
     cpSync(project, changed, { recursive: true });
   });
@@ -346,7 +344,7 @@ describe("library facts: a package that changes", () => {
     target.check();
     expect(packageFactsStats().inferences).toBeGreaterThan(before);
     expect(hoverIn(target, "useInferred")).toBe(
-      "throws: LibError (inferred-lib 2.1.0-next: inferred) | RangeError (inferred-lib 2.1.0-next: inferred) | SyntaxError (inferred-lib 2.1.0-next: inferred) | TypeError (inferred-lib 2.1.0-next: inferred)",
+      "throws: LibError (inferred-lib 2.0.1: inferred) | SyntaxError (inferred-lib 2.0.1: inferred) | TypeError (inferred-lib 2.0.1: inferred)",
     );
   });
 });

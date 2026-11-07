@@ -45,7 +45,7 @@ describe("errors/render-throw-without-boundary", () => {
         "main.tsx",
         "`<App>` can throw `NotFoundError` while rendering, with no error boundary above it",
         [
-          "wrap it in an error boundary, here or nearer to what throws; for example with react-error-boundary:",
+          "wrap it in an error boundary, at this render or nearer to what throws; for example with react-error-boundary:",
           "    <ErrorBoundary FallbackComponent={ErrorPage}>",
           "      <App />",
           "    </ErrorBoundary>",
@@ -56,7 +56,7 @@ describe("errors/render-throw-without-boundary", () => {
     expect(first?.kind === "problem" ? first.severity : undefined).toBe("warning");
     expect(textAt(findings[0])).toBe("<App />");
     expect(notes(findings[0])).toEqual([
-      "App.tsx: `<UserPage>` is rendered here",
+      "App.tsx: `<UserPage>` is rendered",
       "UserPage.tsx: `useUser(…)` can throw `NotFoundError`",
     ]);
   });
@@ -75,7 +75,7 @@ describe("errors/render-throw-without-boundary", () => {
           "App.tsx",
           "`<UserPage>` can throw `NotFoundError` while rendering; only the app-wide boundary catches it",
           [
-            "the whole app is replaced; add a boundary around it, or set `rootBoundaryCounts` if that is what you want",
+            "add a boundary around it, or set `rootBoundaryCounts` if replacing the whole app is intended:",
             "    <ErrorBoundary FallbackComponent={ErrorPage}>",
             "      <UserPage />",
             "    </ErrorBoundary>",
@@ -140,7 +140,7 @@ describe("errors/catch-misses-error on an error boundary's fallback", () => {
     expect(shown(findings)).toEqual([
       says(
         "App.tsx",
-        "`UserErrorPage` does not handle `ParseError`, which this boundary can catch",
+        "`UserErrorPage` does not handle `ParseError`, which its boundary can catch",
         [
           "add a branch for it, or end with one for any other error:",
           "    if (error instanceof ParseError) {",
@@ -153,7 +153,7 @@ describe("errors/catch-misses-error on an error boundary's fallback", () => {
     expect(textAt(findings[0])).toBe("FallbackComponent={UserErrorPage}");
     expect(notes(findings[0])).toEqual([
       "SettingsPage.tsx: `readSettings(…)` can throw `ParseError`",
-      "UserErrorPage.tsx: `UserErrorPage` branches on the error here",
+      "UserErrorPage.tsx: `UserErrorPage` branches on the error",
     ]);
   });
 
@@ -181,7 +181,7 @@ describe("errors hover on an error boundary", () => {
 
   it("stops at a nested boundary, and names what it cannot see", () => {
     expect(hoverAt("App.tsx", "ErrorBoundary\n")).toEqual([
-      "catches: SyntaxError (via <Stats> → useStats) | others stateward cannot see (from useParams: react-router-dom: no readable source)" +
+      "catches: SyntaxError (via <Stats> → useStats) | others not known (from useParams: react-router-dom: no readable source)" +
         `\n\n${NOT_CAUGHT}`,
     ]);
   });
@@ -202,7 +202,7 @@ describe("errors hover on an error boundary", () => {
     const layout = src(clean, "Layout.tsx");
     const at = readFileSync(layout, "utf8").indexOf("<ErrorBoundary");
     expect(own.hover(layout, at + 1)).toEqual([
-      `catches: NotFoundError (via <UserPage> → useUser) | ParseError (via <SettingsPage> → readSettings) | others stateward cannot see (from useParams: react-router-dom: no readable source)\n\n${NOT_CAUGHT}`,
+      `catches: NotFoundError (via <UserPage> → useUser) | ParseError (via <SettingsPage> → readSettings) | others not known (from useParams: react-router-dom: no readable source)\n\n${NOT_CAUGHT}`,
     ]);
   });
 });
@@ -219,7 +219,7 @@ describe("errors: JSX held in a variable", () => {
 
   it("is placed where a const is rendered", () => {
     expect(hoverIn("function ProfilePanel")).toEqual([
-      `catches: NotFoundError (via <UserPage> → useUser) | others stateward cannot see (from useParams: react-router-dom: no readable source)\n\n${NOT_CAUGHT}`,
+      `catches: NotFoundError (via <UserPage> → useUser) | others not known (from useParams: react-router-dom: no readable source)\n\n${NOT_CAUGHT}`,
     ]);
   });
 
@@ -303,7 +303,7 @@ describe("errors/render-throw-without-boundary", () => {
         "main.tsx",
         "`<App>` can throw `LabelError`, `SessionError` and `TitleError` while rendering, with no error boundary above it",
         [
-          "wrap it in an error boundary, here or nearer to what throws; for example with react-error-boundary:",
+          "wrap it in an error boundary, at this render or nearer to what throws; for example with react-error-boundary:",
           "    <ErrorBoundary FallbackComponent={ErrorPage}>",
           "      <App />",
           "    </ErrorBoundary>",
@@ -311,7 +311,7 @@ describe("errors/render-throw-without-boundary", () => {
       ),
     ]);
     expect(notes(findings[0])).toEqual([
-      "App.tsx: `<Header>` is rendered here",
+      "App.tsx: `<Header>` is rendered",
       "Header.tsx: `useLabel(…)` can throw `LabelError`",
     ]);
   });

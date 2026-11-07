@@ -10,11 +10,14 @@ export const { useSaveItemMutation, useLazyGetItemsQuery } = api;
 
 /** Built by a function of the project: stateward cannot read what it returns. */
 function makeStore() {
-  return () => ({ reload: (filter: string) => Promise.resolve([filter]) });
+  return () => ({
+    reload: (filter: string, signal?: AbortSignal) => Promise.resolve(signal ? [filter] : []),
+  });
 }
 
 export const useOrdersStore = makeStore();
 
-export function fetchOrders(): Promise<string[]> {
-  return Promise.resolve([]);
+/** Takes a signal: it can be cancelled, so an effect that calls it must abort it. */
+export function fetchOrders(signal?: AbortSignal): Promise<string[]> {
+  return Promise.resolve(signal?.aborted === true ? [] : ["open"]);
 }

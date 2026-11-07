@@ -13,9 +13,9 @@ const FLAGGED = fixture(`${RULE}/flagged`);
 function deadCatch(file: string, callee: string, call: string): Shown {
   return says(
     file,
-    `\`${callee}(…)\` does not throw when it fails, so this \`catch\` never runs`,
+    `\`catch\` never runs for \`${callee}(…)\`: it does not throw when it fails`,
     [
-      'the lines after it still run on failure; add `.unwrap()` (quick fix), or check `"error" in result` and return:',
+      'add `.unwrap()` (quick fix), or check `"error" in result` and return, so the code after it does not run on failure:',
       `    const result = await ${call};`,
       '    if ("error" in result) return;',
     ].join("\n"),
@@ -25,7 +25,7 @@ function deadCatch(file: string, callee: string, call: string): Shown {
 function goesOn(callee: string, condition: string, file = "save.ts"): Shown {
   return says(
     file,
-    `the lines after this \`if\` run even when \`${callee}(…)\` failed`,
+    `code after the \`if\` runs even when \`${callee}(…)\` failed`,
     [
       "end the branch that handles the failure with `return` (or `throw`):",
       `    if (${condition}) {`,
@@ -49,7 +49,7 @@ function applied(text: string, edits: readonly TextEdit[]): string {
 function runsWithoutCatch(call: string): Shown {
   return says(
     "folders.ts",
-    "the lines after this run even when `updateFolder(…)` failed, and the `catch` does not",
+    "code after the call runs even when `updateFolder(…)` failed, and the `catch` does not",
     [
       'add `.unwrap()` so a failure reaches the `catch` (quick fix), or check `"error" in result` and return:',
       `    const result = await ${call};`,
@@ -84,7 +84,7 @@ describe(`errors/${RULE}: flagged`, () => {
     expect(shown(found).filter((one) => one.file === "returns-late.ts")).toEqual([
       says(
         "returns-late.ts",
-        "the lines after this run even when `createPlan(…)` failed",
+        "code after the call runs even when `createPlan(…)` failed",
         [
           "check that it worked before reading `result.data`, and return when it failed:",
           '    if ("error" in result) return;',
@@ -102,7 +102,7 @@ describe(`errors/${RULE}: flagged`, () => {
       // `setSending(false)` only sets back the pending state; `setText("")` goes on.
       says(
         "reply.ts",
-        "the lines after this run even when `sendReply(…)` failed",
+        "code after the call runs even when `sendReply(…)` failed",
         [
           'add `.unwrap()` so a failure throws (quick fix), or check `"error" in result` and return:',
           "    const result = await sendReply({ threadId, text });",
@@ -118,7 +118,7 @@ describe(`errors/${RULE}: flagged`, () => {
       goesOn("saveSettings", "error"),
       says(
         "save.ts",
-        "the lines after this run even when `createPlan(…)` failed",
+        "code after the call runs even when `createPlan(…)` failed",
         [
           "check that it worked before reading `created.data`, and return when it failed:",
           '    if ("error" in created) return;',
@@ -127,8 +127,8 @@ describe(`errors/${RULE}: flagged`, () => {
       goesOn("saveUser", "!saved.ok"),
       says(
         "save.ts",
-        "stateward cannot tell whether this `if` checks that `saveSettings(…)` failed",
-        'test the result itself to make it checkable, as in `if ("error" in result) return;`',
+        "not checked: whether the `if` tests that `saveSettings(…)` failed: it does not test the result itself",
+        'test the result itself, as in `if ("error" in result) return;`, so the check can be followed',
       ),
     ]);
     expect(found.map((one) => one.kind)).toEqual([
@@ -150,7 +150,7 @@ describe(`errors/${RULE}: flagged`, () => {
       review.finding.kind === "problem" ? review.finding.fixes.map((fix) => fix.title) : [],
     );
     const unwrap = "Add `.unwrap()` so a failure reaches the `catch`";
-    const stops = "Add `.unwrap()` so a failure stops this function";
+    const stops = "Add `.unwrap()` so a failure stops the function";
     expect(offered).toEqual([
       [unwrap],
       [unwrap],

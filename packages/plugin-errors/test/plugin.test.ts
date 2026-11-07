@@ -13,7 +13,6 @@ type ErrorsKey = keyof ReturnType<typeof errors>["rules"];
  */
 const EXPECTED: readonly (readonly [ErrorsKey, Severity, RuleTier, Severity, boolean])[] = [
   ["catch-hides-unexpected", "error", "core", "error", false],
-  ["catch-without-intent", "warning", "addon", "warning", false],
   ["finally-can-throw", "error", "core", "error", false],
   ["catch-misses-error", "error", "core", "error", true],
   ["throws-doc-mismatch", "error", "core", "error", true],
@@ -43,14 +42,13 @@ describe("errors", () => {
       "libraryFacts",
     ]);
     expect(plugin.description).toBe(
-      "Errors are handled where they can happen: nothing swallowed, nothing lost in finally, no Result dropped.",
+      "Errors are handled where they can happen: none ignored, none replaced in `finally`, no `Result` dropped.",
     );
   });
 
   it("puts each rule in its group", () => {
     const rules = errors().rules;
     expect(EXPECTED.map(([key]) => rules[key].meta.group)).toEqual([
-      "catch",
       "catch",
       "catch",
       "catch",
@@ -72,19 +70,17 @@ describe("errors", () => {
     expect(rules["catch-hides-unexpected"].meta.needsJsDoc).toBeUndefined();
   });
 
-  it("makes catch-without-intent and narrow-try add-ons, silent until listed", () => {
+  it("makes narrow-try an add-on, silent until listed", () => {
     const rules = errors().rules;
-    expect(rules["catch-without-intent"].meta.addon).toBe("catch-intent");
     expect(rules["narrow-try"].meta.addon).toBe("narrow-try");
-    for (const key of ["catch-without-intent", "narrow-try"] as const) {
+    for (const key of ["narrow-try"] as const) {
       const { findings } = checkFixture(fixture(`${key}/flagged`), [errors()]);
       expect(findings.filter((finding) => finding.ruleId === `errors/${key}`)).toEqual([]);
     }
   });
 
-  it("marks catch-without-intent and result-unchecked as heuristics", () => {
+  it("marks result-unchecked as a heuristic", () => {
     const rules = errors().rules;
-    expect(rules["catch-without-intent"].meta.heuristic).toBe(true);
     expect(rules["catch-hides-unexpected"].meta.heuristic).toBeUndefined();
     expect(rules["finally-can-throw"].meta.heuristic).toBeUndefined();
     expect(rules["result-unchecked"].meta.heuristic).toBe(true);
@@ -100,8 +96,8 @@ describe("errors", () => {
       expect(rule.meta.description.length).toBeGreaterThan(0);
       const explain = rule.meta.explain;
       expect(explain).toContain(`# errors/${key}`);
-      expect(explain).toContain("## Bad");
-      expect(explain).toContain("## Good");
+      expect(explain).toContain("example-bad");
+      expect(explain).toContain("example-good");
       expect(explain).toContain(`rules: { "errors/${key}": "off" }`);
     },
   );

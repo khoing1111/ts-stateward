@@ -31,3 +31,19 @@ describe("stateward plan", () => {
     expect(lines.filter((line) => line.includes("silent:"))).toHaveLength(1);
   });
 });
+
+describe("stateward plan: rules that could not run", () => {
+  it("says why under the rule and never calls it clean", () => {
+    const reason = "React's types are not installed (install the app's dependencies)";
+    const report = buildPlanReport(
+      { rules: [{ ...row("react/effect-loops"), notChecked: reason }, row("unions/x")] },
+      true,
+      [],
+    );
+    const lines = formatPlanPretty(report).split("\n");
+    const at = lines.findIndex((line) => line.includes("react/effect-loops"));
+    expect(lines[at]).not.toContain("turns on clean");
+    expect(lines[at + 1]).toBe(`    not checked: ${reason}`);
+    expect(lines.find((line) => line.includes("unions/x"))).toContain("turns on clean");
+  });
+});

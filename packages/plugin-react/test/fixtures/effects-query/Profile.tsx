@@ -14,7 +14,9 @@ export function Profile({ userId, first, last }: { userId: string; first: string
     setFullName(`${first} ${last}`);
   }, [first, last]);
   useEffect(() => {
-    fetchUser(userId).then(setUser);
+    void (async () => {
+      setUser(await fetchUser(userId));
+    })();
   }, [userId]);
   return (
     <p>

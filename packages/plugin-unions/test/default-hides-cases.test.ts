@@ -16,9 +16,14 @@ function inFile(name: string): Finding[] {
   return flagged().filter((finding) => finding.location.file.endsWith(name));
 }
 
+/** The labels as a headline lists them: the last joined by "and", unless the rest are counted. */
+function listed(labels: string): string {
+  return labels.includes(" more") ? labels : labels.replace(/, (?=[^,]*$)/, " and ");
+}
+
 function hides(count: string, subject: string, labels: string): string {
-  const noun = count === "1" ? "case" : "cases";
-  return `this \`default\` hides ${count} ${noun} of \`${subject}\`: ${labels}`;
+  const [verb, them] = count === "1" ? ["is", "it"] : ["are", "them"];
+  return `${listed(labels)} of \`${subject}\` ${verb} not listed; \`default\` handles ${them}`;
 }
 
 /**
@@ -34,13 +39,13 @@ function add(count: number, target: string, rest?: string, many = false): string
   const same =
     rest === undefined
       ? count === 1
-        ? "if the `default` is right for it, say so above the `default`"
-        : `if these ${n} cases all mean the same, say so above the \`default\``
+        ? "say why above the `default` instead, if that is where it belongs"
+        : `say why above the \`default\` if the ${n} cases all mean the same`
       : count === 1
-        ? "if the `default` is right for it, say so"
-        : `if these ${n} cases all mean the same, say which`;
+        ? "name it in the `default` instead, if that is where it belongs"
+        : `name the ${n} cases in the \`default\` if they all mean the same`;
   return [
-    many ? `${same}, or ${list}:` : `${list}, or ${same}:`,
+    many ? `${same}; otherwise ${list}:` : `${list}; or ${same}:`,
     rest === undefined
       ? "    // stateward-ignore unions/default-hides-cases: <why>"
       : `    default: ${rest}`,
@@ -48,13 +53,13 @@ function add(count: number, target: string, rest?: string, many = false): string
 }
 
 function later(subject: string): string {
-  return `\`default\` can't be reached today, but a new \`${subject}\` value would silently land here`;
+  return `\`default\` is unreachable: every case of \`${subject}\` is listed`;
 }
 
 /** The hint of a complete switch whose default has no proof, with the default's own statement. */
 function prove(target: string, statement = "return 0;"): string {
   return [
-    "keep the fallback but let TypeScript check it:",
+    "check the fallback, so a case added later fails to compile:",
     "    default:",
     `      ${target} satisfies never;`,
     ...(statement === "" ? [] : [`      ${statement}`]),
@@ -158,7 +163,7 @@ describe(`unions/${RULE}: a default that hides cases`, () => {
       severity: "error",
       related: [],
       fixes: [
-        { title: "List the 2 hidden cases (same behaviour)" },
+        { title: "List the 2 missing cases (same behaviour)" },
         { title: 'Add `status.kind satisfies "cancel" | "retry";` to the default', safe: false },
       ],
     });
@@ -303,7 +308,7 @@ describe(`unions/${RULE}: headlines stay short`, () => {
     expect(shown(found)).toEqual([
       says(
         "long-names.ts",
-        'this `default` hides 2 cases of `thisIsAVeryLongVariableNameForTheUploadStatusObject.currentProcessingStageOfTheUploadPipeline`: "initialisingTheConnection", "uploadingTheFirstChunk"',
+        '"initialisingTheConnection" and "uploadingTheFirstChunk" of `thisIsAVeryLongVariableNameForTheUploadStatusObject.currentProcessingStageOfTheUploadPipeline` are not listed; `default` handles them',
         add(
           2,
           "thisIsAVeryLongVariableNameForTheUploadStatusObject.currentProcessingStageOfTheUploadPipeline",
@@ -460,7 +465,7 @@ describe(`unions/${RULE}: the quick fix that lists the hidden cases`, { timeout:
     expect(finding?.kind === "problem" ? finding.fixes[0]?.safe : "no finding").toBeUndefined();
     expect(findingIn("generate")).toMatchObject({
       fixes: [
-        { title: "List the 3 hidden cases (same behaviour)" },
+        { title: "List the 3 missing cases (same behaviour)" },
         {
           title: 'Add `generatingType satisfies "flashcards" | "outline" | "quiz";` to the default',
           safe: false,
@@ -469,7 +474,7 @@ describe(`unions/${RULE}: the quick fix that lists the hidden cases`, { timeout:
     });
     expect(findingIn("middleReturns")).toMatchObject({
       fixes: [
-        { title: "List the 2 hidden cases (same behaviour)" },
+        { title: "List the 2 missing cases (same behaviour)" },
         { title: 'Add `step satisfies "b" | "c";` to the default', safe: false },
       ],
     });
@@ -566,7 +571,7 @@ describe(`unions/${RULE}: a check whose type does not resolve`, () => {
     expect(shown(found)).toEqual([
       says(
         "arrows.ts",
-        "stateward cannot tell whether `exhaustiveSwitchError(…)` checks every case of `info.type`: its type does not resolve",
+        "not checked: whether `exhaustiveSwitchError(…)` checks every case of `info.type`: its type does not resolve",
         "make its import resolve (install or build the package that declares it), or put `info satisfies never;` first in the `default`",
       ),
     ]);
@@ -607,10 +612,24 @@ describe(`${CASES}: the check that names the cases falling through`, () => {
       const fixed = readFileSync(file, "utf8").replace('| "pending"', '| "pending" | "archived"');
       writeFileSync(file, fixed);
       expect(shown(checkOnly(dir, RULE)).map((s) => s.message)).toEqual([
-        'this `default` hides 3 cases of `s`: "archived", "closed", "pending"',
+        '"archived", "closed" and "pending" of `s` are not listed; `default` handles them',
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe(`unions/${RULE}: user trial 1.0.2`, () => {
+  it("counts an enum member as the string literal it equals, as TypeScript narrows", () => {
+    const [found] = inFile("enum-cases.ts");
+    expect(found?.message).toBe(hides("1", "status", '"pending"'));
+  });
+
+  it("says a new value would throw, not land silently, when the `default` throws", () => {
+    const [, found] = inFile("enum-cases.ts");
+    expect(found?.message).toBe(
+      "`default` is unreachable: every case of `status` is listed; a case added later throws at run time",
+    );
   });
 });

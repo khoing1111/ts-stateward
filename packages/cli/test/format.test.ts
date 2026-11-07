@@ -245,3 +245,36 @@ describe("formatJson", () => {
     });
   });
 });
+
+describe("formatPretty: what the run could not check as a whole", () => {
+  it("says once which packs could not run and why, and which projects lack strictNullChecks", () => {
+    const out = formatPretty(
+      {
+        ...result([]),
+        notes: {
+          missingTypes: [
+            {
+              library: "React",
+              reason: "React's types are not installed (install the app's dependencies)",
+              rules: [
+                "errors/render-throw-without-boundary",
+                "react/effect-loops",
+                "react/state-copies-prop",
+              ],
+            },
+          ],
+          looseNulls: [path.join(cwd, "tsconfig.json")],
+        },
+      },
+      options,
+    );
+    const lines = out.split("\n");
+    expect(lines).toContain(
+      "not checked: 3 rules of the errors and react packs: React's types are not installed (install the app's dependencies)",
+    );
+    expect(lines).toContain(
+      "`strictNullChecks` is off in `tsconfig.json`, so TypeScript does not check `null` and `undefined` and some fixes prove less: set `strict: true` or `strictNullChecks: true` in tsconfig.json",
+    );
+    expect(out.match(/not checked: /g)).toHaveLength(1);
+  });
+});

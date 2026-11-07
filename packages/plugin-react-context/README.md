@@ -56,16 +56,17 @@ Every key of the config: [config.md](https://github.com/khoing1111/ts-stateward/
 
 ## Rules
 
-| Rule | What it finds | Kind | `recommended` | `strict` |
-| --- | --- | --- | --- | --- |
-| [fake-default-value](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/react-context/fake-default-value.md) | A React context gets its value from a Provider, not from a fake default like {} as Theme. | Coverage | info | error |
-| [provider-missing](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/react-context/provider-missing.md) | A component that reads a required context is rendered under that context's Provider. | Core | error | error |
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [fake-default-value](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/react-context/fake-default-value.md) | a context created with a fake default like `{} as Theme` or `null!` | A default like `{} as Theme` is used when the Provider is missing, so the code reads an empty object typed as a full one and fails later. | Coverage | info | error |
+| [provider-missing](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/react-context/provider-missing.md) | a component that reads a required context, rendered with no Provider above it | A component that reads a required context outside its Provider gets the default value or an error at run time; the finding shows the render path without it. | Core | error | error |
 
-Kind: **Core** rules are on in every preset. **Coverage** rules ask your types to say more; they
-are info under `recommended` and errors under `strict`. **Add-on** rules stay off until you list
-their add-on in `addons`; the table shows their severity once it is listed. A heuristic rule
-guesses, so it is never an error unless you set it.
+**Core** rules are on in every preset. **Coverage** rules point at code whose types do not say
+enough for stateward to check it; they are info under `recommended` and errors under `strict`.
+**Add-on** rules stay off until you list their add-on in `addons`; the table shows their severity
+once it is listed. A rule marked (guess) judges from patterns in the code, not only from types, so
+it can be wrong and is never an error unless you make it one.
 
-Each rule's page says why it matters, what it catches and misses, how to fix what it finds, and its options. The pack's page: [docs/packs/react-context.md](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/react-context.md). Every pack's rules: [the rules index](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/README.md).
+Each rule's page shows an example with what stateward prints for it, the fix, why it matters, what it misses, and its options. The pack's page: [docs/packs/react-context.md](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/react-context.md). Every pack's rules: [the rules index](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/README.md).
 
 <!-- /generated:rules -->

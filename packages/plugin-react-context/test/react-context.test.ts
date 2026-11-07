@@ -11,14 +11,15 @@ function fixture(name: string): string {
 /** The plain form, in the context's own names. */
 function hintFor(label: string, name: string, type: string): string {
   return [
-    "create it with `undefined` and read it in a hook that throws when it is missing:",
+    "create it with `undefined` and read it in a hook that throws, so a missing Provider fails at once:",
     `    const ${name} = createContext<${type} | undefined>(undefined);`,
     `    // in use${label}(): if (value === undefined) throw new Error("${name} needs a Provider");`,
   ].join("\n");
 }
 
 function headline(name: string, argument: string): string {
-  return `\`${name}\` gets a placeholder value (\`${argument}\`) when its Provider is missing`;
+  const context = name === "this context" ? "context" : `\`${name}\``;
+  return `${context} defaults to a fake value, \`${argument}\``;
 }
 
 describe("react-context/fake-default-value", () => {
@@ -76,6 +77,26 @@ describe("react-context/fake-default-value", () => {
     expect(stats.files).toBe(2);
   });
 
+  it("allows the one cast of a helper that returns a RequiredContext, and points a stated context made elsewhere at it", () => {
+    const { findings } = checkFixture(fixture("guarantees"), [reactContext()]);
+    expectMessageStandard(findings);
+    expect(findings.map((f) => [path.basename(f.location.file), f.message, f.hint])).toEqual([
+      [
+        "contexts.ts",
+        headline("ThemeContext", "undefined as never"),
+        [
+          "create it with the helper of the guarantees file, which holds the one cast:",
+          "    requiredContext<Theme>()",
+        ].join("\n"),
+      ],
+      [
+        "contexts.ts",
+        headline("this context", "undefined as never"),
+        hintFor("My", "MyContext", "T"),
+      ],
+    ]);
+  });
+
   it("can be switched off", () => {
     const { findings } = checkFixture(fixture("flagged"), [reactContext()], {
       "react-context/fake-default-value": "off",
@@ -85,18 +106,18 @@ describe("react-context/fake-default-value", () => {
 });
 
 describe("reactContext", () => {
-  it("is a plugin named react-context with its two rules and a hover", () => {
+  it("is a plugin named react-context with its two rules, a hover, a refactoring and its guarantees", () => {
     const plugin = reactContext();
     expect(plugin.name).toBe("react-context");
     expect(Object.keys(plugin.rules)).toEqual(["fake-default-value", "provider-missing"]);
-    expect(Object.keys(plugin.editor ?? {})).toEqual(["hover"]);
+    expect(Object.keys(plugin.editor ?? {})).toEqual(["hover", "codeActions", "guarantees"]);
   });
 
   it("explains the rule with a bad and a good example", () => {
     const rule = ruleCode(reactContext(), "fake-default-value");
     expect(rule.meta.defaultSeverity).toBe("error");
-    expect(rule.meta.explain).toContain("## Bad");
-    expect(rule.meta.explain).toContain("## Good");
+    expect(rule.meta.explain).toContain("example-bad");
+    expect(rule.meta.explain).toContain("example-good");
     expect(rule.meta.explain).not.toContain("createRequiredContext");
   });
 });

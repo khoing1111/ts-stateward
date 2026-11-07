@@ -9,105 +9,174 @@ export const PROVIDER_MISSING_ID = "react-context/provider-missing";
 
 const EXPLAIN = `# react-context/provider-missing
 
-A component that reads a required context is rendered under that context's Provider.
+A component that reads a required context outside its Provider gets the default value or an error at run time; the finding shows the render path without it.
 
-## Why
+\`\`\`tsx example-bad
+import { createContext, useContext } from "react";
+import { createRoot } from "react-dom/client";
 
-\`useAuth()\` throws at run time when no \`AuthContext.Provider\` is above the component. Nothing in the types tells you that \`<Dashboard>\`, rendered from \`<App>\`, renders \`Profile\` without one, so the first person to open that page finds out. This rule follows your components from \`createRoot(…).render(…)\` down, and reports a missing Provider once, at the place it goes missing.
-
-## When to use it
-
-Use it in a React app with contexts that must be there: auth, theme, router state. It checks React's usual pattern, so nothing has to change in your code: a context created with no default (\`createContext<User | undefined>(undefined)\`, or \`null\`) whose readers check the value, a hook that throws (or calls a function that never returns) when it is missing, or a component that reads it with \`useContext\` and returns when it is \`undefined\` or \`null\`. Such a context is required. It is on as an error in every preset. Two add-ons extend it (below). Where it cannot follow a render, it lists a place not checked, with the change that makes it checkable.
-
-## What it catches
-
-A place that renders a component which needs a context (it reads it, or renders something that does) with no Provider for it above. It starts from \`createRoot(el).render(<App/>)\`, \`hydrateRoot\`, and the \`entries\` option, and follows every render, including \`children\`, render props and components passed as props. Each missing Provider is reported once; the related places show the path down to the component that reads it.
-
-### Bad
-
-\`\`\`tsx
+type User = { name: string };
 const AuthContext = createContext<User | undefined>(undefined);
 
 function useAuth(): User {
   const user = useContext(AuthContext);
-  if (!user) throw new Error("useAuth must be used within AuthContext.Provider");
+  if (user === undefined) throw new Error("useAuth needs an AuthContext Provider");
   return user;
 }
 
 function Profile() {
-  const user = useAuth();
-  return <h1>{user.name}</h1>;
+  return <h1>{useAuth().name}</h1>;
 }
 
-createRoot(root).render(<Profile />); // no AuthContext.Provider above
+createRoot(document.body).render(<Profile />);
 \`\`\`
 
-### Good
+A context can also say in its type that it is required: \`requiredContext<Theme>()\` makes a \`RequiredContext<Theme>\`, from \`guarantees.ts\`, the file the quick fix writes once in your project. Every component that reads it must then be proven under its Provider, and what stateward cannot follow is an error:
 
-\`\`\`tsx
-createRoot(root).render(
-  <AuthContext.Provider value={user}>
+\`\`\`ts example-bad file=guarantees.ts
+import { createContext, type Context } from "react";
+
+export type RequiredContext<T> = Context<T> & { readonly __guarantee?: "required-context" };
+
+export function requiredContext<T>(): RequiredContext<T> {
+  return createContext<T>(undefined as never);
+}
+\`\`\`
+
+\`\`\`tsx example-bad file=settings.tsx
+import { useContext } from "react";
+import { createRoot } from "react-dom/client";
+import { requiredContext } from "./guarantees";
+
+type Theme = { dark: boolean };
+const ThemeContext = requiredContext<Theme>();
+
+function Settings() {
+  return <p>{useContext(ThemeContext).dark ? "dark" : "light"}</p>;
+}
+
+function About() {
+  return <p>About</p>;
+}
+
+const pages: Record<string, () => React.JSX.Element> = { settings: Settings, about: About };
+
+function Page({ name }: { name: string }) {
+  const Picked = pages[name] ?? About;
+  return <Picked />;
+}
+
+createRoot(document.body).render(<Page name={location.hash} />);
+\`\`\`
+
+Render the component under the Provider:
+
+\`\`\`tsx example-good
+import { createContext, useContext } from "react";
+import { createRoot } from "react-dom/client";
+
+type User = { name: string };
+const AuthContext = createContext<User | undefined>(undefined);
+
+function useAuth(): User {
+  const user = useContext(AuthContext);
+  if (user === undefined) throw new Error("useAuth needs an AuthContext Provider");
+  return user;
+}
+
+function Profile() {
+  return <h1>{useAuth().name}</h1>;
+}
+
+createRoot(document.body).render(
+  <AuthContext.Provider value={{ name: "Ada" }}>
     <Profile />
   </AuthContext.Provider>,
 );
 \`\`\`
 
-### Fix
+\`<AuthContext value={…}>\` (React 19) counts too, as does rendering it inside a component that provides it. Where the Provider belongs is your call, so no quick fix adds it. For \`Page\`, render the pages it picks directly, under \`ThemeContext\`'s Provider. A \`const\` object of pages, with the \`react-context/dynamic-components\` add-on (below), is followed too; or pass the theme to the pages as a prop.
 
-Wrap the component in the Provider (\`<AuthContext.Provider value={…}>\`, or \`<AuthContext value={…}>\` in React 19), or render it inside a component that provides it. There is no quick fix: where the Provider belongs is your call.
+\`\`\`tsx example-good file=settings.tsx
+import { useContext } from "react";
+import { createRoot } from "react-dom/client";
+import { requiredContext } from "./guarantees";
 
-A hook of your own that takes the context as a parameter and checks it (\`function useRequired<T>(context: Context<T | undefined>): T\`) counts too: each call of it reads the context it is given.
+type Theme = { dark: boolean };
+const ThemeContext = requiredContext<Theme>();
 
-### Code-split pages
+function Settings() {
+  return <p>{useContext(ThemeContext).dark ? "dark" : "light"}</p>;
+}
 
-A page loaded with \`lazy\` is followed into its module, with no add-on: \`lazy(() => import("./Settings"))\` is the module's default export, and \`lazy(() => import("./Settings").then((m) => ({ default: m.Settings })))\` its export \`Settings\`. \`React.lazy\` works too, and so does your own wrapper of \`lazy\` (\`lazyComponent(() => import("./Settings"))\`) when it passes its argument to \`lazy\`. For a wrapper that does more than that, name it in the rule's options:
+function About() {
+  return <p>About</p>;
+}
 
-\`\`\`ts
-rules: { "react-context/provider-missing": ["error", { lazyFunctions: ["lazyComponent"] }] }
+function Page({ name }: { name: string }) {
+  return (
+    <ThemeContext value={{ dark: false }}>
+      {name === "settings" ? <Settings /> : <About />}
+    </ThemeContext>
+  );
+}
+
+createRoot(document.body).render(<Page name={location.hash} />);
 \`\`\`
 
-### Dynamic components
+## Why it matters
 
-A component picked at run time (\`const Panel = panels[tab]\`) gives an info finding by default. With the \`react-context/dynamic-components\` add-on, two shapes are followed: a \`const\` object of components picked by a key with a fixed set of values (every component the key can pick is checked, \`lazy\` pages too), and \`const Page = cond ? A : B\`. A finding then names the entry: \`panels["settings"]\` is \`<Settings>\`.
+\`useAuth()\` throws at run time when no \`AuthContext.Provider\` is above the component. Nothing in the types says that \`<Dashboard>\`, rendered from \`<App>\`, renders \`Profile\` without one, so the first person to open that page finds out. This rule follows your components from \`createRoot(…).render(…)\` down and reports a missing Provider once, at the place it goes missing; the related places show the path down to the component that reads it.
 
-### React Router
+## When it says “not checked”
 
-A child route renders where its parent route renders \`<Outlet/>\`, so a Provider around a layout's \`<Outlet/>\` covers its child routes. With the \`react-context/react-router\` add-on this is followed: \`<Route element>\` and child routes, route objects in \`createBrowserRouter([…])\` and \`useRoutes([…])\`, \`createRoutesFromElements\`, and \`<RouterProvider router={router}/>\`. Without it, nested routes are not checked (they count as having every Provider), and one info finding per router says so.
+Where it cannot follow a render, it lists the place as not checked (an info), with what would make it checkable (for a context stated required, each is an error instead):
+
+- a component picked at run time (\`const Panel = panels[tab]\`): turn on the \`react-context/dynamic-components\` add-on (below), or pick it from a \`const\` object by a key with a fixed set of values. One from a \`let\`, a parameter or a key typed \`string\`, or a picked component given \`children\`, props or a function, stays not checked;
+- your own class components (\`<ErrorBoundary>\`): render the components that read contexts inside it as function components;
+- JSX that leaves the tree: passed to a call (\`toast(<Profile/>)\`), stored, or returned from a function that is not a component;
+- React Router's nested routes, without the \`react-context/react-router\` add-on: one finding per router;
+- a context declared in a package outside the checked files;
+- a component that needs a context but that nothing renders ("is this an entry point?"), and an app with required contexts but no \`createRoot\` it can find: list the entry in \`entries\` (below);
+- an \`entries\` item that matches no component, or a \`provides\` name that matches no required context.
 
 ## What it does not catch
 
-Where it cannot follow a render, it reports an info finding instead of staying quiet, each saying what would make it checkable:
+- A context with a default value, real or fake (\`react-context/fake-default-value\` points at fake ones), and one no reader checks: the code does not say a Provider must be there.
+- Tests and Storybook stories (left out by default), server components, and code in \`node_modules\` or \`.d.ts\` files. Library components are assumed to render \`children\` in place and to provide nothing.
+- Whether a Provider's value is right: TypeScript checks that.
+- Needs that depend on a literal prop value: the prop's type decides, not the value passed.
 
-- a component picked in a way it does not follow (from a \`let\`, a parameter, a key typed \`string\`), or a picked component given \`children\`, props or a function;
-- your own class components (\`<ErrorBoundary>\`): render the components that read contexts inside it as function components;
-- JSX that leaves the tree: passed to a call (\`toast(<Profile/>)\`), stored, or returned from a function that is not a component;
-- React Router routes, without the add-on;
-- a context declared in a package outside the checked files;
-- a component that needs a context but that nothing renders ("is this an entry point?"), and an app with required contexts but no \`createRoot\` it can find;
-- an \`entries\` item that matches no component, or a \`provides\` name that matches no required context.
+## Getting the best from it
 
-It does not check:
+It checks React's usual pattern, so nothing has to change in your code. A context is required when its type says so (\`RequiredContext\`, above), or when it is created with no default (\`createContext<User | undefined>(undefined)\`, or \`null\`) and its readers check the value: a hook that throws (or calls a function that never returns) when it is missing, or a component that reads it with \`useContext\` and returns when it is \`undefined\` or \`null\`. A hook of your own that takes the context as a parameter and checks it (\`function useRequired<T>(context: Context<T | undefined>): T\`) counts too.
 
-- a context with a default value, real or fake (\`react-context/fake-default-value\` points at fake ones), and one no reader checks: the code does not say a Provider must be there;
-- tests and Storybook stories (left out by default), server components, and code in \`node_modules\` or \`.d.ts\` files. Library components are assumed to render \`children\` in place and provide nothing;
-- whether a Provider's value is right: TypeScript checks that;
-- needs that depend on a literal prop value: the prop's type decides, not the value passed.
+It starts from \`createRoot(el).render(<App/>)\`, \`hydrateRoot\`, and the \`entries\` you list, and follows every render, including \`children\`, render props and components passed as props. For an entry point it cannot find (a framework or test entry), list it, with the contexts already provided above it, where you add the plugin: \`reactContext({ entries: [{ file: "src/App.tsx", export: "App", provides: ["ThemeContext"] }] })\`.
+
+Pages loaded with \`lazy\` are followed into their module with no add-on: \`lazy(() => import("./Settings"))\` is the module's default export, and \`lazy(() => import("./Settings").then((m) => ({ default: m.Settings })))\` its export \`Settings\`. \`React.lazy\` works too, and so does your own wrapper of \`lazy\` when it passes its argument to \`lazy\`. Name a wrapper that does more in \`lazyFunctions\`.
+
+Two add-ons let it follow more:
+
+- \`react-context/dynamic-components\`: a \`const\` object of components picked by a key with a fixed set of values (every component the key can pick is checked, \`lazy\` pages too), and \`const Page = cond ? A : B\`. A finding then names the entry: \`panels["settings"]\` is \`<Settings>\`.
+- \`react-context/react-router\`: a child route renders where its parent renders \`<Outlet/>\`, so a Provider around a layout's \`<Outlet/>\` covers its child routes. It follows \`<Route element>\` and child routes, route objects in \`createBrowserRouter([…])\` and \`useRoutes([…])\`, \`createRoutesFromElements\`, and \`<RouterProvider router={router}/>\`. Without it, nested routes count as having every Provider.
+
+### A context stated required
+
+\`createContext<User | undefined>(undefined)\` and a hook that throws when the value is missing say "always under a Provider" at run time; stateward guesses from that pattern. A \`RequiredContext\` says it in the type, and stateward proves it:
+
+- every component that reads it, with \`useContext\`, \`use\` or \`<ThemeContext.Consumer>\`, checked or not, must be rendered under its Provider;
+- a place stateward cannot follow (a component picked at run time, a class component, JSX passed to a function, a reader nothing renders, no entry point) is an error with the path to it, never "not checked";
+- each error names the declaration that states it.
+
+The quick fix on a guarded context (also offered on its declaration in the editor) writes \`guarantees.ts\` the first time, imports it, and rewrites \`createContext<User | undefined>(undefined)\` to \`requiredContext<User>()\`. Once every reader is proven, a second fix drops the hook's check: it says the check is not needed, as an info. Neither fix is applied by \`--fix\`: stating a guarantee is your call. Tests are left out of the proof, so render a reader in a test inside its Provider. More in the guarantees guide, \`docs/user/guarantees.md\`.
 
 ## Turn it on or off
 
-In \`stateward.config.ts\`:
-
 \`\`\`ts
-rules: { "react-context/provider-missing": "off" } // or "warning"
-groups: { "react-context/providers": "off" } // the whole group
 addons: ["react-context/react-router", "react-context/dynamic-components"]
-rules: { "react-context/provider-missing": ["error", { ignore: ["RouterContext"] }] } // a context provided where stateward cannot see
-\`\`\`
-
-For an entry point it cannot find (a framework or test entry), list it, with the contexts already provided above it, where you add the plugin:
-
-\`\`\`ts
-reactContext({ entries: [{ file: "src/App.tsx", export: "App", provides: ["ThemeContext"] }] })
+rules: { "react-context/provider-missing": ["error", { ignore: ["RouterContext"] }] } // provided where stateward cannot see
+rules: { "react-context/provider-missing": ["error", { lazyFunctions: ["lazyComponent"] }] } // your own lazy wrapper
+rules: { "react-context/provider-missing": "off" }
 \`\`\`
 `;
 
@@ -129,10 +198,12 @@ export function createProviderMissing(entries: readonly EntryPoint[]) {
     kind: "project",
     meta: {
       description:
-        "A component that reads a required context is rendered under that context's Provider.",
+        "A component that reads a required context outside its Provider gets the default value or an error at run time; the finding shows the render path without it.",
+      summary: "a component that reads a required context, rendered with no Provider above it",
       defaultSeverity: "error",
       tier: "core",
       group: "providers",
+      needsTypes: { library: "React", modules: ["react"] },
       widenedBy: ["react-router", "dynamic-components"],
       options: OPTIONS,
       explain: EXPLAIN,

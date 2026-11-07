@@ -1,4 +1,5 @@
 import { definePlugin, lazyRule, moduleLoader } from "@stateward/core";
+import { guarantees } from "./guarantees.js";
 import { RULES } from "./rules.meta.js";
 
 /** Each rule's module, imported the first time the rule is on. */
@@ -24,5 +25,6 @@ export function ownership() {
         (module) => module.brandBuiltOutsideOwner,
       ),
     },
+    editor: { guarantees },
   });
 }

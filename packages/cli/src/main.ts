@@ -30,8 +30,10 @@ import {
   createChecker,
   createTimingRecorder,
   packageCacheStats,
+  describeNotChecked,
   describeTurnOn,
   explain,
+  proveGuarantees,
   findConfigFile,
   findConfigUpward,
   groupIds,
@@ -55,6 +57,7 @@ import type {
   Baseline,
   BaselineView,
   Config,
+  Plugin,
   Finding,
   FixForm,
   FixReview,
@@ -79,10 +82,18 @@ import {
   formatJson,
   formatPretty,
   isWarning,
+  notesLines,
   plural,
+  positionAt,
   quietUnknownsLine,
   summaryLine,
 } from "./format.js";
+import {
+  formatGuaranteesJson,
+  formatGuaranteesPretty,
+  guaranteesExitCode,
+  type Locate,
+} from "./guarantees.js";
 import { formatGitHub } from "./github.js";
 import {
   WORKFLOW_FILE,
@@ -243,9 +254,15 @@ function selectRules(
   return selectRule(config, command.rule);
 }
 
+/**
+ * What to do first with rollout on and no rule on yet: `init` and `check` say the same line, so
+ * the quick start's next command is always named (user trial 1.0.2).
+ */
+export const NEXT_FIRST_RULE = "next: run `npx stateward next` to turn on the first rule";
+
 function rolloutLine(on: number): string {
   return on === 0
-    ? "rollout: no rule is on yet, so nothing was checked; run `stateward next` to turn on the first\n\n"
+    ? `rollout: no rule is on yet, so nothing was checked\n${NEXT_FIRST_RULE}\n\n`
     : `rollout: ${plural(on, "rule")} on (stateward.rollout.json); \`stateward plan\` shows the rest\n\n`;
 }
 
@@ -285,6 +302,8 @@ type Analysis = {
   analysedText: (file: string) => string | undefined;
   /** Verifies the fixes `--fix` chose as one set (`Checker.verifyFixSet`). */
   verifyFixSet: (forms: readonly FixForm[]) => FixSetReview;
+  /** Where the results of this run are kept for the next one; undefined with `--no-cache` or none. */
+  cacheDir: string | undefined;
 };
 
 /** One check of the project as `command` asks: the rules, the cache, ignores, the baseline and the chosen files. */
@@ -363,6 +382,7 @@ function analyse(
       testFilesByPattern: raw.stats.testFilesByPattern ?? {},
       analysedText: (file) => checker.analysedText(file),
       verifyFixSet: (forms) => checker.verifyFixSet(forms),
+      cacheDir: dir,
     };
   };
   if (!tryFixes) {
@@ -540,7 +560,11 @@ async function runCheck(
     return 0;
   }
   const shownConfig = configShown(place);
-  if (command.verbose === true) env.stderr(verboseLines(place, loaded.value, result));
+  if (command.verbose === true) {
+    env.stderr(
+      verboseLines(place, loaded.value, result, analysis.cacheDir, command.noCache === true),
+    );
+  }
   // With rollout on, only the rules turned on run: say how many, so "No problems" is never
   // mistaken for a clean project when no rule ran at all.
   const rollout =
@@ -564,6 +588,9 @@ async function runCheck(
   // The pretty report says it in its summary; the other formats keep stdout for the findings.
   if (command.format !== "pretty" && accepted?.outdated === true) {
     env.stderr(`stateward: ${OUTDATED_BASELINE}\n`);
+  }
+  if (command.format !== "pretty") {
+    for (const line of notesLines(result.notes, place.here)) env.stderr(`stateward: ${line}\n`);
   }
   env.stdout(
     command.format === "json"
@@ -629,21 +656,43 @@ function verboseLines(
   place: Place,
   config: Config & { configFile: string },
   result: CheckResult,
+  cacheDir: string | undefined,
+  noCache: boolean,
 ): string {
   const shown = (file: string): string => displayPath(place.here, file);
   const projects =
     result.stats.projects ??
     config.tsconfig.map((tsconfig) => ({ tsconfig, files: result.stats.files }));
+  const cache =
+    cacheDir === undefined
+      ? `stateward: results are not kept for the next run${noCache ? " (--no-cache)" : ""}`
+      : `stateward: results cache ${shown(cacheDir)}`;
   return [
     `stateward: config ${shown(config.configFile)}`,
     ...projects.map(
       ({ tsconfig, files }) => `stateward: project ${shown(tsconfig)} (${plural(files, "file")})`,
     ),
+    cache,
     "",
   ].join("\n");
 }
 
 /** `baselined 12 findings in 3 files; only new ones will fail from now on` */
+/** Rule ids in `baseline` whose pack is loaded but no longer has the rule (removed in a release). */
+function removedRuleIds(
+  plugins: readonly Plugin[],
+  baseline: Baseline | undefined,
+): ReadonlySet<string> {
+  const packs = new Set(plugins.map((plugin) => plugin.name));
+  const known = new Set(
+    plugins.flatMap((plugin) => Object.keys(plugin.rules).map((key) => `${plugin.name}/${key}`)),
+  );
+  const ids = (baseline?.entries ?? []).map((entry) => entry.ruleId);
+  return new Set(
+    ids.filter((id) => packs.has(id.slice(0, Math.max(0, id.indexOf("/")))) && !known.has(id)),
+  );
+}
+
 async function runBaseline(
   command: Extract<Command, { kind: "baseline" }>,
   place: Place,
@@ -672,8 +721,17 @@ async function runBaseline(
   const ran = activeRuleIds(config, selection);
   const context = { configDir: config.configDir, readText: readTextOrUndefined };
   if (command.prune) {
-    const view = applyBaseline(existing, result, { ...context, ran });
-    if (view.pruned === undefined || view.fixed === 0) {
+    // An entry of a rule its pack no longer has can never match again: prune drops it. An entry of
+    // a pack the config does not load is kept, since that pack may come back.
+    const removed = removedRuleIds(config.plugins, existing);
+    const kept =
+      existing === undefined
+        ? undefined
+        : { entries: existing.entries.filter((entry) => !removed.has(entry.ruleId)) };
+    const dropped =
+      sizeOf(existing ?? { entries: [] }).findings - sizeOf(kept ?? { entries: [] }).findings;
+    const view = applyBaseline(kept, result, { ...context, ran });
+    if (view.pruned === undefined || (view.fixed === 0 && dropped === 0)) {
       env.stdout(
         `nothing to prune: all ${plural(sizeOf(existing ?? { entries: [] }).findings, "baselined finding")} are still found\n`,
       );
@@ -681,8 +739,12 @@ async function runBaseline(
     }
     writeBaseline(config, view.pruned);
     const left = sizeOf(view.pruned).findings;
+    const gone =
+      dropped === 0
+        ? ""
+        : `, and ${plural(dropped, "finding")} of rules that no longer exist (${[...removed].sort().join(", ")})`;
     env.stdout(
-      `pruned ${plural(view.fixed, "fixed finding")} from ${BASELINE_FILE}; ${String(left)} still baselined\n`,
+      `pruned ${plural(view.fixed, "fixed finding")}${gone} from ${BASELINE_FILE}; ${String(left)} still baselined\n`,
     );
     return 0;
   }
@@ -938,7 +1000,7 @@ async function runInit(
       `Install what it imports (${manager}, from your lockfile; stateward does not run it):`,
       `  ${installCommand(manager, packs)}`,
       "",
-      rollout ? "Then run: stateward plan" : "Then run: stateward check",
+      rollout ? NEXT_FIRST_RULE : "Then run: stateward check",
       "",
       ...(command.ci === undefined
         ? []
@@ -1024,6 +1086,9 @@ async function runNext(
   const result = layBaseline(config, baseline, raw, everything).fresh;
   const step = advance(buildPlan(config, result), enabled, command.anyway);
   switch (step.kind) {
+    case "not-checked":
+      env.stdout(`${describeNotChecked(step.rows)}\n`);
+      return 0;
     case "all-on":
       env.stdout(`every rule is on; you can remove ${ROLLOUT_FILE} and \`rollout\`\n`);
       return 0;
@@ -1090,6 +1155,60 @@ async function runDeps(
     env,
     failures.map((finding) => finding.message),
   );
+}
+
+/**
+ * `stateward guarantees`: every stated guarantee, with its proof. Every rule runs, so a guarantee
+ * whose rule the config leaves off is still listed (as not checked), never left out; a guarantee
+ * counts the findings of a rule only when the config turns that rule on.
+ */
+async function runGuarantees(
+  command: Extract<Command, { kind: "guarantees" }>,
+  place: Place,
+  env: CliEnv,
+): Promise<ExitCode> {
+  const loaded = await loadForAnalysis(place, env);
+  if (!loaded.ok) return fail(env, loaded.errors);
+  const config = loaded.value;
+  const checker = createChecker({
+    config,
+    cwd: place.project,
+    rules: { kind: "all" },
+    cache: false,
+    uncapped: true,
+  });
+  const result = checker.check();
+  const proofs = proveGuarantees(
+    checker.guarantees(),
+    result.findings,
+    activeRuleIds(config, { kind: "configured" }),
+  );
+  const texts = new Map<string, string>();
+  const locate: Locate = (location) => {
+    const text =
+      texts.get(location.file) ??
+      checker.analysedText(location.file) ??
+      readTextOrUndefined(location.file) ??
+      "";
+    texts.set(location.file, text);
+    return {
+      file: displayPath(place.here, location.file),
+      line: positionAt(text, location.start).line,
+    };
+  };
+  env.stdout(
+    command.format === "json"
+      ? `${formatGuaranteesJson(proofs, locate)}\n`
+      : formatGuaranteesPretty(proofs, locate),
+  );
+  const failures = result.findings.filter((finding) => finding.kind === "failure");
+  if (failures.length > 0) {
+    return fail(
+      env,
+      failures.map((finding) => finding.message),
+    );
+  }
+  return guaranteesExitCode(proofs);
 }
 
 /** `stateward cache stats` and `stateward cache clean`: the global package cache only. */
@@ -1217,6 +1336,8 @@ async function run(command: Command, env: CliEnv): Promise<ExitCode> {
       return runExplain(command.ruleId, locate(cwd, command.config), env);
     case "deps":
       return runDeps(command, locate(cwd, command.config), env);
+    case "guarantees":
+      return runGuarantees(command, locate(cwd, command.config), env);
     case "cache":
       return runCache(command, cwd, env);
     case "help":

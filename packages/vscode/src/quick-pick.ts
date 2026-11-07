@@ -58,8 +58,8 @@ export function actionItems(): readonly ActionItem[] {
       "Show the rule plan",
       "Every rule with its findings in your code, in a suggested order",
     ),
-    item("next", "Turn on the next rule", "Only that rule's findings are new"),
-    item("explain", "Explain a rule…", "What a rule protects, why, and how to turn it off"),
-    item("recheck", "Re-check now", "Check the whole project again"),
+    item("next", "Turn on the next rule", "Adds the findings of that rule only"),
+    item("explain", "Explain a rule…", "Why a rule matters, what it finds, and how to turn it off"),
+    item("recheck", "Check again", "Check the whole project again"),
   ];
 }

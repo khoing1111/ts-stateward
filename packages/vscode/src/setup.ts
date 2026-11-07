@@ -67,7 +67,7 @@ export function installCommand(manager: PackageManager): string {
   }
 }
 
-/** What the extension does for "Set up this project", from whether stateward is installed there. */
+/** What the extension does for "Set up the project", from whether stateward is installed there. */
 export type SetupPlan =
   /** Run `npx stateward init` in an integrated terminal in the folder. */
   | { kind: "run-init"; command: string }
@@ -80,6 +80,6 @@ export function planSetup(installed: boolean, manager: PackageManager): SetupPla
   return {
     kind: "explain-install",
     command,
-    message: `Stateward is not installed in this project. Run \`${command}\` in the project folder, then choose "Stateward: Set up this project" again.`,
+    message: `Stateward is not installed in this project. Run \`${command}\` in the project folder, then choose "Stateward: Set up the project" again.`,
   };
 }

@@ -1,8 +1,8 @@
 # Before each commit or push
 
-Check what you are about to commit, and stop the commit on an error. stateward must be in your
-app's `devDependencies` ([install.md](install.md)). It checks the whole project each time, so on a
-big project a pre-commit hook can take tens of seconds; a pre-push hook runs less often.
+A git hook can check the staged changes and stop the commit when there is an error. stateward must
+be in the app's `devDependencies` ([install.md](install.md)). It checks the whole project each time,
+so on a large project a pre-commit hook can take tens of seconds; a pre-push hook runs less often.
 
 ## Set up a hook
 
@@ -12,9 +12,9 @@ From your app's folder:
 npx stateward init --hook
 ```
 
-It uses what your app already has:
+It uses the hook tool the app already has:
 
-| You have                  | It does                                                          |
+| The app has               | It does                                                          |
 | ------------------------- | ---------------------------------------------------------------- |
 | husky (a `.husky` folder) | adds `npx --no stateward check --staged` to `.husky/pre-commit`  |
 | lefthook (`lefthook.yml`) | adds a `stateward` command to its `pre-commit` section           |
@@ -44,7 +44,7 @@ It checks the staged version of each staged file, and reports only findings in s
 point into one:
 
 ```text
-error[unions/default-hides-cases]: this `default` hides 1 case of `status`: "failed"
+error[unions/default-hides-cases]: "failed" of `status` is not listed; `default` handles it
  --> src/status.ts:9:5
 ...
 1 error in 1 changed file (4 problems elsewhere not shown, 0.4 s).
@@ -57,8 +57,8 @@ branch you push to, or for a new branch the default branch (`origin/HEAD`, else 
 
 ## With lint-staged
 
-lint-staged adds file names to its commands, but stateward checks the whole project. Use a function,
-so the names are left out, in `lint-staged.config.mjs`:
+lint-staged adds file names to its commands, but stateward checks the whole project. To leave the
+names out, use a function in `lint-staged.config.mjs`:
 
 ```js
 export default { "*.{ts,tsx}": () => "npx --no stateward check --staged" };
@@ -72,5 +72,5 @@ A JSON config cannot do this; use husky or `init --hook`.
 npx --no stateward check --changed
 ```
 
-This reports findings in files changed since your branch left `main`, and in files not committed
-yet. Name another base if needed: `--changed origin/develop`.
+This reports findings in files changed on the branch since it was created from `main`, and in files
+not committed yet. To compare with another base, name it: `--changed origin/develop`.

@@ -6,7 +6,6 @@ import { errors } from "../src/index.js";
 
 const RULES = [
   "catch-hides-unexpected",
-  "catch-without-intent",
   "finally-can-throw",
   "catch-misses-error",
   "throws-doc-mismatch",
@@ -18,7 +17,7 @@ const RULES = [
 ] as const;
 
 /** The pack's add-ons, on in every fixture: a fixture is judged by one rule either way. */
-export const ADDONS = ["errors/catch-intent", "errors/narrow-try"] as const;
+export const ADDONS = ["errors/narrow-try"] as const;
 
 export type RuleKey = (typeof RULES)[number];
 

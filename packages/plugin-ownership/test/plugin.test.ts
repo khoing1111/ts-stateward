@@ -3,14 +3,14 @@ import { ownership } from "../src/index.js";
 import { ruleCode } from "@stateward/core/testing";
 
 describe("ownership", () => {
-  it("is a plugin named ownership with its two rules, one group, and no editor contributions", () => {
+  it("is a plugin named ownership with its two rules, one group, and its guarantees for the editor", () => {
     const plugin = ownership();
     expect(plugin.name).toBe("ownership");
     expect(Object.keys(plugin.rules)).toEqual([
       "state-written-outside-owner",
       "brand-built-outside-owner",
     ]);
-    expect(plugin.editor).toBeUndefined();
+    expect(Object.keys(plugin.editor ?? {})).toEqual(["guarantees"]);
     expect(plugin.description).toBe(
       "One owner per piece of shared state and per brand: others call the owner's functions.",
     );
@@ -34,8 +34,8 @@ describe("ownership", () => {
     expect(rule.meta.group).toBe("owners");
     expect(rule.meta.description.length).toBeGreaterThan(0);
     expect(rule.meta.explain).toContain("# ownership/state-written-outside-owner");
-    expect(rule.meta.explain).toContain("## Bad");
-    expect(rule.meta.explain).toContain("## Good");
+    expect(rule.meta.explain).toContain("example-bad");
+    expect(rule.meta.explain).toContain("example-good");
     expect(rule.meta.explain).toContain(
       'rules: { "ownership/state-written-outside-owner": "off" }',
     );

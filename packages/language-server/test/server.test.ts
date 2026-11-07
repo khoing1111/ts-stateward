@@ -243,7 +243,7 @@ function nextDiagnostics(
 // Each test starts a real server that builds a TypeScript program for the example project, which
 // takes a few seconds on a cold or busy machine; the 5 s default made these flaky.
 describe("language server", { timeout: 20_000 }, () => {
-  it("advertises hover, quickfixes and semantic tokens with the TokenType legend", async () => {
+  it("advertises hover, code lenses, quickfixes and semantic tokens with the TokenType legend", async () => {
     const client = connect(example);
     const result: unknown = await client.sendRequest("initialize", {
       processId: null,
@@ -255,6 +255,7 @@ describe("language server", { timeout: 20_000 }, () => {
       capabilities: {
         hoverProvider: true,
         inlayHintProvider: true,
+        codeLensProvider: { resolveProvider: false },
         codeActionProvider: {
           codeActionKinds: ["quickfix", "refactor.rewrite", "source.fixAll.stateward"],
         },
@@ -531,6 +532,42 @@ describe("language server", { timeout: 20_000 }, () => {
     expect(narrow).toEqual([]);
   });
 
+  it("answers inlay hints before the first full pass with nothing when it can ask the client again after it", async () => {
+    const dir = scratchProject("ls-", {
+      ...PROJECT,
+      "stateward.config.ts": [
+        "const inlayHints = ({ sourceFile }) => [",
+        "  { offset: sourceFile.getEnd(), kind: 'end', label: 'end' },",
+        "];",
+        "export default { preset: 'recommended', plugins: [{ name: 'hints', description: 'd', rules: {}, editor: { inlayHints } }] };",
+        "",
+      ].join("\n"),
+    });
+    const client = connect(dir, [dir], { workspace: { inlayHint: { refreshSupport: true } } });
+    const inbox = collect(client);
+    const refreshed = new Promise<void>((resolve) => {
+      client.onRequest("workspace/inlayHint/refresh", () => {
+        resolve();
+        return null;
+      });
+    });
+    inbox.client.sendNotification("initialized", {}).catch(rethrow);
+    const theme = pathToFileURL(path.join(dir, "src", "theme.tsx")).href;
+    await inbox.client.sendNotification("textDocument/didOpen", {
+      textDocument: { uri: theme, languageId: "typescriptreact", version: 1, text: themeText },
+    });
+    const ask = (): Promise<unknown> =>
+      inbox.client.sendRequest("textDocument/inlayHint", {
+        textDocument: { uri: theme },
+        range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
+      });
+    // Asked as the file opens: nothing yet, and no program is built for it.
+    expect(await ask()).toEqual([]);
+    // The first full pass asks the client to ask again.
+    await refreshed;
+    expect(await ask()).toEqual([{ position: { line: 2, character: 0 }, label: "end", kind: 1 }]);
+  });
+
   it("pulls the stateward settings from a client that answers workspace/configuration", async () => {
     const dir = scratchProject("ls-", {
       ...PROJECT,
@@ -744,12 +781,18 @@ describe("language server", { timeout: 20_000 }, () => {
 
   it("offers Explain and fix-all code actions for stateward diagnostics", async () => {
     const dir = scratchProject("ls-", { ...PROJECT, "stateward.config.ts": FIXING_ALL_CONFIG });
-    const inbox = collect(connect(dir));
+    // No pass runs on its own after an edit (a save runs one): what is offered before a pass
+    // recomputes the fixes is asserted without racing the fast pass's 100 ms timer, which a
+    // loaded machine can miss between the edit and the requests.
+    const never = 60 * 60 * 1000;
+    const inbox = collect(connect(dir, [dir], {}, { fastMs: never, fullMs: never }));
     inbox.client.sendNotification("initialized", {}).catch(rethrow);
     const theme = pathToFileURL(path.join(dir, "src", "theme.tsx")).href;
     await inbox.client.sendNotification("textDocument/didOpen", {
       textDocument: { uri: theme, languageId: "typescriptreact", version: 1, text: themeText },
     });
+    // Opening counts as an edit: a save runs the pass now.
+    await inbox.client.sendNotification("textDocument/didSave", { textDocument: { uri: theme } });
     await inbox.until(() => inbox.diagnostics.at(-1)?.diagnostics.length === 2);
     const diagnostics = inbox.diagnostics.at(-1)?.diagnostics ?? [];
     const ask = async (only?: readonly string[]): Promise<readonly CodeActionShape[]> => {
@@ -766,7 +809,7 @@ describe("language server", { timeout: 20_000 }, () => {
     const quick = await ask(["quickfix"]);
     const titles = quick.map((action) => action.title);
     expect(titles).toContain("Explain fixing/always");
-    expect(titles).toContain("Fix all stateward problems in this file");
+    expect(titles).toContain("Fix all stateward problems in the file");
     expect(quick.find((a) => a.title.startsWith("Explain"))?.command).toEqual({
       title: "Explain fixing/always",
       command: "stateward.explain",
@@ -782,7 +825,7 @@ describe("language server", { timeout: 20_000 }, () => {
     const fix = quick.find((a) => a.title === "Fix it");
     expect(fix?.edit?.documentChanges?.[0]?.textDocument).toEqual({ uri: theme, version: 1 });
 
-    // An edit makes every offset in those fixes stale: none is offered until the fast pass recomputes them.
+    // An edit makes every offset in those fixes stale: none is offered until a pass recomputes them.
     const fresh = nextDiagnostics(inbox.client, theme, (p) => p.diagnostics.length > 0);
     await inbox.client.sendNotification("textDocument/didChange", {
       textDocument: { uri: theme, version: 2 },
@@ -790,6 +833,7 @@ describe("language server", { timeout: 20_000 }, () => {
     });
     expect(await ask(["source.fixAll"])).toEqual([]);
     expect((await ask(["quickfix"])).filter((a) => a.edit !== undefined)).toEqual([]);
+    await inbox.client.sendNotification("textDocument/didSave", { textDocument: { uri: theme } });
     await fresh;
     const [after] = await ask(["source.fixAll"]);
     expect(after?.edit?.documentChanges?.[0]?.textDocument).toEqual({ uri: theme, version: 2 });
@@ -846,9 +890,9 @@ describe("language server: fixes are tried before they are offered", { timeout: 
           )
         : [];
     };
-    expect(await ask()).toEqual(["Compiles", "Second form", "Ignore this case here"]);
+    expect(await ask()).toEqual(["Compiles", "Second form", "Add an ignore comment"]);
     // Asked again, the kept verdicts answer the same.
-    expect(await ask()).toEqual(["Compiles", "Second form", "Ignore this case here"]);
+    expect(await ask()).toEqual(["Compiles", "Second form", "Add an ignore comment"]);
 
     // After an edit, the fast pass's findings are tried on the edited text.
     const seen = inbox.logs.length;
@@ -857,7 +901,7 @@ describe("language server: fixes are tried before they are offered", { timeout: 
       contentChanges: [{ text: `export const x = 1;\nexport const y = 2;\n` }],
     });
     await inbox.until(() => inbox.logs.slice(seen).some((line) => line.startsWith("checked src")));
-    expect(await ask()).toEqual(["Compiles", "Second form", "Ignore this case here"]);
+    expect(await ask()).toEqual(["Compiles", "Second form", "Add an ignore comment"]);
     expect(inbox.logs.filter((line) => line.includes("failed"))).toEqual([]);
   });
 });
@@ -905,7 +949,7 @@ describe("language server: ignore comments", { timeout: 20_000 }, () => {
     const actions = Array.isArray(answer)
       ? answer.flatMap((item: unknown) => (isAction(item) ? [item] : []))
       : [];
-    const ignore = actions.find((action) => action.title === "Ignore this case here");
+    const ignore = actions.find((action) => action.title === "Add an ignore comment");
     expect(ignore?.edit?.documentChanges?.[0]).toMatchObject({
       textDocument: { uri: theme, version: 1 },
       edits: [{ newText: "// stateward-ignore fixing/always: \n" }],
@@ -1446,6 +1490,60 @@ describe("language server: the results cache on disk", { timeout: 60_000 }, () =
     expect(warm.inbox.popups).toEqual([]);
   });
 
+  it("publishes an open, unedited file's saved findings first without running its rules; an edit runs them", async () => {
+    const { app, cache, runs } = probeProject();
+    const b = path.join(app, "src", "b.ts");
+    const bUri = pathToFileURL(b).href;
+    const bText = readFileSync(b, "utf8");
+    const cold = await firstFullPass(app, {});
+    for (const dispose of disposers.splice(0)) dispose();
+
+    /** A server on the cache with b.ts open, as the editor reopens it. */
+    const startWithOpenFile = async (): Promise<Inbox> => {
+      const inbox = collect(connect(app, [app], {}, { cacheDir: () => cache }));
+      inbox.client.sendNotification("initialized", {}).catch(rethrow);
+      await inbox.client.sendNotification("textDocument/didOpen", {
+        textDocument: { uri: bUri, languageId: "typescript", version: 1, text: bText },
+      });
+      return inbox;
+    };
+    // The first start with the file open writes the cache when its full pass ends.
+    const first = await startWithOpenFile();
+    await first.until(() => first.statuses.length === 1);
+    for (const dispose of disposers.splice(0)) dispose();
+    const ranBefore = runs();
+
+    const inbox = await startWithOpenFile();
+    const fastLine = (line: string): boolean => /^checked src[\\/]b\.ts in \d+ ms$/.test(line);
+    // The fast pass logs its line after it published: by then no full pass has ended.
+    await inbox.until(() => inbox.logs.some(fastLine) || inbox.statuses.length > 0);
+    expect(inbox.logs.some(fastLine)).toBe(true);
+    expect(inbox.statuses).toHaveLength(0);
+    expect(runs()).toBe(ranBefore);
+    expect(inbox.diagnostics.find((published) => published.uri === bUri)?.diagnostics).toEqual(
+      cold.diagnostics.get(bUri),
+    );
+    await inbox.until(() => inbox.statuses.length === 1);
+    expect(runs()).toBe(ranBefore);
+    const warm = new Map<string, unknown>();
+    for (const published of inbox.diagnostics) warm.set(published.uri, published.diagnostics);
+    expect(warm).toEqual(cold.diagnostics);
+
+    // An edit: the rule runs on the new text, and the finding moves with the first statement.
+    const seen = inbox.logs.length;
+    const editedText = `export const first = 0;\n${bText}`;
+    await inbox.client.sendNotification("textDocument/didChange", {
+      textDocument: { uri: bUri, version: 2 },
+      contentChanges: [{ text: editedText }],
+    });
+    await inbox.until(() => inbox.logs.slice(seen).some(fastLine));
+    expect(runs()).toBe(ranBefore + 1);
+    const edited = inbox.diagnostics.filter((published) => published.uri === bUri).at(-1);
+    expect(edited?.diagnostics).toMatchObject([
+      { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 23 } } },
+    ]);
+  });
+
   it("writes its results after a full pass, at most once per interval, and the rest when it stops", async () => {
     const { app, cache, runs } = probeProject();
     const { inbox } = await firstFullPass(app, { cacheDir: () => cache, saveMs: 60_000 });
@@ -1566,5 +1664,205 @@ describe("language server: the results cache on disk", { timeout: 60_000 }, () =
       await touch(inbox, path.join(dir, "src", "data.json"));
       await inbox.until(() => inbox.diagnostics.at(-1)?.diagnostics.length === 0);
     });
+  });
+});
+
+/**
+ * Two `RequiredContext`s (`ThemeContext` provided above its two readers, `AuthContext` read by
+ * `<Profile>` with no Provider), one read by nothing (`LocaleContext`), and two `Owned` values
+ * (`settings` changed only by its module, `session` changed by `toolbar.ts`).
+ */
+const GUARANTEES: Readonly<Record<string, string>> = {
+  "tsconfig.json": TSCONFIG,
+  "stateward.config.ts": [
+    'import { ownership } from "@stateward/plugin-ownership";',
+    'import { reactContext } from "@stateward/plugin-react-context";',
+    "export default {",
+    '  preset: "recommended",',
+    '  plugins: [ownership(), reactContext({ entries: [{ file: "src/main.tsx", export: "App", provides: ["ThemeContext"] }] })],',
+    "};",
+    "",
+  ].join("\n"),
+  "src/guarantees.ts": [
+    'import { createContext, type Context } from "react";',
+    'export type RequiredContext<T> = Context<T> & { readonly __guarantee?: "required-context" };',
+    "export function requiredContext<T>(): RequiredContext<T> {",
+    "  return createContext<T>(undefined as never);",
+    "}",
+    'export type Owned<T> = T & { readonly __guarantee?: "owned" };',
+    "",
+  ].join("\n"),
+  "src/contexts.ts": [
+    'import { requiredContext } from "./guarantees";',
+    "export const ThemeContext = requiredContext<{ dark: boolean }>();",
+    "export const AuthContext = requiredContext<{ name: string }>();",
+    "export const LocaleContext = requiredContext<string>();",
+    "",
+  ].join("\n"),
+  "src/Readers.tsx": [
+    'import { useContext } from "react";',
+    'import { AuthContext, ThemeContext } from "./contexts";',
+    'export function Header() { return <h1>{useContext(ThemeContext).dark ? "d" : "l"}</h1>; }',
+    'export function Footer() { return <p>{useContext(ThemeContext).dark ? "d" : "l"}</p>; }',
+    "export function Profile() { return <p>{useContext(AuthContext).name}</p>; }",
+    "",
+  ].join("\n"),
+  "src/main.tsx": [
+    'import { Footer, Header, Profile } from "./Readers";',
+    "export function App() { return <main><Header /><Profile /><Footer /></main>; }",
+    "",
+  ].join("\n"),
+  "src/session.ts": [
+    'import type { Owned } from "./guarantees";',
+    "export const session: Owned<{ user: string | null }> = { user: null };",
+    "export function signOut(): void { session.user = null; }",
+    "",
+  ].join("\n"),
+  "src/toolbar.ts": [
+    'import { session } from "./session";',
+    "export function onLogout(): void { session.user = null; }",
+    "",
+  ].join("\n"),
+};
+
+type LensShape = {
+  range: { start: { line: number; character: number } };
+  command?: { title: string; command: string; arguments?: unknown[] };
+};
+
+function isLens(item: unknown): item is LensShape {
+  return typeof item === "object" && item !== null && "range" in item;
+}
+
+describe("language server: stated guarantees", { timeout: 20_000 }, () => {
+  async function opened(): Promise<{
+    inbox: Inbox;
+    uri: (file: string) => string;
+    hover: (file: string, line: number, character: number) => Promise<string | null>;
+    lenses: (file: string) => Promise<LensShape[]>;
+  }> {
+    const dir = scratchProject("ls-guarantees-", GUARANTEES);
+    const inbox = collect(connect(dir));
+    inbox.client.sendNotification("initialized", {}).catch(rethrow);
+    const uri = (file: string): string => pathToFileURL(path.join(dir, file)).href;
+    for (const file of ["src/contexts.ts", "src/session.ts", "src/main.tsx"]) {
+      await inbox.client.sendNotification("textDocument/didOpen", {
+        textDocument: {
+          uri: uri(file),
+          languageId: "typescriptreact",
+          version: 1,
+          text: GUARANTEES[file],
+        },
+      });
+    }
+    await inbox.until(() => inbox.statuses.length > 0);
+    const hover = async (file: string, line: number, character: number) => {
+      const answer: unknown = await inbox.client.sendRequest("textDocument/hover", {
+        textDocument: { uri: uri(file) },
+        position: { line, character },
+      });
+      if (typeof answer !== "object" || answer === null || !("contents" in answer)) return null;
+      const { contents } = answer;
+      return typeof contents === "object" && contents !== null && "value" in contents
+        ? String(contents.value)
+        : null;
+    };
+    const lenses = async (file: string): Promise<LensShape[]> => {
+      const answer: unknown = await inbox.client.sendRequest("textDocument/codeLens", {
+        textDocument: { uri: uri(file) },
+      });
+      return Array.isArray(answer) ? answer.filter(isLens) : [];
+    };
+    return { inbox, uri, hover, lenses };
+  }
+
+  it("hovers a marked declaration with what it promises and its proof, from the last pass", async () => {
+    const { hover } = await opened();
+    const theme = await hover("src/contexts.ts", 1, 15);
+    expect(theme).toContain(
+      "**Guaranteed:** every reader is rendered under its Provider (`RequiredContext<{ dark: boolean; }>`); proven for 2 readers",
+    );
+    const auth = await hover("src/contexts.ts", 2, 15);
+    expect(auth).toContain("; not proven: 1 error");
+    expect(auth).toContain(
+      "First: `<App>` is rendered without `AuthContext.Provider` (src/main.tsx:2)",
+    );
+    const session = await hover("src/session.ts", 1, 15);
+    expect(session).toContain(
+      "**Guaranteed:** only `src/session.ts` changes it (`Owned<{ user: string | null }>`); not proven: 1 error",
+    );
+    expect(session).toContain(
+      "First: `session` is changed outside its owner, `src/session.ts` (src/toolbar.ts:2)",
+    );
+    // Not on a marked declaration: no guarantee.
+    expect((await hover("src/session.ts", 2, 1)) ?? "").not.toContain("Guaranteed");
+  });
+
+  it("puts a code lens above each marked declaration that lists what it covers", async () => {
+    const { lenses, uri } = await opened();
+    const contexts = await lenses("src/contexts.ts");
+    expect(contexts.map((lens) => [lens.range.start.line, lens.command?.title])).toEqual([
+      [1, "2 readers proven · show"],
+      [2, "1 not proven · 1 reader · show"],
+      [3, "unused: no reader, so nothing to prove; use it or drop the marker"],
+    ]);
+    expect(contexts[0]?.command?.command).toBe("stateward.showGuaranteeCovers");
+    expect(contexts[0]?.command?.arguments).toEqual([
+      {
+        title: "ThemeContext: proven for 2 readers",
+        places: [
+          {
+            uri: uri("src/Readers.tsx"),
+            range: { start: { line: 2, character: 16 }, end: { line: 2, character: 22 } },
+            label: "<Header>",
+          },
+          {
+            uri: uri("src/Readers.tsx"),
+            range: { start: { line: 3, character: 16 }, end: { line: 3, character: 22 } },
+            label: "<Footer>",
+          },
+        ],
+      },
+    ]);
+    // A dead marker lists nothing: its lens is a label.
+    expect(contexts[2]?.command?.command).toBe("");
+    const session = await lenses("src/session.ts");
+    expect(session.map((lens) => lens.command?.title)).toEqual(["1 not proven · 2 writers · show"]);
+  });
+
+  it("offers Show proof path on an error about a guarantee, walking from the error to the declaration", async () => {
+    const { inbox, uri } = await opened();
+    const answer: unknown = await inbox.client.sendRequest("textDocument/codeAction", {
+      textDocument: { uri: uri("src/main.tsx") },
+      range: { start: { line: 1, character: 0 }, end: { line: 1, character: 80 } },
+      context: { diagnostics: [] },
+    });
+    const actions = Array.isArray(answer) ? answer.filter(isAction) : [];
+    const path = actions.find((action) => action.title === "Show the proof path of AuthContext");
+    expect(path?.command).toMatchObject({ command: "stateward.showProofPath" });
+    const command: unknown = path?.command;
+    const argument: unknown =
+      typeof command === "object" &&
+      command !== null &&
+      "arguments" in command &&
+      Array.isArray(command.arguments)
+        ? command.arguments[0]
+        : undefined;
+    expect(argument).toMatchObject({
+      title: "Proof path: `<App>` is rendered without `AuthContext.Provider`",
+    });
+    const places: unknown[] =
+      typeof argument === "object" &&
+      argument !== null &&
+      "places" in argument &&
+      Array.isArray(argument.places)
+        ? argument.places
+        : [];
+    const uris = places.map((place) =>
+      typeof place === "object" && place !== null && "uri" in place ? place.uri : undefined,
+    );
+    // Where it fails first, the declaration last.
+    expect(uris[0]).toBe(uri("src/main.tsx"));
+    expect(uris.at(-1)).toBe(uri("src/contexts.ts"));
   });
 });

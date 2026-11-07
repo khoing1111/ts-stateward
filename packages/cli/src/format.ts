@@ -1,10 +1,12 @@
 import {
   OUTDATED_BASELINE,
+  STRICT_NULLS_REMEDY,
   compareFindings,
   displayPath,
   ignoreFix,
 } from "@stateward/core/internal";
 import type {
+  CheckNotes,
   CheckResult,
   Finding,
   Fix,
@@ -64,6 +66,9 @@ export function isQuietUnknown(finding: Finding): boolean {
 export function isShownByCheck(finding: Finding, verbose: boolean): boolean {
   return isListed(finding) && (verbose || !isQuietUnknown(finding));
 }
+
+/** Past this many files whose imports do not resolve, `check` lists them only with `--verbose`. */
+const IMPORTS_LISTED = 20;
 
 /** How many rules the line about places not checked names; the rest are counted. */
 const RULES_NAMED = 3;
@@ -406,6 +411,33 @@ function presentation(finding: Finding): {
   }
 }
 
+/** "a", "a and b", "a, b and c". */
+function andList(items: readonly string[]): string {
+  if (items.length <= 1) return items.join("");
+  return `${items.slice(0, -1).join(", ")} and ${items.at(-1) ?? ""}`;
+}
+
+/**
+ * The lines, each said once per run, for what the run could not check as a whole
+ * (`CheckResult.notes`): the packs whose rules could not run because a library's types are
+ * missing, and the projects without `strictNullChecks`. Empty when there is nothing to say.
+ */
+export function notesLines(notes: CheckNotes | undefined, cwd: string): readonly string[] {
+  if (notes === undefined) return [];
+  const missing = notes.missingTypes.map((entry) => {
+    const packs = [...new Set(entry.rules.map((ruleId) => ruleId.split("/")[0] ?? ruleId))];
+    const which = `${plural(entry.rules.length, "rule")} of the ${andList(packs)} ${packs.length === 1 ? "pack" : "packs"}`;
+    return `not checked: ${which}: ${entry.reason}`;
+  });
+  const loose =
+    notes.looseNulls.length === 0
+      ? []
+      : [
+          `\`strictNullChecks\` is off in ${andList(notes.looseNulls.map((file) => `\`${displayPath(cwd, file)}\``))}, so TypeScript does not check \`null\` and \`undefined\` and some fixes prove less: ${STRICT_NULLS_REMEDY}`,
+        ];
+  return [...missing, ...loose];
+}
+
 export function formatPretty(result: CheckResult, options: FormatOptions): string {
   const paint = (color: Color, text: string): string =>
     options.color ? `${ANSI[color]}${text}${RESET}` : text;
@@ -451,15 +483,22 @@ export function formatPretty(result: CheckResult, options: FormatOptions): strin
       );
 
   const lines: string[] = [];
+  const verbose = options.verbose === true;
   const unresolved = result.findings.filter((one) => one.ruleId === "stateward/imports").length;
-  if (unresolved * 5 > result.stats.files) {
+  const banner = unresolved * 5 > result.stats.files;
+  // Hundreds of "does not resolve" infos would bury the findings (819 in umami without its
+  // packages, user trial 1.0.2): past this many, the line above stands for them.
+  const foldImports = banner && !verbose && unresolved > IMPORTS_LISTED;
+  if (banner) {
     lines.push(
-      `${String(unresolved)} of ${plural(result.stats.files, "file")} import packages that do not resolve: install the project's packages first (\`npm install\`, \`yarn\`, \`pnpm install\`); findings in those files may be missing.`,
+      `${String(unresolved)} of ${plural(result.stats.files, "file")} import packages that do not resolve: install the project's packages first (\`npm install\`, \`yarn\`, \`pnpm install\`); findings in those files may be missing.${foldImports ? " `--verbose` lists them." : ""}`,
       "",
     );
   }
-  const verbose = options.verbose === true;
-  const listed = result.findings.filter((finding) => isShownByCheck(finding, verbose));
+  const listed = result.findings.filter(
+    (finding) =>
+      isShownByCheck(finding, verbose) && !(foldImports && finding.ruleId === "stateward/imports"),
+  );
   const shown = options.max === undefined ? listed : mostSevere(listed, options.max);
   shown.forEach((finding, index) => {
     const { color, label, related } = presentation(finding);
@@ -500,6 +539,7 @@ export function formatPretty(result: CheckResult, options: FormatOptions): strin
   }
   const quiet = quietUnknownsLine(result.findings, verbose);
   if (quiet !== undefined) lines.push(quiet);
+  lines.push(...notesLines(result.notes, options.cwd));
   if (options.baseline?.outdated === true) lines.push(OUTDATED_BASELINE, "");
   const fixed = options.baseline?.fixed ?? 0;
   if (fixed > 0) {

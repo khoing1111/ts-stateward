@@ -22,97 +22,80 @@ export const GROUP = "catch";
 
 const EXPLAIN = `# errors/narrow-try
 
-Lines after the call a \`try\` is for, which call your own code, belong after the \`try\`.
+A bug in code inside a \`try\` meant for another call is caught and reported as that call's failure; moving the code after the \`try\` keeps the two apart.
 
-## Why
+\`\`\`ts example-bad
+class RequestError extends Error {}
+declare function showError(error: unknown): void;
 
-\`\`\`ts
-try {
-  const plan = await getPlan(id);
-  openEditor(plan);
-} catch (e) {
-  showError("Could not load the plan");
+async function savePlan(plan: string): Promise<void> {
+  const response = await fetch("/api/plans", { method: "POST", body: plan });
+  if (!response.ok) throw new RequestError(String(response.status));
+}
+
+export async function submit(plan: string, close: () => void): Promise<void> {
+  try {
+    await savePlan(plan);
+    close();
+  } catch (e) {
+    showError(e);
+    return;
+  }
 }
 \`\`\`
 
-The \`catch\` is for a failed \`getPlan\`. When \`openEditor\` has a bug (it reads \`plan.details.title\` and a plan comes back without \`details\`), the \`TypeError\` is handled like a failed request: the user sees "Could not load the plan", the console shows nothing useful, and the bug is never reported.
+Keep only the call the \`try\` is for inside it, and move the rest after it:
 
-## When to use it
+\`\`\`ts example-good
+class RequestError extends Error {}
+declare function showError(error: unknown): void;
 
-Use it to review how wide your \`try\` blocks are. It is an add-on, off until you list it: in some code styles most \`try\` blocks hold the whole success path on purpose, and then it is noise. It needs to know which call in the \`try\` can fail as expected, so it works best where your functions throw classes or document \`@throws\`, and with packages stateward knows (\`stateward deps\`).
+async function savePlan(plan: string): Promise<void> {
+  const response = await fetch("/api/plans", { method: "POST", body: plan });
+  if (!response.ok) throw new RequestError(String(response.status));
+}
 
-## What it catches
-
-A \`try\` whose last statements come after the last call that can fail as expected, and can themselves fail only as bugs. A call can fail as expected when stateward knows an error class it throws (\`throw new RequestError(…)\` in your code, \`@throws\`, a built-in like \`JSON.parse\` or \`new URL\`), when it is awaited and calls a package whose errors are not all known, or when it is awaited and its rejection is not known to be nothing. The message names that call, the request the \`try\` is for. A call of a package that is not awaited (\`toast.success(…)\`) is not one, and with no such call the rule reports nothing.
-
-Of the lines after it, the first that calls your own code is reported: a function of the project given data the \`try\` got (\`openEditor(plan)\`), or a callback the function was given (\`onClose()\`). Data is what an \`await\` gives, and what is read from it (unless declared \`unknown\`, which TypeScript makes you test first); what \`JSON.parse\` or \`await response.json()\` gives is not, since a value of the wrong shape is the same failure as bad JSON, which the \`catch\` is for (a callback given it, \`onEvent(event)\`, is still reported).
-
-### Bad
-
-\`\`\`ts
-try {
-  await savePlan(plan);
-  closeEditor();
-  onSaved();
-} catch (e) {
-  showError(e);
-  return;
+export async function submit(plan: string, close: () => void): Promise<void> {
+  try {
+    await savePlan(plan);
+  } catch (e) {
+    showError(e);
+    return;
+  }
+  close();
 }
 \`\`\`
 
-### Good
+The quick fix moves the lines after the \`try\`. It is offered only when the move keeps what runs the same for every outcome but a bug: the \`catch\` ends with \`return\` or \`throw\`, there is no \`finally\`, and the moved lines use nothing declared in the \`try\`. Where they use the result, declare it before the \`try\` (\`let plan: Plan;\`), assign it inside, and return from the \`catch\`.
 
-\`\`\`ts
-try {
-  await savePlan(plan);
-} catch (e) {
-  showError(e);
-  return;
-}
-closeEditor();
-onSaved();
-\`\`\`
+## Why it matters
 
-### Fix
-
-The quick fix moves the lines after the \`try\`. It is offered only when the move keeps what runs the same for every outcome but the bug: the \`catch\` ends with \`return\` or \`throw\`, there is no \`finally\`, and the moved lines use nothing declared in the \`try\`. Where they use the result (\`plan\` above), declare it before the \`try\`, assign it inside, and return from the \`catch\`:
-
-\`\`\`ts
-let plan: Plan;
-try {
-  plan = await getPlan(id);
-} catch (e) {
-  showError("Could not load the plan");
-  return;
-}
-openEditor(plan);
-\`\`\`
+The \`catch\` is for a failed save. When \`close\` has a bug (it reads a property of \`undefined\`, say), the \`TypeError\` is handled like a failed request: the user sees "Could not save", the console shows nothing useful, and the bug is never reported. With only the request inside the \`try\`, a bug in the code after it surfaces as the bug it is.
 
 ## What it does not catch
 
-- Lines that only read, test or default what the \`try\` got (\`setTitle(plan.title)\`, \`if ("items" in data)\`, \`data.items ?? []\`), \`break\` and \`continue\`, store dispatches (\`dispatch(addNotification(…))\`), and a promise's own \`resolve(…)\`: most of those are written inside the \`try\` on purpose, and reporting them was noise.
-- A \`catch\` that tests the error (\`instanceof\`, \`e.name === …\`, a type guard) or rethrows it: it already lets bugs through.
-- A \`try\` where nothing is known to fail as expected: every call in it unknown and not awaited.
-- Lines after the expected call that only use built-ins (\`seen.set(id, host)\`, \`url.searchParams.get("t")\`), or cannot fail (\`return true;\`).
-- A \`catch\` that hands the error to \`reject(e)\` or another callback it was given: the bug reaches the caller.
-- Code in a callback written inside the \`try\` counts as the callback's call: when stateward cannot tell what it throws, it assumes the worst and stays quiet.
+It needs a call that can fail as expected: one that throws a known error class (\`throw new RequestError(…)\` in your code, \`@throws\`, a built-in like \`JSON.parse\` or \`new URL\`), an awaited call into a package whose errors are not all known, or an awaited call whose rejection is not known to be nothing. The message names it. A package call that is not awaited (\`toast.success(…)\`) is not one; with no such call the rule says nothing. After it, it reports the first line that calls your own code: a function of the project given data the \`try\` got (\`openEditor(plan)\`), or a callback the function was given (\`close()\`). It is silent on:
 
-A limit: an awaited result of your own function (\`result.success\` after \`await convert(…)\`) counts as data too; the rule cannot tell a typed result from a response.
+- lines that only read, test or default what the \`try\` got (\`setTitle(plan.title)\`, \`if ("items" in data)\`, \`data.items ?? []\`), \`break\` and \`continue\`, store dispatches (\`dispatch(addNotification(…))\`), and a promise's own \`resolve(…)\`: these are mostly inside the \`try\` on purpose;
+- lines that only use built-ins (\`seen.set(id, host)\`) or cannot fail (\`return true;\`);
+- a \`catch\` that tests the error (\`instanceof\`, \`e.name === …\`, a type guard), rethrows it, or hands it to \`reject(e)\` or another callback it was given: it already lets bugs through;
+- what \`JSON.parse\` or \`await response.json()\` gives: a value of the wrong shape is the same failure as bad JSON, which the \`catch\` is for (a callback given it, \`onEvent(event)\`, is still reported). A value declared \`unknown\` is not data either, since TypeScript makes you test it first;
+- code in a callback written inside the \`try\`: when what it throws is not known, the rule assumes the worst and reports nothing.
 
-ESLint, typescript-eslint, eslint-plugin-unicorn and Biome have no rule about the width of a \`try\`: their catch rules are about empty catches (\`no-empty\`, \`noEmptyBlockStatements\`), catches that only rethrow (\`no-useless-catch\`, \`noUselessCatch\`) and the catch variable (\`prefer-optional-catch-binding\`, \`catch-error-name\`, \`use-unknown-in-catch-callback-variable\`).
+A limit: an awaited result of your own function (\`result.success\` after \`await convert(…)\`) counts as data too; the rule does not tell a typed result from a response.
+
+ESLint, typescript-eslint, eslint-plugin-unicorn and Biome have no rule about how wide a \`try\` is: their catch rules are about empty catches, catches that only rethrow, and the catch variable.
+
+## Getting the best from it
+
+It works best where your functions throw classes or document \`@throws\`, and with packages stateward knows (\`stateward deps\`): it then knows which call in the \`try\` can fail as expected.
 
 ## Turn it on or off
 
-Turn it on in \`stateward.config.ts\`:
+It is an add-on: in some code styles most \`try\` blocks hold the whole success path on purpose, and then it is noise. Use it to review how wide your \`try\` blocks are:
 
 \`\`\`ts
 addons: ["errors/narrow-try"]
-\`\`\`
-
-Then change it, or turn it off in one folder:
-
-\`\`\`ts
-rules: { "errors/narrow-try": "off" } // or "error"
 overrides: [{ files: ["src/scripts/**"], rules: { "errors/narrow-try": "off" } }] // one folder
 \`\`\`
 `;
@@ -140,10 +123,15 @@ type Line = {
    * `JSON.parse(text)`): a value that may not have the shape its type says.
    */
   readonly data: readonly string[];
-  /** What its `await`s wait for, outside nested functions. */
+  /** What its `await`s wait for, outside nested functions: each call up to its arguments. */
   readonly awaits: readonly Span[];
   /** The first thing it awaits, as written (`promise`), or null. */
   readonly awaited: string | null;
+  /**
+   * The bodies of the functions it only defines (`const save = async () => {…}`, a function
+   * declaration): nothing in them runs at this line, so what they can throw is not its.
+   */
+  readonly defines: readonly Span[];
   /** The names it declares in the block. */
   readonly declares: readonly string[];
   /** Every name it mentions. */
@@ -358,6 +346,68 @@ function endsWithExit(block: ts.Block): boolean {
   return last !== undefined && (ts.isReturnStatement(last) || ts.isThrowStatement(last));
 }
 
+/** The calls whose rejection reaches `Promise.all([…])` and its kin. */
+const COMBINED = new Set(["all", "race", "any"]);
+
+/**
+ * Where what an `await` waits for is written: a call up to its arguments (`api.save` in
+ * `await api.save({ ttl: ttl.trim() })`, not `ttl.trim`, user trial 1.0.2), the promise a
+ * `.then`/`.catch`/`.finally` chain starts from, and each call listed in `Promise.all([…])`;
+ * nothing for `Promise.allSettled(…)`, which never rejects; any other value whole. A call inside the arguments runs before the request and is not it.
+ */
+function awaitedSpans(expression: ts.Expression, sourceFile: ts.SourceFile): Span[] {
+  let node = expression;
+  while (
+    ts.isParenthesizedExpression(node) ||
+    ts.isNonNullExpression(node) ||
+    ts.isAsExpression(node) ||
+    ts.isSatisfiesExpression(node)
+  ) {
+    node = node.expression;
+  }
+  if (!ts.isCallExpression(node)) return [[node.getStart(sourceFile), node.getEnd()]];
+  const callee = node.expression;
+  const own: Span = [node.getStart(sourceFile), callee.getEnd()];
+  if (!ts.isPropertyAccessExpression(callee)) return [own];
+  const method = callee.name.text;
+  if (method === "then" || method === "catch" || method === "finally") {
+    return [own, ...awaitedSpans(callee.expression, sourceFile)];
+  }
+  const [list] = node.arguments;
+  // `Promise.allSettled(…)` never rejects: an `await` of it waits for nothing that can fail.
+  if (
+    ts.isIdentifier(callee.expression) &&
+    callee.expression.text === "Promise" &&
+    method === "allSettled"
+  ) {
+    return [];
+  }
+  if (
+    ts.isIdentifier(callee.expression) &&
+    callee.expression.text === "Promise" &&
+    COMBINED.has(method) &&
+    list !== undefined &&
+    ts.isArrayLiteralExpression(list)
+  ) {
+    return [own, ...list.elements.flatMap((element) => awaitedSpans(element, sourceFile))];
+  }
+  return [own];
+}
+
+/** The functions `statement` defines without running them, as spans (`Line.defines`). */
+function definedFunctions(statement: ts.Statement, sourceFile: ts.SourceFile): Span[] {
+  if (ts.isFunctionDeclaration(statement))
+    return [[statement.getStart(sourceFile), statement.getEnd()]];
+  if (!ts.isVariableStatement(statement)) return [];
+  return statement.declarationList.declarations.flatMap((declaration): Span[] => {
+    let value = declaration.initializer;
+    while (value !== undefined && ts.isParenthesizedExpression(value)) value = value.expression;
+    return value !== undefined && (ts.isArrowFunction(value) || ts.isFunctionExpression(value))
+      ? [[value.getStart(sourceFile), value.getEnd()]]
+      : [];
+  });
+}
+
 function shapeOf(node: ts.TryStatement, sourceFile: ts.SourceFile): TryShape | undefined {
   const clause = node.catchClause;
   if (clause === undefined) return undefined;
@@ -370,7 +420,9 @@ function shapeOf(node: ts.TryStatement, sourceFile: ts.SourceFile): TryShape | u
     let awaited: string | null = null;
     running(statement, (inner) => {
       if (ts.isAwaitExpression(inner)) {
-        awaits.push([inner.expression.getStart(sourceFile), inner.expression.getEnd()]);
+        const spans = awaitedSpans(inner.expression, sourceFile);
+        if (spans.length === 0) return;
+        awaits.push(...spans);
         awaited ??= shorten(oneLine(inner.expression.getText(sourceFile)), LINE_MAX);
       }
     });
@@ -382,6 +434,7 @@ function shapeOf(node: ts.TryStatement, sourceFile: ts.SourceFile): TryShape | u
       data: dataOf(statement, data),
       awaits,
       awaited,
+      defines: definedFunctions(statement, sourceFile),
       declares: declaredBy(statement),
       uses: namesIn(statement),
     });
@@ -422,9 +475,12 @@ function readLine(value: Json): Line | undefined {
   const f = fieldsOf(value);
   const at = spanOf(f?.at);
   const awaits = each(f?.awaits, spanOf);
+  const defines = each(f?.defines, spanOf);
   const declares = readStrings(f?.declares);
   const uses = readStrings(f?.uses);
-  if (f === undefined || at === undefined || awaits === undefined) return undefined;
+  if (f === undefined || at === undefined || awaits === undefined || defines === undefined) {
+    return undefined;
+  }
   const data = readStrings(f.data);
   if (declares === undefined || uses === undefined || data === undefined) return undefined;
   const awaited = f.awaited === null ? null : isString(f.awaited) ? f.awaited : undefined;
@@ -433,7 +489,18 @@ function readLine(value: Json): Line | undefined {
     isString(f.raw) &&
     awaited !== undefined &&
     typeof canReport === "boolean"
-    ? { at, text: f.text, raw: f.raw, reportable: canReport, data, awaits, awaited, declares, uses }
+    ? {
+        at,
+        text: f.text,
+        raw: f.raw,
+        reportable: canReport,
+        data,
+        awaits,
+        awaited,
+        defines,
+        declares,
+        uses,
+      }
     : undefined;
 }
 
@@ -564,7 +631,9 @@ const within = (inner: Span, outer: Span): boolean => inner[0] >= outer[0] && in
 function spotsIn(line: Line, spots: readonly Spot[]): Spot[] {
   return spots.filter(
     (spot) =>
-      within(spot.at, line.at) && (spot.parent === undefined || !within(spot.parent, line.at)),
+      within(spot.at, line.at) &&
+      (spot.parent === undefined || !within(spot.parent, line.at)) &&
+      !line.defines.some((body) => within(spot.at, body)),
   );
 }
 
@@ -617,8 +686,7 @@ function moveFix(shape: TryShape, kept: readonly Line[], moved: readonly Line[],
   const raw = moved.map((line) => line.raw).join("");
   const dedented = raw.split(`\n${shape.inner}`).join(`\n${shape.indent}`);
   const fix: Fix = {
-    title:
-      moved.length === 1 ? "Move this line after the `try`" : "Move these lines after the `try`",
+    title: moved.length === 1 ? "Move the line after the `try`" : "Move the lines after the `try`",
     edits: [
       { location: { file, start: lastKept.at[1], end: lastMoved.at[1] }, newText: "" },
       { location: { file, start: shape.at[1], end: shape.at[1] }, newText: dedented },
@@ -648,15 +716,16 @@ function nameOf(spot: Spot, line: Line | undefined): string {
 
 function headline(line: string, expected: string): string {
   return fitted(
-    (cut) => `\`${asCode(cut(line))}\` is inside the \`try\` meant for \`${cut(expected)}\``,
+    (cut) =>
+      `the \`try\` for \`${cut(expected)}\` also catches errors from \`${asCode(cut(line))}\``,
   );
 }
 
 function hint(expected: string, fixable: boolean, count: number): string {
-  const lines = count === 1 ? "it" : "these lines";
-  const start = `a bug here would be handled like a failed \`${expected}\`; move ${lines} after the \`try\``;
-  if (fixable) return `${start} (quick fix)`;
-  return `${start} and return from the \`catch\` (declare what ${count === 1 ? "it uses" : "they use"} before the \`try\`)`;
+  const [lines, them] = count === 1 ? ["the line", "it"] : ["the lines", "them"];
+  const why = `so a bug in ${them} is not handled like a failed \`${expected}\``;
+  if (fixable) return `move ${lines} after the \`try\`, ${why} (quick fix)`;
+  return `move ${lines} after the \`try\` and return from the \`catch\` (declare what ${count === 1 ? "it uses" : "they use"} before the \`try\`), ${why}`;
 }
 
 /** A promise's own `resolve` and `reject` (excalidraw): they never throw. */
@@ -711,7 +780,9 @@ export const narrowTry = defineRule({
   kind: "project",
   meta: {
     description:
-      "Calls to your own code placed in a `try` after the call it is for: move them after the `try`.",
+      "A bug in code inside a `try` meant for another call is caught and reported as that call's failure; moving the code after the `try` keeps the two apart.",
+    summary:
+      "calls to your own code inside a `try` after the call it is for, so their bugs look like its failure",
     defaultSeverity: "warning",
     tier: "addon",
     addon: "narrow-try",

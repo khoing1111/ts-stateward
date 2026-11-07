@@ -76,6 +76,12 @@ export type Command =
     }
   | { kind: "explain"; ruleId: string; cwd: string | undefined; config: string | undefined }
   | { kind: "deps"; format: OutputFormat; cwd: string | undefined; config: string | undefined }
+  | {
+      kind: "guarantees";
+      format: OutputFormat;
+      cwd: string | undefined;
+      config: string | undefined;
+    }
   /** `--cwd`: the project whose results cache is shown or cleaned (with the shared package cache). */
   | { kind: "cache"; action: "stats" | "clean"; cwd: string | undefined }
   /** `--help`, `help`, or `<command> --help`: print the overview, or that command's page. */
@@ -130,7 +136,15 @@ const VALUE_OPTIONS: readonly string[] = [
 ];
 
 /** The commands that analyse the project, where `--max-memory` applies. */
-const ANALYSES: readonly string[] = ["check", "baseline", "coverage", "plan", "next", "deps"];
+const ANALYSES: readonly string[] = [
+  "check",
+  "baseline",
+  "coverage",
+  "plan",
+  "next",
+  "deps",
+  "guarantees",
+];
 
 function isFormat(value: string): value is CheckFormat {
   return value === "pretty" || value === "json" || value === "github";
@@ -390,9 +404,13 @@ export function parseArgs(argv: readonly string[]): ParseResult<Command> {
     name !== "coverage" &&
     name !== "plan" &&
     name !== "deps" &&
+    name !== "guarantees" &&
     format !== undefined
   ) {
-    return { ok: false, errors: ["--format only applies to check, coverage, plan and deps"] };
+    return {
+      ok: false,
+      errors: ["--format only applies to check, coverage, plan, deps and guarantees"],
+    };
   }
   if (name !== "check" && format === "github") {
     return { ok: false, errors: ["--format github only applies to check"] };
@@ -594,6 +612,13 @@ export function parseArgs(argv: readonly string[]): ParseResult<Command> {
       return positionals.length === 0
         ? { ok: true, value: { kind: "deps", format: plainFormat, cwd, config } }
         : { ok: false, errors: [`deps takes no arguments, got "${positionals.join(" ")}"`] };
+    case "guarantees":
+      return positionals.length === 0
+        ? { ok: true, value: { kind: "guarantees", format: plainFormat, cwd, config } }
+        : {
+            ok: false,
+            errors: [`guarantees takes no arguments, got "${positionals.join(" ")}"`],
+          };
     case "cache": {
       const [action, ...extra] = positionals;
       if ((action !== "stats" && action !== "clean") || extra.length > 0) {

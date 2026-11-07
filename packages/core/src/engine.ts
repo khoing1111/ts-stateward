@@ -1,17 +1,11 @@
 import path from "node:path";
 import type ts from "typescript";
 import { readRollout } from "./rollout.js";
-import { ruleKey, sha1, summaryOf, summaryValue } from "./cache.js";
+import { ruleKey, sha1, summaryOf, summaryText, summaryValue } from "./cache.js";
 import type { CachedSummary, FileEntry, ResultCache, RuleResult } from "./cache.js";
 import { defaultOptions } from "./options.js";
 import { codeOf, loadRule } from "./lazy.js";
-import {
-  IGNORE_EXPLAIN,
-  IGNORE_RULE_ID,
-  applyIgnores,
-  fileDirectives,
-  readFileDirectives,
-} from "./ignores.js";
+import { IGNORE_EXPLAIN, IGNORE_RULE_ID, applyIgnores, fileDirectives } from "./ignores.js";
 import type { IgnoreDirective, IgnoreScope } from "./ignores.js";
 import {
   addonsWith,
@@ -28,7 +22,9 @@ import type { ProjectUnit } from "./backend/typescript6.js";
 import type { TimingRecorder } from "./timing.js";
 import type {
   PackageFactsConfig,
+  CheckNotes,
   CheckResult,
+  MissingTypes,
   Config,
   FileContext,
   Finding,
@@ -68,8 +64,8 @@ function syntaxFinding(unit: ProjectUnit, file: string, cwd: string): Finding[] 
     {
       kind: "unknown",
       ruleId: SYNTAX_RULE_ID,
-      message: `\`${name}\` has a syntax error, so findings in it may be missing or wrong`,
-      hint: `${error.message} at line ${String(error.line)}:${String(error.column)}; fix it and check again`,
+      message: `not checked: \`${name}\`: it has a syntax error`,
+      hint: `fix the syntax error at line ${String(error.line)}:${String(error.column)} (${error.message}), then check again`,
       location: { file, start: error.start, end: error.end },
     },
   ];
@@ -89,33 +85,28 @@ function squeeze(text: string, max: number): string {
 }
 
 /**
- * The headline of an imports finding, in at most 100 characters: with the file's path when it fits
- * (the location shows it anyway), without it when not, and the specifier shortened last.
+ * The headline of an imports finding (M19), in at most 100 characters: the specifier is shortened
+ * in the middle when it does not fit; the location shows the file.
  */
-function importsMessage(name: string, specifier: string, untyped: boolean): string {
-  const what = untyped
-    ? "which has no types, so findings using it may be wrong"
-    : "which does not resolve, so findings using it may be wrong";
-  const short = untyped
-    ? "has no types, so findings using it here may be wrong"
-    : "does not resolve, so findings using it here may be wrong";
-  const forms = (spec: string): readonly string[] => [
-    `\`${name}\` imports \`${spec}\`, ${what}`,
-    `imports \`${spec}\`, ${what}`,
-    `\`${spec}\` ${short}`,
-  ];
-  const fits = forms(specifier).find((form) => form.length <= MAX_HEADLINE);
-  if (fits !== undefined) return fits;
-  const room = MAX_HEADLINE - `\`\` ${short}`.length;
-  return `\`${squeeze(specifier, room)}\` ${short}`;
+function importsMessage(specifier: string, untyped: boolean): string {
+  const relative = specifier.startsWith(".") || specifier.startsWith("/");
+  const why = untyped
+    ? "it has no types"
+    : relative
+      ? "the file is not found"
+      : "the package is not installed";
+  const form = (spec: string): string => `not checked: code using \`${spec}\`: ${why}`;
+  const whole = form(specifier);
+  if (whole.length <= MAX_HEADLINE) return whole;
+  const room = MAX_HEADLINE - form("").length;
+  return form(squeeze(specifier, room));
 }
 
 /** The one `unknown` finding for a file whose imports do not resolve (types from them are unknown). */
 function importsFinding(unit: ProjectUnit, file: string, cwd: string): Finding[] {
   const [first, ...rest] = unit.unresolvedImports(file);
   if (first === undefined) return [];
-  const name = path.relative(cwd, file).split(path.sep).join("/");
-  const more = rest.length > 0 ? `; ${String(rest.length)} more unresolved in this file` : "";
+  const more = rest.length > 0 ? `; ${String(rest.length)} more unresolved in the file` : "";
   // Imports resolve by the project's options: a file two projects list says which one decided.
   const project = unit.listedElsewhere(file)
     ? ` (checked as part of \`${path.relative(cwd, unit.tsconfig).split(path.sep).join("/")}\`)`
@@ -126,13 +117,85 @@ function importsFinding(unit: ProjectUnit, file: string, cwd: string): Finding[]
     {
       kind: "unknown",
       ruleId: IMPORTS_RULE_ID,
-      message: importsMessage(name, first.specifier, untyped),
+      message: importsMessage(first.specifier, untyped),
       hint: untyped
         ? `install its types (\`${types}\`) or declare the module${more}${project}`
         : `install the project's packages (or build its workspace packages) and check again${more}${project}`,
       location: { file, start: first.start, end: first.end },
     },
   ];
+}
+
+/** The remedy said once when a project checks without `strictNullChecks`. */
+export const STRICT_NULLS_REMEDY =
+  "set `strict: true` or `strictNullChecks: true` in tsconfig.json";
+
+/** Added to the fix line of a finding whose fix relies on `strictNullChecks` in a project without it. */
+export const LOOSE_NULLS_FIX = `\`strictNullChecks\` is off in this project, so TypeScript does not check \`null\` and \`undefined\` in this fix: ${STRICT_NULLS_REMEDY}`;
+
+/** Why rules that read a library by its types could not run: "React's types are not installed (…)". */
+export function missingTypesReason(library: string): string {
+  return `${library}'s types are not installed (install the app's dependencies)`;
+}
+
+/**
+ * What the run cannot check as a whole (`CheckResult.notes`): the rules among `rules` whose
+ * library's types do not resolve in some project with files, and the projects without
+ * `strictNullChecks`. Undefined when there is nothing to say.
+ */
+function notesOf(
+  units: readonly ProjectUnit[],
+  rules: readonly { id: string; rule: Rule }[],
+): CheckNotes | undefined {
+  const missing = new Map<string, Set<string>>();
+  const looseNulls: string[] = [];
+  for (const unit of units) {
+    if (unit.files.length === 0) continue;
+    if (!unit.strictNullChecks) looseNulls.push(unit.tsconfig);
+    for (const entry of rules) {
+      const needs = entry.rule.meta.needsTypes;
+      if (needs === undefined || needs.modules.some((module) => unit.typesResolve(module)))
+        continue;
+      const ids = missing.get(needs.library) ?? new Set<string>();
+      ids.add(entry.id);
+      missing.set(needs.library, ids);
+    }
+  }
+  if (missing.size === 0 && looseNulls.length === 0) return undefined;
+  const missingTypes: MissingTypes[] = [...missing]
+    .sort(([a], [b]) => compareText(a, b))
+    .map(([library, ids]) => ({
+      library,
+      reason: missingTypesReason(library),
+      rules: [...ids].sort(compareText),
+    }));
+  return { missingTypes, looseNulls };
+}
+
+/** The own files of the projects without `strictNullChecks`. */
+function looseNullFiles(units: readonly ProjectUnit[]): ReadonlySet<string> {
+  return new Set(units.flatMap((unit) => (unit.strictNullChecks ? [] : unit.files)));
+}
+
+/**
+ * `findings` with `LOOSE_NULLS_FIX` added to the fix line of each problem whose rule's fix needs
+ * `strictNullChecks` (`RuleInfo.fixNeedsStrictNulls`) in a file of a project without it.
+ */
+function withLooseNullFixes(
+  findings: Finding[],
+  rules: readonly { id: string; rule: Rule }[],
+  loose: ReadonlySet<string>,
+): Finding[] {
+  if (loose.size === 0) return findings;
+  const affected = new Set(
+    rules.filter((entry) => entry.rule.meta.fixNeedsStrictNulls === true).map((entry) => entry.id),
+  );
+  if (affected.size === 0) return findings;
+  return findings.map((finding) =>
+    finding.kind === "problem" && affected.has(finding.ruleId) && loose.has(finding.location.file)
+      ? { ...finding, hint: `${finding.hint}\n${LOOSE_NULLS_FIX}` }
+      : finding,
+  );
 }
 
 /** What ignore comments may name, and what ran: the config's rules and what stateward reports itself. */
@@ -579,6 +642,10 @@ export type FilePhase = {
   readonly tsconfigLocation: Location;
   /** The projects and their file counts, when there is more than one. */
   readonly projects: readonly { tsconfig: string; files: number }[] | undefined;
+  /** What the run cannot check as a whole (`CheckResult.notes`). */
+  readonly notes: CheckNotes | undefined;
+  /** The own files of the projects without `strictNullChecks`. */
+  readonly looseNulls: ReadonlySet<string>;
 };
 
 /**
@@ -773,7 +840,7 @@ function* filePhaseSteps(
         nextFiles.set(file, {
           fingerprint,
           rules: results,
-          reads: readsAfter(unit, file, holding),
+          reads: readsAfter(unit, file, holding, results),
         });
       }
       done += 1;
@@ -800,6 +867,8 @@ function* filePhaseSteps(
       units.length > 1
         ? units.map((unit) => ({ tsconfig: unit.tsconfig, files: unit.files.length }))
         : undefined,
+    notes: notesOf(units, rules),
+    looseNulls: looseNullFiles(units),
   };
 }
 
@@ -881,7 +950,7 @@ export function* projectPhaseSteps(
   }
 
   const covered = applyIgnores(
-    oneCauseOneMessage(findings, rules),
+    withLooseNullFixes(oneCauseOneMessage(findings, rules), rules, phase.looseNulls),
     directives,
     ignoreScope(config, rules),
   );
@@ -893,6 +962,7 @@ export function* projectPhaseSteps(
     findings: shown,
     hidden,
     ignored: covered.ignored,
+    ...(phase.notes === undefined ? {} : { notes: phase.notes }),
     stats: {
       files: fileCount,
       durationMs: Math.round(performance.now() - started),
@@ -956,13 +1026,48 @@ export function limitFindings(sorted: readonly Finding[]): {
   return { findings: shown, hidden };
 }
 
+/**
+ * Which findings the per-rule, per-file cap keeps first: failures, then errors, warnings, infos,
+ * and places not checked last. Kept in position order, a file's first 20 "not checked" places of a
+ * rule could hide an error of the same rule further down, and the check would pass.
+ */
+function capRank(finding: Finding): number {
+  switch (finding.kind) {
+    case "failure":
+      return 0;
+    case "problem":
+      switch (finding.severity) {
+        case "error":
+          return 1;
+        case "warning":
+          return 2;
+        case "info":
+          return 3;
+        default: {
+          const unreachable: never = finding.severity;
+          return unreachable;
+        }
+      }
+    case "unknown":
+      return 4;
+    default: {
+      const unreachable: never = finding;
+      return unreachable;
+    }
+  }
+}
+
 function limitPerRuleAndFile(sorted: readonly Finding[]): {
   shown: Finding[];
   hidden: HiddenFindings[];
 } {
   const seen = new Map<string, HiddenFindings & { listed: number }>();
-  const shown: Finding[] = [];
-  for (const finding of sorted) {
+  const kept = new Set<Finding>();
+  // Decide in priority order (stable within a rank), then list what is kept in position order.
+  const byRank = sorted
+    .map((finding, index) => ({ finding, index }))
+    .sort((a, b) => capRank(a.finding) - capRank(b.finding) || a.index - b.index);
+  for (const { finding } of byRank) {
     const key = JSON.stringify([finding.location.file, finding.ruleId]);
     const entry = seen.get(key) ?? {
       file: finding.location.file,
@@ -973,11 +1078,12 @@ function limitPerRuleAndFile(sorted: readonly Finding[]): {
     seen.set(key, entry);
     if (entry.listed < MAX_FINDINGS_PER_RULE_PER_FILE) {
       entry.listed++;
-      shown.push(finding);
+      kept.add(finding);
     } else {
       entry.count++;
     }
   }
+  const shown = sorted.filter((finding) => kept.has(finding));
   const hidden = [...seen.values()]
     .filter((entry) => entry.count > 0)
     .map(({ file, ruleId, count }) => ({ file, ruleId, count }))
@@ -1006,29 +1112,50 @@ function secondPass(units: readonly ProjectUnit[], sets: RuleSets, timing: Timin
   }
 }
 
-/** Whether every file a cached entry read the syntax of is as it was then. */
+/** Whether everything a cached entry read of other files (declarations, files) is as it was then. */
 function readsHold(unit: ProjectUnit, reads: ReadonlyMap<string, string>): boolean {
-  for (const [file, print] of reads) {
-    if (unit.readFingerprint(file) !== print) return false;
+  for (const [read, print] of reads) {
+    if (unit.readFingerprint(read) !== print) return false;
   }
   return true;
 }
 
+/** A print no read has: what could not be hashed never holds. */
+const NO_PRINT = "";
+
 /**
  * The reads of a file's entry after this run: those of the entry it kept (its rules that did not
- * run read them), with what the rules that ran on it in this program read, each with its text hash.
+ * run read them), with what the rules that ran on it in this program read, each with its hash
+ * (`ProjectUnit.readsOf`). A declaration is read by its id, unless the file's results name the
+ * file it is in: a rule that keeps another file's offsets (a location, a summary's span) changes
+ * with any edit above them, so the whole file is read.
  */
 function readsAfter(
   unit: ProjectUnit,
   file: string,
   kept: FileEntry | undefined,
+  results: ReadonlyMap<string, RuleResult>,
 ): ReadonlyMap<string, string> {
   const reads = new Map(kept?.reads ?? []);
-  for (const read of unit.readsOf(file)) {
-    const print = unit.readFingerprint(read);
-    if (print !== undefined) reads.set(read, print);
+  let text: string | undefined;
+  const mentioned = (readFile: string): boolean => {
+    text ??= resultsText(results);
+    return text.includes(readFile);
+  };
+  for (const read of unit.readsOf(file, mentioned)) {
+    reads.set(read, unit.readFingerprint(read) ?? NO_PRINT);
   }
   return reads;
+}
+
+/** The findings and summaries of a file's results, as text: what the results could name. */
+function resultsText(results: ReadonlyMap<string, RuleResult>): string {
+  const parts: string[] = [];
+  for (const result of results.values()) {
+    parts.push(JSON.stringify(result.findings));
+    if (result.summary !== undefined) parts.push(summaryText(result.summary));
+  }
+  return parts.join("\n");
 }
 
 /** The parsed file, its program bound first (rules need parents): building the program if it is lazy. */
@@ -1111,9 +1238,34 @@ export function silentReasons(
 }
 
 /**
+ * What a fast pass may take from the cache instead of running the rules: the results the cache
+ * holds for each of `files` whose dependency fingerprint and reads are as they were then (the
+ * same test as a full pass's). Asking for a fingerprint computes those of the whole program
+ * once, so a caller names only the files it expects to be unchanged (an editor's file just opened).
+ */
+export type FastReuse = { readonly cache: ResultCache; readonly files: ReadonlySet<string> };
+
+/** The cached results of `file` when its fingerprint and reads hold, else undefined. */
+function holdingResults(
+  unit: ProjectUnit,
+  file: string,
+  cache: ResultCache,
+): Map<string, RuleResult> | undefined {
+  const entry = cache.files.get(file);
+  if (entry === undefined) return undefined;
+  const fingerprint = unit.fingerprint(file);
+  if (fingerprint === undefined || entry.fingerprint !== fingerprint) return undefined;
+  if (!readsHold(unit, entry.reads)) return undefined;
+  // A copy: the fast pass never writes the cache (what it computes is for these files only).
+  return new Map(entry.rules);
+}
+
+/**
  * Runs the file rules (not the project rules) over the own files of `units` that are in `files`
  * and returns findings for those files only. A project rule needs every file's summary, so it
- * does not run here. A rule that throws becomes a `failure`, as in `runFilePhase`.
+ * does not run here. A rule that throws becomes a `failure`, as in `runFilePhase`. With `reuse`, a
+ * rule whose result the cache holds for a reusable file is not run (`FastReuse`): an unchanged
+ * file costs no type checking.
  */
 export function runFileRules(
   config: Config,
@@ -1123,6 +1275,7 @@ export function runFileRules(
   started: number,
   capped = true,
   ignores = true,
+  reuse?: FastReuse,
 ): CheckResult {
   // The same rules a full pass runs (rollout included), so the fast pass never shows a rule
   // the developer has not turned on.
@@ -1134,19 +1287,31 @@ export function runFileRules(
   for (const unit of units) {
     for (const file of unit.files) {
       if (!files.has(file)) continue;
-      unit.bind();
-      const sourceFile = unit.sourceFile(file);
-      if (sourceFile === undefined) continue;
+      const results =
+        (reuse?.files.has(file) === true ? holdingResults(unit, file, reuse.cache) : undefined) ??
+        new Map<string, RuleResult>();
       fileCount++;
-      findings.push(...syntaxFinding(unit, file, cwd), ...importsFinding(unit, file, cwd));
+      const syntax = results.get(SYNTAX_RULE_ID)?.findings ?? syntaxFinding(unit, file, cwd);
+      const imports = results.get(IMPORTS_RULE_ID)?.findings ?? importsFinding(unit, file, cwd);
+      findings.push(...syntax, ...imports);
       if (ignores) {
-        const read = readFileDirectives(unit, file);
+        const read = fileDirectives(unit, file, results).directives;
         if (read.length > 0) directives.set(file, read);
       }
       const startOfFile: Location = { file, start: 0, end: 0 };
-      const types = unit.typesFor(file);
+      let types: TypeQueries | undefined;
       for (const entry of sets.forFile(file)) {
         if (entry.rule.kind !== "file") continue;
+        const result = results.get(entry.key);
+        if (result !== undefined) {
+          findings.push(...result.findings);
+          continue;
+        }
+        // Rules need parents: bind before the first one runs. A file whose results all come from
+        // the cache asks nothing of the program (a recorded one is then never built).
+        const sourceFile = boundSourceFile(unit, file);
+        if (sourceFile === undefined) break;
+        types ??= unit.typesFor(file);
         try {
           runFileSide(entry.rule, fileContext(entry, sourceFile, types, findings));
         } catch (error) {
@@ -1157,7 +1322,7 @@ export function runFileRules(
   }
   // Only the file rules ran, so an ignore of a project rule is not judged here.
   const covered = applyIgnores(
-    oneCauseOneMessage(findings, rules),
+    withLooseNullFixes(oneCauseOneMessage(findings, rules), rules, looseNullFiles(units)),
     directives,
     ignoreScope(config, rules),
   );

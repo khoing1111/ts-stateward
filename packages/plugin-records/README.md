@@ -33,19 +33,11 @@ One rule's severity (`error`, `warning`, `info` or `off`), and its options, go u
 
 ```ts
 rules: {
-  "records/duplicate-key": "warning",
+  "records/lookup-misses-key": "warning",
   // a severity and options; this option is at its default, the rule's page lists them all
-  "records/keyed-maps-out-of-sync": ["warning", { minFunctions: 1 }],
+  "records/duplicate-key": ["error", { ignore: [] }],
 },
 ```
-
-Add-on rules stay off until you list their add-on:
-
-```ts
-addons: ["records/keyed-maps"],
-```
-
-- `records/keyed-maps`: `keyed-maps-out-of-sync`
 
 Every key of the config: [config.md](https://github.com/khoing1111/ts-stateward/blob/main/docs/user/config.md).
 
@@ -55,18 +47,18 @@ Every key of the config: [config.md](https://github.com/khoing1111/ts-stateward/
 
 ## Rules
 
-| Rule | What it finds | Kind | `recommended` | `strict` |
-| --- | --- | --- | --- | --- |
-| [duplicate-key](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/records/duplicate-key.md) | A new Map([...]) or new Set([...]) written out in code has the same key twice, so the second replaces the first. | Core | error | error |
-| [lookup-misses-key](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/records/lookup-misses-key.md) | A lookup like labels[status] has an entry for every value of the key, or handles a missing one. | Core | error | error |
-| [table-type-too-loose](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/records/table-type-too-loose.md) | A lookup table typed `Record<string, V>` says neither "these are all the keys" nor "keys come from outside"; say which in its type. | Core | error | error |
-| [keyed-maps-out-of-sync](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/records/keyed-maps-out-of-sync.md) | Two records kept in step must lose a key together: a key removed from one and forgotten in the other is reported. (heuristic) | Add-on `keyed-maps` | warning | warning |
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [duplicate-key](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/records/duplicate-key.md) | the same key twice in a `new Map([...])` or `new Set([...])` written out in code | The same key twice in a `new Map([...])` or `new Set([...])` keeps only the last entry, so the first one has no effect. | Core | error | error |
+| [lookup-misses-key](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/records/lookup-misses-key.md) | a lookup like `labels[status]` with no entry for some value of the key | A lookup like `labels[status]` is typed as always present; a value with no entry gives `undefined`, and the page shows "undefined" or the next call throws. | Core | error | error |
+| [table-type-too-loose](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/records/table-type-too-loose.md) | a lookup table typed `Record<string, V>` that says neither "all keys" nor "keys from outside" | A table typed `Record<string, V>` lets a misspelt or missing key compile; typing its keys, or its reads as possibly missing, lets TypeScript check each read. | Core | error | error |
 
-Kind: **Core** rules are on in every preset. **Coverage** rules ask your types to say more; they
-are info under `recommended` and errors under `strict`. **Add-on** rules stay off until you list
-their add-on in `addons`; the table shows their severity once it is listed. A heuristic rule
-guesses, so it is never an error unless you set it.
+**Core** rules are on in every preset. **Coverage** rules point at code whose types do not say
+enough for stateward to check it; they are info under `recommended` and errors under `strict`.
+**Add-on** rules stay off until you list their add-on in `addons`; the table shows their severity
+once it is listed. A rule marked (guess) judges from patterns in the code, not only from types, so
+it can be wrong and is never an error unless you make it one.
 
-Each rule's page says why it matters, what it catches and misses, how to fix what it finds, and its options. The pack's page: [docs/packs/records.md](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/records.md). Every pack's rules: [the rules index](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/README.md).
+Each rule's page shows an example with what stateward prints for it, the fix, why it matters, what it misses, and its options. The pack's page: [docs/packs/records.md](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/records.md). Every pack's rules: [the rules index](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/README.md).
 
 <!-- /generated:rules -->

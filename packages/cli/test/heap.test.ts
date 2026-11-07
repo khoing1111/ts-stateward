@@ -196,7 +196,9 @@ describe("--max-memory and maxMemory", { timeout: 60_000 }, () => {
     });
     expect(parseArgs(["init", "--max-memory", "6144"])).toEqual({
       ok: false,
-      errors: ["--max-memory only applies to check, baseline, coverage, plan, next, deps"],
+      errors: [
+        "--max-memory only applies to check, baseline, coverage, plan, next, deps, guarantees",
+      ],
     });
   });
 

@@ -1,10 +1,18 @@
-import { matchesName, type ProjectContext } from "@stateward/core";
-import { buildGraph, computeNeeds, placementSets, type ContextSet, type Graph } from "./graph.js";
+import { matchesName, type Fix, type ProjectContext, type TextEdit } from "@stateward/core";
+import {
+  buildGraph,
+  computeNeeds,
+  placementSets,
+  provides,
+  type ContextInfo,
+  type ContextSet,
+  type Graph,
+} from "./graph.js";
 import * as message from "./messages.js";
 import type { EntryPoint } from "./options.js";
-import type { ComponentSummary, Loc, Render, Summary } from "./summary.js";
-import { limitNotes, originNote, slotNote, trailNotes } from "./trail.js";
-import { walkFromEntries, type Site } from "./walk.js";
+import type { DeclareFix, Edit, Loc, Render, Summary, UnknownRender } from "./summary.js";
+import { limitNotes, originNote, slotNote, trailNotes, type Note } from "./trail.js";
+import { walkFromEntries, type Arrival, type Site, type WalkResult } from "./walk.js";
 
 function contextName(graph: Graph, id: string): string {
   return graph.contexts.get(id)?.name ?? id;
@@ -74,28 +82,82 @@ function entrySites(graph: Graph): Site[] {
   });
 }
 
+/**
+ * What the check needs to know about the contexts stated required (`RequiredContext`): which are
+ * stated, and, as it reports, which are not proven somewhere. A stated context with no finding is
+ * proven, and its run-time checks can go.
+ */
+type Strict = {
+  stated: ReadonlySet<string>;
+  unproven: Set<string>;
+  ignored: readonly string[];
+};
+
+function toLocation(loc: Loc): { file: string; start: number; end: number } {
+  return { file: loc.file, start: loc.start, end: loc.end };
+}
+
+function toEdit(edit: Edit): TextEdit {
+  return { location: toLocation(edit), newText: edit.newText };
+}
+
+function toRelated(notes: readonly Note[]): { location: Loc; message: string }[] {
+  return notes.map((note) => ({ location: note.loc, message: note.message }));
+}
+
+/** The note at a stated context's declaration, which says where the guarantee comes from. */
+function statedNote(context: ContextInfo): Note {
+  return { loc: context.loc, message: message.guaranteeNotes.stated(context.name) };
+}
+
+/** The quick fix that states a guessed context required: the first form that compiles is offered. */
+function declareFix(context: ContextInfo, declare: DeclareFix): Fix | undefined {
+  const [first, ...rest] = declare.forms.map((edits) => ({
+    title: message.fixTitles.declare(context.name, declare.call),
+    edits: edits.map(toEdit),
+    changesType: true as const,
+  }));
+  return first === undefined ? undefined : { ...first, alternatives: rest };
+}
+
 function reportMissingProviders(
   graph: Graph,
   needs: ReadonlyMap<string, ContextSet>,
   sites: readonly Site[],
   ctx: ProjectContext,
-  ignored: readonly string[],
-): ReadonlySet<string> {
-  const { reached, missing } = walkFromEntries(graph, needs, sites);
-  for (const { site, context } of missing) {
+  strict: Strict,
+): WalkResult {
+  const walk = walkFromEntries(graph, needs, sites);
+  for (const { site, context } of walk.missing) {
     const target = graph.components.get(site.target);
-    if (target === undefined) continue;
-    const name = contextName(graph, context);
-    if (matchesName(name, ignored)) continue;
-    const text = message.missingProvider(site.name, name);
-    const related = limitNotes([
+    const info = graph.contexts.get(context);
+    if (target === undefined || info === undefined) continue;
+    if (matchesName(info.name, strict.ignored)) continue;
+    const text = message.missingProvider(
+      site.name,
+      info.name,
+      info.stated ? undefined : info.declare?.call,
+    );
+    const trail = limitNotes([
       ...slotNote(graph, site.via, context),
       ...originNote(site.origin, target),
       ...trailNotes(graph, needs, target, context),
-    ]).map((note) => ({ location: note.loc, message: note.message }));
-    ctx.report({ ...text, location: site.loc, related });
+    ]);
+    if (info.stated) {
+      strict.unproven.add(context);
+      const related = toRelated([...trail, statedNote(info)]);
+      ctx.report({ ...text, location: site.loc, related });
+      continue;
+    }
+    const fix = info.declare === null ? undefined : declareFix(info, info.declare);
+    ctx.report({
+      ...text,
+      location: site.loc,
+      related: toRelated(trail),
+      ...(fix === undefined ? {} : { fixes: [fix] }),
+    });
   }
-  return reached;
+  return walk;
 }
 
 /** The components some element of which escapes: reported as escaping, so not also as unreachable. */
@@ -106,74 +168,197 @@ function escapedComponents(graph: Graph): ReadonlySet<string> {
   return new Set(ids.map((id) => graph.resolve(id)?.id ?? id));
 }
 
+/**
+ * The stated contexts provided on every path at some tag stateward cannot tell (`<Picked/>`
+ * under the Provider): a reader no entry reaches may be rendered there, under its Provider, so it
+ * is not reported as unreachable.
+ */
+function coveredByUnknown(graph: Graph, walk: WalkResult, strict: Strict): ReadonlySet<string> {
+  const covered = new Set<string>();
+  for (const { render, owner } of unknownRenders(graph)) {
+    if (render.reason !== "computed" && render.reason !== "class") continue;
+    const aboveSets = owner === null ? [new Set<string>()] : walk.above.get(owner);
+    if (aboveSets === undefined) continue;
+    const under = new Set(render.under);
+    for (const id of strict.stated) {
+      if (aboveSets.every((above) => provides(above, id) || provides(under, id))) covered.add(id);
+    }
+  }
+  return covered;
+}
+
 function reportUnreachable(
   graph: Graph,
   needs: ReadonlyMap<string, ContextSet>,
-  reached: ReadonlySet<string>,
+  walk: WalkResult,
   ctx: ProjectContext,
+  strict: Strict,
 ): void {
   const escaped = escapedComponents(graph);
+  const covered = coveredByUnknown(graph, walk, strict);
   for (const component of graph.componentList) {
-    const needed = [...(needs.get(component.id) ?? [])].map((id) => contextName(graph, id));
-    if (needed.length === 0 || reached.has(component.id) || escaped.has(component.id)) continue;
-    ctx.unknown({
-      ...message.unreachableComponent(component.name, needed.sort()),
-      location: component.loc,
-    });
+    if (walk.reached.has(component.id) || escaped.has(component.id)) continue;
+    const ids = [...(needs.get(component.id) ?? [])];
+    const stated = ids.filter((id) => strict.stated.has(id) && !covered.has(id));
+    const guessed = ids.filter((id) => !strict.stated.has(id));
+    if (stated.length > 0) {
+      for (const id of stated) strict.unproven.add(id);
+      const names = stated.map((id) => contextName(graph, id)).sort();
+      ctx.report({
+        ...message.unreachableStated(component.name, names),
+        location: component.loc,
+        related: toRelated(statedNotes(graph, stated)),
+      });
+    }
+    if (guessed.length > 0) {
+      ctx.unknown({
+        ...message.unreachableComponent(
+          component.name,
+          guessed.map((id) => contextName(graph, id)).sort(),
+        ),
+        location: component.loc,
+      });
+    }
   }
+}
+
+function statedNotes(graph: Graph, ids: readonly string[]): Note[] {
+  return ids.flatMap((id) => {
+    const info = graph.contexts.get(id);
+    return info === undefined ? [] : [statedNote(info)];
+  });
 }
 
 function allRenders(graph: Graph): Render[] {
   return [
-    ...graph.componentList.flatMap((component: ComponentSummary) => component.renders),
+    ...graph.componentList.flatMap((component) => component.renders),
     ...graph.entries.map((entry) => entry.render),
     ...graph.unknowns,
   ];
 }
 
-/** Unknown renders of components and of plain functions, each reported once. */
+/** An unknown render and the component it is written in (null: an entry call or a plain function). */
+type PlacedUnknown = { render: UnknownRender; owner: string | null };
+
+function unknownRenders(graph: Graph): PlacedUnknown[] {
+  const placed = (owner: string | null, render: Render): PlacedUnknown[] =>
+    render.kind === "unknown" ? [{ render, owner }] : [];
+  return [
+    ...graph.componentList.flatMap((component) =>
+      component.renders.flatMap((render) => placed(component.id, render)),
+    ),
+    ...graph.entries.flatMap((entry) => placed(null, entry.render)),
+    ...graph.unknowns.flatMap((render) => placed(null, render)),
+  ];
+}
+
+/** The path from an entry down to the component `owner`: one note per render, from the top. */
+function pathNotes(arrivals: ReadonlyMap<string, Arrival>, owner: string | null): Note[] {
+  const notes: Note[] = [];
+  const seen = new Set<string>();
+  for (let at = owner; at !== null && !seen.has(at);) {
+    seen.add(at);
+    const arrival = arrivals.get(at);
+    if (arrival === undefined) break;
+    notes.unshift({ loc: arrival.site.loc, message: message.notes.rendered(arrival.site.name) });
+    at = arrival.from;
+  }
+  return notes;
+}
+
+/**
+ * The stated contexts an unknown render leaves unproven. A tag stateward cannot tell (`computed`,
+ * `class`) may render any reader, so every stated context with readers that is not provided above
+ * it on some path; a render of a known component (`escapes`, `router`), the stated contexts it
+ * needs. A render in a component no entry reaches proves nothing either way: what leads to it is
+ * reported instead.
+ */
+function unprovenAt(
+  graph: Graph,
+  needs: ReadonlyMap<string, ContextSet>,
+  walk: WalkResult,
+  strict: Strict,
+  { render, owner }: PlacedUnknown,
+): string[] {
+  const aboveSets = owner === null ? [new Set<string>()] : walk.above.get(owner);
+  if (aboveSets === undefined) return [];
+  const needed = (id: string): ContextSet => needs.get(graph.resolve(id)?.id ?? id) ?? new Set();
+  const candidates =
+    render.reason === "escapes"
+      ? [...needed(render.target)]
+      : render.reason === "router"
+        ? render.targets.flatMap((target) => [...needed(target)])
+        : [...strict.stated];
+  const under = new Set(render.under);
+  return [...new Set(candidates)].filter(
+    (id) =>
+      strict.stated.has(id) &&
+      !matchesName(contextName(graph, id), strict.ignored) &&
+      aboveSets.some((above) => !provides(above, id) && !provides(under, id)),
+  );
+}
+
+function unknownMessage(render: UnknownRender): message.Unchecked {
+  switch (render.reason) {
+    case "computed":
+      return message.computedComponent(render.name, render.fix);
+    case "class":
+      return message.classComponent(render.name);
+    case "escapes":
+      return message.escapingJsx(render.name, render.detail);
+    case "router":
+      return message.routerNotFollowed();
+    default: {
+      const unreachable: never = render;
+      return unreachable;
+    }
+  }
+}
+
+/**
+ * Unknown renders of components and of plain functions, each reported once: as an error where a
+ * stated context is not proven, else as not checked where a guessed context may be needed.
+ */
 function reportUnknownRenders(
   graph: Graph,
   needs: ReadonlyMap<string, ContextSet>,
+  walk: WalkResult,
   ctx: ProjectContext,
+  strict: Strict,
 ): void {
-  const anyNeeds = [...needs.values()].some((set) => set.size > 0);
-  const needsAny = (id: string): boolean => (needs.get(graph.resolve(id)?.id ?? id)?.size ?? 0) > 0;
+  const guessed = (id: string): boolean => !strict.stated.has(id);
+  const anyNeeds = [...needs.values()].some((set) => [...set].some(guessed));
+  const needsAny = (id: string): boolean =>
+    [...(needs.get(graph.resolve(id)?.id ?? id) ?? [])].some(guessed);
   const reported = new Set<string>();
-  for (const render of allRenders(graph)) {
-    if (render.kind !== "unknown") continue;
+  for (const placed of unknownRenders(graph)) {
+    const { render } = placed;
     const key = JSON.stringify([render.loc.file, render.loc.start, render.reason]);
     if (reported.has(key)) continue;
     reported.add(key);
-    switch (render.reason) {
-      case "computed":
-        if (anyNeeds) {
-          ctx.unknown({
-            ...message.computedComponent(render.name, render.fix),
-            location: render.loc,
-          });
-        }
-        break;
-      case "class":
-        if (anyNeeds) {
-          ctx.unknown({ ...message.classComponent(render.name), location: render.loc });
-        }
-        break;
-      case "escapes":
-        if (needsAny(render.target)) {
-          ctx.unknown({ ...message.escapingJsx(render.name, render.detail), location: render.loc });
-        }
-        break;
-      case "router":
-        if (render.targets.some(needsAny)) {
-          ctx.unknown({ ...message.routerNotFollowed(), location: render.loc });
-        }
-        break;
-      default: {
-        const unreachable: never = render;
-        return unreachable;
-      }
+    const unproven = unprovenAt(graph, needs, walk, strict, placed);
+    if (unproven.length > 0) {
+      for (const id of unproven) strict.unproven.add(id);
+      const names = unproven.map((id) => contextName(graph, id)).sort();
+      const related = toRelated([
+        ...limitNotes(pathNotes(walk.arrivals, placed.owner)),
+        ...statedNotes(graph, unproven),
+      ]);
+      ctx.report({
+        ...message.unprovable(unknownMessage(render), names),
+        location: render.loc,
+        related,
+      });
+      continue;
     }
+    const notChecked =
+      render.reason === "escapes"
+        ? needsAny(render.target)
+        : render.reason === "router"
+          ? render.targets.some(needsAny)
+          : anyNeeds;
+    if (notChecked)
+      ctx.unknown({ ...message.notChecked(unknownMessage(render)), location: render.loc });
   }
 }
 
@@ -199,8 +384,38 @@ function reportExternalContexts(
 }
 
 /**
+ * The run-time checks of stated contexts that every reader is proven for: an info each, with the
+ * fix that drops it. A context with any finding is not proven, so its checks stay.
+ */
+function reportGuards(
+  summaries: ReadonlyMap<string, Summary>,
+  graph: Graph,
+  ctx: ProjectContext,
+  strict: Strict,
+): void {
+  const guards = [...summaries.values()]
+    .flatMap((summary) => summary.guards)
+    .sort((a, b) =>
+      a.loc.file === b.loc.file ? a.loc.start - b.loc.start : a.loc.file < b.loc.file ? -1 : 1,
+    );
+  for (const guard of guards) {
+    if (!strict.stated.has(guard.context) || strict.unproven.has(guard.context)) continue;
+    const name = contextName(graph, guard.context);
+    if (matchesName(name, strict.ignored)) continue;
+    ctx.report({
+      ...message.guardNotNeeded(guard.hook, name),
+      location: toLocation(guard.loc),
+      severity: "info",
+      fixes: [{ title: message.fixTitles.dropGuard(guard.hook), edits: [toEdit(guard.removal)] }],
+    });
+  }
+}
+
+/**
  * The project-wide step: needs flow up from reads, Providers remove them, and every render site
- * reachable from an entry point is checked. Pure over the summaries.
+ * reachable from an entry point is checked. A context stated required (`RequiredContext`) is
+ * proven strictly: every place that is not proven is an error, never "not checked". Pure over the
+ * summaries.
  */
 export function checkSummaries(
   summaries: ReadonlyMap<string, Summary>,
@@ -212,6 +427,11 @@ export function checkSummaries(
   const graph = buildGraph(summaries);
   const first = graph.contextList[0];
   if (first === undefined) return;
+  const strict: Strict = {
+    stated: new Set(graph.contextList.filter((context) => context.stated).map((c) => c.id)),
+    unproven: new Set(),
+    ignored,
+  };
   const needs = computeNeeds(graph);
   const configured = configuredEntries(graph, entries);
   for (const problem of configured.problems) {
@@ -219,11 +439,31 @@ export function checkSummaries(
   }
   const sites = [...entrySites(graph), ...configured.sites];
   if (sites.length === 0 && graph.entryCalls.length === 0) {
-    const names = graph.contextList.map((context) => context.name);
-    ctx.unknown({ ...message.noEntryPoint([...new Set(names)]), location: first.loc });
+    const stated = graph.contextList.filter(
+      (context) => context.stated && !matchesName(context.name, ignored),
+    );
+    const guessed = graph.contextList.filter((context) => !context.stated);
+    if (stated.length > 0) {
+      for (const context of stated) strict.unproven.add(context.id);
+      ctx.report({
+        ...message.noEntryPointStated([...new Set(stated.map((context) => context.name))]),
+        location: (stated[0] ?? first).loc,
+        related: toRelated(stated.map(statedNote)),
+      });
+    }
+    if (guessed.length > 0) {
+      const names = guessed.map((context) => context.name);
+      ctx.unknown({ ...message.noEntryPoint([...new Set(names)]), location: first.loc });
+    }
+    reportUnknownRenders(graph, needs, emptyWalk(), ctx, strict);
   } else {
-    const reached = reportMissingProviders(graph, needs, sites, ctx, ignored);
-    reportUnreachable(graph, needs, reached, ctx);
+    const walk = reportMissingProviders(graph, needs, sites, ctx, strict);
+    reportUnreachable(graph, needs, walk, ctx, strict);
+    reportUnknownRenders(graph, needs, walk, ctx, strict);
   }
-  reportUnknownRenders(graph, needs, ctx);
+  reportGuards(summaries, graph, ctx, strict);
+}
+
+function emptyWalk(): WalkResult {
+  return { reached: new Set(), missing: [], above: new Map(), arrivals: new Map() };
 }

@@ -7,10 +7,12 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "A lookup like labels[status] has an entry for every value of the key, or handles a missing one.",
+        'A lookup like `labels[status]` is typed as always present; a value with no entry gives `undefined`, and the page shows "undefined" or the next call throws.',
+      summary: "a lookup like `labels[status]` with no entry for some value of the key",
       defaultSeverity: "error",
       tier: "core",
       group: "keys",
+      fixNeedsStrictNulls: true,
       yieldsTo: ["table-type-too-loose"],
       options: {
         ignore: {
@@ -25,10 +27,13 @@ export const RULES = {
     kind: "project",
     meta: {
       description:
-        'A lookup table typed `Record<string, V>` says neither "these are all the keys" nor "keys come from outside"; say which in its type.',
+        "A table typed `Record<string, V>` lets a misspelt or missing key compile; typing its keys, or its reads as possibly missing, lets TypeScript check each read.",
+      summary:
+        'a lookup table typed `Record<string, V>` that says neither "all keys" nor "keys from outside"',
       defaultSeverity: "error",
       tier: "core",
       group: "keys",
+      fixNeedsStrictNulls: true,
       options: {
         ignore: {
           kind: "strings",
@@ -43,7 +48,8 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "A new Map([...]) or new Set([...]) written out in code has the same key twice, so the second replaces the first.",
+        "The same key twice in a `new Map([...])` or `new Set([...])` keeps only the last entry, so the first one has no effect.",
+      summary: "the same key twice in a `new Map([...])` or `new Set([...])` written out in code",
       defaultSeverity: "error",
       tier: "core",
       group: "keys",
@@ -53,39 +59,6 @@ export const RULES = {
           default: [],
           description:
             "Names of maps and sets (globs like *_ALIASES) whose repeats are deliberate, such as generated tables.",
-        },
-      },
-    },
-  },
-  "keyed-maps-out-of-sync": {
-    kind: "file",
-    meta: {
-      description:
-        "Two records kept in step must lose a key together: a key removed from one and forgotten in the other is reported.",
-      defaultSeverity: "warning",
-      tier: "addon",
-      addon: "keyed-maps",
-      group: "keys",
-      heuristic: true,
-      options: {
-        minFunctions: {
-          kind: "number",
-          default: 1,
-          min: 1,
-          integer: true,
-          description:
-            "How many functions must write the tables together with one key before they count as kept in step.",
-        },
-        plainStringKeys: {
-          kind: "boolean",
-          default: true,
-          description:
-            "Count tables keyed by a plain `string` or `number`; false keeps only named key types like `UserId`, which rarely meet by chance.",
-        },
-        ignore: {
-          kind: "strings",
-          default: [],
-          description: "Table names (globs like *Cache) that may be kept apart.",
         },
       },
     },

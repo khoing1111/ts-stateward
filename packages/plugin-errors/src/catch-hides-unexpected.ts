@@ -8,71 +8,66 @@ export const GROUP = "catch";
 
 const EXPLAIN = `# errors/catch-hides-unexpected
 
-A catch that handles some errors with instanceof also rethrows or handles all the others.
+A \`catch\` that tests some error classes and has no last branch ignores every other error, bugs included; rethrowing the rest keeps them visible.
 
-## Why
+\`\`\`ts example-bad
+class NotFoundError extends Error {}
+class AuthError extends Error {}
 
-A \`catch\` that handles \`NotFoundError\` and \`AuthError\` with \`instanceof\`, and has no last branch, silently drops every other error: a bug, a network failure, a string someone threw. \`save(order)\` fails with a \`TypeError\`, neither branch matches, and the code carries on as if the order was saved.
+declare function save(order: string): Promise<void>;
 
-## When to use it
-
-Use it in any code that catches by class. It is on as an error in every preset; keep it on. It needs no knowledge of what the \`try\` throws, so it works even where \`errors/catch-misses-error\` cannot see.
-
-## What it catches
-
-A \`catch (e)\` with an \`if\` / \`else if\` chain or \`switch (true)\` that tests \`e instanceof X\`, and no branch for the other errors. It is fine when:
-
-- a last \`else\` or \`default\` does something: rethrows, wraps the error with \`{ cause: e }\`, or handles it;
-- any statement follows the chain in the \`catch\`, since it runs for every error.
-
-### Bad
-
-\`\`\`ts
-try {
-  await save(order);
-} catch (e) {
-  if (e instanceof NotFoundError) {
-    showMissing();
-  } else if (e instanceof AuthError) {
-    redirectToLogin();
+export async function submit(order: string, show: (text: string) => void): Promise<void> {
+  try {
+    await save(order);
+  } catch (e) {
+    if (e instanceof NotFoundError) {
+      show("This order no longer exists.");
+    } else if (e instanceof AuthError) {
+      show("Please sign in again.");
+    }
   }
 }
 \`\`\`
 
-### Good
+End the chain with a branch for every other error, which rethrows it or handles it:
 
-\`\`\`ts
-try {
-  await save(order);
-} catch (e) {
-  if (e instanceof NotFoundError) {
-    showMissing();
-  } else if (e instanceof AuthError) {
-    redirectToLogin();
-  } else {
-    throw e;
+\`\`\`ts example-good
+class NotFoundError extends Error {}
+class AuthError extends Error {}
+
+declare function save(order: string): Promise<void>;
+
+export async function submit(order: string, show: (text: string) => void): Promise<void> {
+  try {
+    await save(order);
+  } catch (e) {
+    if (e instanceof NotFoundError) {
+      show("This order no longer exists.");
+    } else if (e instanceof AuthError) {
+      show("Please sign in again.");
+    } else {
+      throw e;
+    }
   }
 }
 \`\`\`
 
-### Fix
+A quick fix adds \`else { throw e; }\` to an \`if\` chain. For a \`switch (true)\`, add \`default: throw e;\` yourself; the message shows it. Wrapping the error with \`{ cause: e }\`, or any statement after the chain, counts too, since it runs for every error.
 
-A quick fix adds \`else { throw e; }\` to an \`if\` chain. For a \`switch (true)\`, add \`default: throw e;\` yourself; the message shows it.
+## Why it matters
+
+A \`catch\` that handles \`NotFoundError\` and \`AuthError\` and has no last branch ignores every other error: a bug, a network failure, a string someone threw. \`save(order)\` fails with a \`TypeError\`, neither branch matches, and the code carries on as if the order was saved. The rule needs no knowledge of what the \`try\` throws, so it works even where \`errors/catch-misses-error\` cannot see.
 
 ## What it does not catch
 
-- A chain that tests another value, or tests other than \`instanceof\`.
+- A chain that tests another value, or tests with something other than \`instanceof\`.
 - A \`catch\` with no parameter, or a destructured one.
-- A last \`else\` that does something but still ignores the error (\`else { showGenericError(); }\`): it counts as handling the rest, unless you set \`restUsesError\` (below). \`errors/catch-misses-error\` looks at what that \`else\` does with the error.
-- A \`catch\` with no \`instanceof\` chain that ignores the error: that is \`errors/catch-without-intent\`.
+- A last \`else\` that does something but still ignores the error (\`else { showGenericError(); }\`): it counts as handling the rest, unless you set \`restUsesError\`. \`errors/catch-misses-error\` looks at what that \`else\` does with the error.
 
 ## Turn it on or off
 
-In \`stateward.config.ts\`:
-
 \`\`\`ts
 rules: { "errors/catch-hides-unexpected": "off" } // or "warning"
-groups: { "errors/catch": "off" } // the whole group
 rules: { "errors/catch-hides-unexpected": ["error", { restUsesError: true }] } // the last branch must use the error
 \`\`\`
 `;
@@ -194,26 +189,25 @@ function mentions(nodes: readonly ts.Node[], variable: string): boolean {
 function ignoringHeadline(classes: readonly string[], variable: string): string {
   return fitted(
     (cut) =>
-      `errors other than ${codeList(classes, cut)} are handled here without ever using \`${variable}\``,
+      `\`catch\` handles errors other than ${codeList(classes, cut)} without looking at \`${variable}\``,
   );
 }
 
 function headline(classes: readonly string[]): string {
-  return fitted((cut) => `errors other than ${codeList(classes, cut)} are silently swallowed here`);
+  return fitted((cut) => `\`catch\` ignores errors other than ${codeList(classes, cut)}`);
 }
 
 function hint(dispatch: Dispatch, variable: string): string {
   if (dispatch.kind === "switch") {
-    return withExample("end the switch with a case for the rest:", [
-      "default:",
-      `  throw ${variable};`,
-    ]);
+    return withExample(
+      "end the switch with a case that rethrows the rest, so they reach the caller:",
+      ["default:", `  throw ${variable};`],
+    );
   }
-  return withExample("end the chain with a branch for the rest:", [
-    "} else {",
-    `  throw ${variable};`,
-    "}",
-  ]);
+  return withExample(
+    "end the chain with a branch that rethrows the rest, so they reach the caller:",
+    ["} else {", `  throw ${variable};`, "}"],
+  );
 }
 
 /** The whitespace at the start of the line that holds `position`. */
@@ -290,7 +284,8 @@ export const catchHidesUnexpected = defineRule({
   kind: "file",
   meta: {
     description:
-      "A catch that handles some errors with instanceof also rethrows or handles all the others.",
+      "A `catch` that tests some error classes and has no last branch ignores every other error, bugs included; rethrowing the rest keeps them visible.",
+    summary: "a `catch` that handles some error classes with `instanceof` and ignores the rest",
     defaultSeverity: "error",
     tier: "core",
     group: GROUP,

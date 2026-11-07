@@ -38,117 +38,88 @@ import { HEADLINE_MAX, compactText, fitted, fittedCases, oneLineText, shorten } 
 
 const EXPLAIN = `# unions/default-hides-cases
 
-A switch over a union handles every case, so a value added later fails to compile instead of falling into the default.
+A case added to the union later goes to the \`default\` with no compile error; listing the cases makes each switch fail to compile until it handles the new case.
 
-## Why
+\`\`\`ts example-bad
+type UploadStatus = "idle" | "uploading" | "failed";
 
-A \`default\` takes every case the switch does not list, including ones added later. When \`UploadStatus\` gains \`"cancelled"\`, the code still compiles, and \`"cancelled"\` does whatever the \`default\` does (say, shows a spinner forever) because nobody decided what it should do. With the missing cases written out and \`status satisfies never\` in the \`default\`, adding \`"cancelled"\` becomes a type error at this switch.
-
-## When to use it
-
-Use it wherever you switch over a union of known values: a status, an action \`type\`, an enum. It is on as an error in every preset. Turn it off, or make it a warning, while your code still uses plain \`string\` where it means a fixed set of values; a switch over a \`string\` is never checked anyway.
-
-## What it catches
-
-A \`default\` in a switch over a union of literals (strings, numbers, booleans, enum members, \`null\`, \`undefined\`) declared in your project, unless the \`default\` starts with a check TypeScript enforces: \`status satisfies never;\` (also written \`(status) satisfies never;\` or \`void (status satisfies never);\`), \`status satisfies Rest;\` where \`Rest\` names exactly the cases that fall through (below), assigning \`status\` to a \`never\` variable, or passing it to a function whose parameter is \`never\`, such as your own \`ensureNever\`.
-
-For \`switch (node.type)\` over a union of objects, TypeScript narrows \`node\` itself, so the check is \`node satisfies never\`: \`node.type\` no longer compiles there.
-
-A \`default\` that hides more than 5 cases (option \`maxHidden\`) is reported as info: it often means "everything else" on purpose.
-
-### Bad
-
-\`\`\`ts
-switch (status.kind) {
-  case "idle":
-    return start();
-  default:
-    return wait(); // also runs for "retry" and "cancel"
+export function label(status: UploadStatus): string {
+  switch (status) {
+    case "idle":
+      return "Choose a file";
+    default:
+      return "Uploading…";
+  }
 }
 \`\`\`
 
-### Good
+Give each case its own branch, and put \`status satisfies never;\` in the \`default\` so a case added later stops the build here:
 
-\`\`\`ts
-switch (status.kind) {
-  case "idle":
-    return start();
-  case "retry":
-    return again();
-  case "cancel":
-    return stop();
-  default:
-    status satisfies never;
-    return wait();
+\`\`\`ts example-good
+type UploadStatus = "idle" | "uploading" | "failed";
+
+export function label(status: UploadStatus): string {
+  switch (status) {
+    case "idle":
+      return "Choose a file";
+    case "uploading":
+      return "Uploading…";
+    case "failed":
+      return "Upload failed, try again";
+    default:
+      status satisfies never;
+      return "Uploading…";
+  }
 }
 \`\`\`
 
-If the hidden cases really all mean the same (a router that handles 3 of 88 events), keep the \`default\` and say which cases they are, in a form TypeScript checks:
+The editor offers quick fixes. When every case is already listed and only the check is missing, "Add \`status satisfies never;\`" puts it at the top of the \`default\`; \`stateward check --fix\` applies it too. When cases are missing, "List the 2 missing cases (same behaviour)" writes them as \`case\` labels that run the old \`default\` body, then adds a \`default\` with the check (or a call to your own \`never\` helper, such as \`ensureNever(status)\`, when the file declares or imports one). Every case still does what it did; give each its own code where it needs it. \`--fix\` does not apply that one: a value outside the type at run time (from an \`as\` cast or unchecked data) would now skip the old body. It is offered when the hidden cases can be written as values (strings, numbers, booleans, enum members, \`null\`, \`undefined\`) and the \`default\` does not fall into the next \`case\`.
 
-\`\`\`ts
-type OtherEvent = "scroll" | "resize";
+The quick fixes also handle a \`case\` that shares the \`default\`'s body (\`case "neutral": default:\`), a value named \`type\` (written \`void (type satisfies never);\`, since \`type\` would start a declaration), and a switch on \`node.type\` inside \`useMemo\`, \`useCallback\`, \`useEffect\` or \`useLayoutEffect\` (it switches on \`const nodeType = node.type;\`, so the hook's dependencies stay the same). Each is tried on a copy of your code first and offered only in a form that compiles.
 
-switch (event.type) {
-  case "click":
-    return open();
-  case "key":
-    return type();
-  default:
-    event.type satisfies OtherEvent; // these, and only these, fall through on purpose
-    return log(event);
-}
-\`\`\`
+## Why it matters
 
-The type names exactly the cases the \`default\` takes, written out as a union (\`"scroll" | "resize"\`) or an alias of one; \`void (event.type satisfies OtherEvent)\` and \`(event.type) satisfies OtherEvent\` count too. A case added later fails to compile there, so you decide where it goes. It is checked like \`satisfies never\`: the rule is silent. \`Exclude<Event["type"], "click" | "key">\` is accepted too, as your stated choice, but it grows with the union: a case added later falls into the \`default\` again without a word. Write the cases out unless that is what you want. A type that names more cases than the \`default\` takes (one the switch already lists) or fewer says something else, so the finding stays, with the exact type in its hint (TypeScript itself rejects the narrower one). Or say why on the line above it: \`// stateward-ignore unions/default-hides-cases: every other event is logged only\`.
+A \`default\` takes every case the switch does not list, including the ones added later. When \`UploadStatus\` gains \`"cancelled"\`, the code still compiles and a cancelled upload says "Uploading…" forever: no code says what it should show. With the cases written out and \`status satisfies never\` in the \`default\`, adding \`"cancelled"\` is a type error at this switch: TypeScript points you at every place that has to decide.
 
-### Fix
+## When it says “not checked”
 
-When every case is already written and only the check is missing, a quick fix adds \`status satisfies never;\` at the top of the \`default\`, which keeps the fallback running; \`stateward check --fix\` applies it too. The quick fix also handles:
-
-- a case that shares the default's body (\`case "neutral": default:\`): the case gets its own copy of the body, and the \`default\` the check, then the body;
-- a value named \`type\` (or \`module\`, \`namespace\`, …), which would start a declaration: it writes \`void (type satisfies never);\`;
-- a switch inside \`useMemo\`, \`useCallback\`, \`useEffect\` or \`useLayoutEffect\` whose code reads only \`selectedNode.type\`: it switches on \`const nodeType = selectedNode.type;\` and checks \`nodeType\`, so the hook's dependencies stay \`selectedNode.type\`.
-
-When the \`default\` hides cases, the quick fix "List the 2 hidden cases (same behaviour)" writes them as \`case\` labels that run the old \`default\` body, then adds a new \`default\` with the check. If your project has its own \`never\` helper (a function the file declares or imports that takes \`never\`), the new \`default\` calls it:
-
-\`\`\`ts
-case "retry":
-case "cancel":
-  return wait();
-default:
-  return ensureNever(status); // or: status satisfies never; return wait();
-\`\`\`
-
-Every case still does what it did, and a value added later fails to compile. Then give each case its own code where it needs it. \`--fix\` does not apply it: a value outside the type at run time (from an \`as\` cast or unchecked data) now skips the old body. It is offered when the hidden cases can be written as values (strings, numbers, booleans, enum members, \`null\`, \`undefined\`), and not when the \`default\` falls into the next \`case\`.
-
-The second quick fix, "Add \`event.type satisfies "scroll" | "resize";\` to the default", keeps the \`default\` and its body and writes the check above, with the cases that fall through today, as its first statement. It changes nothing at run time, but saying "these cases all mean the same" is your decision, so \`--fix\` and "Fix all" never apply it.
-
-Each quick fix is tried on a copy of your code first, in its forms in order (the \`const\` of the tag, the object, the value itself; your helper, then \`satisfies never\`), and offered only in the first form that compiles.
-
-A computed subject (\`draft.alertMode ?? "none"\`, \`getMode()\`) is not narrowed by TypeScript, so no check on it compiles and there is no quick fix: put it in a \`const\` first (\`const alertMode = draft.alertMode ?? "none"; switch (alertMode)\`).
+When the \`default\` hands the value to a function whose type does not resolve (\`exhaustiveSwitchError(status)\` from a package that is not installed or not built), whether it is a \`never\` check is not known, so the switch is listed as not checked. Make the import resolve, or put \`status satisfies never;\` first in the \`default\`.
 
 ## What it does not catch
 
-- A switch over a type with no fixed set of values (\`string\`, \`number\`, an object).
+- A switch over a type with no fixed set of values (\`string\`, \`number\`, an object), \`switch (true)\` and \`switch (typeof x)\`.
 - A union declared in a package or in TypeScript's lib (\`Intl.LDMLPluralRule\`, a library's event type): a member the library adds later is not a state your app designed. Set \`projectTypesOnly: false\` to check those too.
-- A \`default\` that hands the value to a function whose type does not resolve (\`exhaustiveSwitchError(info)\` from a package whose types are not built): it may be a \`never\` check, so the finding is an unknown that says so.
 - A switch without a \`default\`. For missing cases there, use typescript-eslint's \`switch-exhaustiveness-check\`.
-- \`switch (true)\` and \`switch (typeof x)\`.
-- A switch over \`o?.kind\` when \`o\` can be \`undefined\` and is not itself a union with a \`kind\`: TypeScript keeps \`undefined\` in every case, so \`satisfies never\` cannot compile there.
-- A check that does not always run counts as missing: one inside an \`if\`, a loop, a \`try\`, a function, or after \`&&\`, \`||\`, \`??\` or \`?:\`. Put it directly in the \`default\`.
+- A switch over \`o?.kind\` when \`o\` can be \`undefined\` and is not itself a union with a \`kind\`: TypeScript keeps \`undefined\` in every case, so no \`never\` check compiles there.
+- A switch over a computed value (\`draft.mode ?? "none"\`, \`getMode()\`): TypeScript does not narrow it, so no check compiles and there is no quick fix. Put it in a \`const\` first (\`const mode = draft.mode ?? "none"; switch (mode)\`).
+
+A check that does not always run counts as missing: one inside an \`if\`, a loop, a \`try\` or a function, or after \`&&\`, \`||\`, \`??\` or \`?:\`. Put it directly in the \`default\`.
+
+## Getting the best from it
+
+The checks the rule accepts at the top of the \`default\` are the ones TypeScript enforces: \`status satisfies never;\` (also \`(status) satisfies never;\` or \`void (status satisfies never);\`), assigning \`status\` to a variable typed \`never\`, or passing it to a function whose parameter is \`never\`. For \`switch (node.type)\` over a union of objects, TypeScript narrows \`node\` itself, so the check is \`node satisfies never\`.
+
+When the cases the \`default\` takes really all mean the same (a router that handles 3 of 88 events), keep the \`default\` and say which cases they are, in a form TypeScript checks:
+
+\`\`\`ts
+default:
+  event.type satisfies "scroll" | "resize"; // these, and only these, fall through on purpose
+  return log(event);
+\`\`\`
+
+Write the cases out, or name an alias of them. A case added later then fails to compile there, so you decide where it goes, and the rule is silent. A type that names more or fewer cases than the \`default\` takes keeps the finding, with the exact type in its hint. \`Exclude<Event["type"], "click" | "key">\` is accepted as your choice, but it grows with the union: a new case falls into the \`default\` again without a word. The quick fix "Add \`event.type satisfies …\` to the default" writes this check with today's cases; it is your decision, so \`--fix\` and "Fix all" never apply it.
+
+A \`default\` that takes more than 5 cases (\`maxHidden\`) is reported as info only: it often means "everything else" on purpose. To accept one switch with a reason, put the comment above it: \`// stateward-ignore unions/default-hides-cases: every other event is only logged\`.
 
 ## Turn it on or off
 
-In \`stateward.config.ts\`:
-
 \`\`\`ts
 rules: { "unions/default-hides-cases": "off" } // or "warning"
-rules: { "unions/default-hides-cases": ["error", { maxHidden: 10 }] } // info only above 10 hidden cases
-rules: { "unions/default-hides-cases": ["error", { projectTypesOnly: false }] } // packages' unions too
 rules: { "unions/default-hides-cases": ["error", { ignore: ["*Event"] }] } // unions not checked
-rules: { "unions/default-hides-cases": ["error", { severities: { "many-hidden": "warning" } }] } // per kind of finding
-groups: { "guards/switches": "off" } // the whole group
+groups: { "unions/cases": "warning" } // this rule and if-chain-misses-case
 \`\`\`
+
+Turn it down while your code still uses plain \`string\` where it means a fixed set of values; a switch over a \`string\` is never checked anyway.
 `;
 
 /**
@@ -167,8 +138,18 @@ function coveredLabels(
     const [only] = literals === "not-finite" ? [] : literals;
     if (only === undefined || literals.length !== 1) return undefined;
     covered.add(only.label);
+    // `case Status.Issued` over `"issued" | …`: TypeScript narrows by the value, so the member also
+    // covers the plain literal it equals (Infisical, user trial 1.0.2).
+    const plain = plainLabel(only.value);
+    if (plain !== undefined) covered.add(plain);
   }
   return covered;
+}
+
+/** How TypeScript prints a plain string or number literal: `"issued"`, `3`. */
+function plainLabel(value: Literal["value"]): string | undefined {
+  if (typeof value === "string") return JSON.stringify(value);
+  return typeof value === "number" ? String(value) : undefined;
 }
 
 /**
@@ -381,13 +362,13 @@ function isUndefined(literal: Literal): boolean {
 }
 
 function hiddenHeadline(hidden: readonly Literal[], subject: string, maxHidden: number): string {
-  const noun = hidden.length === 1 ? "case" : "cases";
+  const [verb, them] = hidden.length === 1 ? ["is", "it"] : ["are", "them"];
   return fittedCases(
     HEADLINE_MAX,
     hidden.map((literal) => literal.label),
     maxHidden,
     (cut, labels) =>
-      `this \`default\` hides ${String(hidden.length)} ${noun} of \`${cut(subject)}\`${labels}`,
+      `${labels} of \`${cut(subject)}\` ${verb} not listed; \`default\` handles ${them}`,
   );
 }
 
@@ -419,26 +400,27 @@ function hiddenHint(input: {
   const what = count === 1 ? "case" : "cases";
   const same = rest.spelled
     ? count === 1
-      ? "if the `default` is right for it, say so"
-      : `if these ${n} cases all mean the same, say which`
+      ? "name it in the `default` instead, if that is where it belongs"
+      : `name the ${n} cases in the \`default\` if they all mean the same`
     : count === 1
-      ? "if the `default` is right for it, say so above the `default`"
-      : `if these ${n} cases all mean the same, say so above the \`default\``;
+      ? "say why above the `default` instead, if that is where it belongs"
+      : `say why above the \`default\` if the ${n} cases all mean the same`;
   const line = fitted((cut) => {
     // Core decides which fix, if any, is offered: the hint names the change, not the fix.
     const list =
       check.tag === undefined
         ? `list the ${what}, then put \`${checkCode(cut(check.target), helper)}\` in the \`default\``
         : `list the ${what}, then check a \`const\` of the tag in the \`default\``;
-    return many ? `${same}, or ${list}:` : `${list}, or ${same}:`;
+    return many ? `${same}; otherwise ${list}:` : `${list}; or ${same}:`;
   });
   return [line, example([rest.line])].join("\n");
 }
 
-function completeHeadline(subject: string): string {
+function completeHeadline(subject: string, throws: boolean): string {
+  // A `default` that throws is not silent, but a case added later still compiles and fails at run time.
+  const later = throws ? "; a case added later throws at run time" : "";
   return fitted(
-    (cut) =>
-      `\`default\` can't be reached today, but a new \`${cut(subject)}\` value would silently land here`,
+    (cut) => `\`default\` is unreachable: every case of \`${cut(subject)}\` is listed${later}`,
   );
 }
 
@@ -455,7 +437,7 @@ function completeHint(input: {
   if (check.tag !== undefined) {
     // The hook's dependencies stay as they are: the code reads the tag, not the whole object.
     return [
-      `keep the fallback, and check a \`const\` of the tag so the hook's dependencies stay the same:`,
+      `check a \`const\` of the tag in the fallback, so a case added later fails to compile and the hook's dependencies stay the same:`,
       example([
         `const ${check.target} = ${shorten(check.tag.subject, EXAMPLE_TEXT_MAX)};`,
         `switch (${check.target}) {`,
@@ -466,7 +448,7 @@ function completeHint(input: {
   }
   if (sharing !== undefined) {
     return [
-      `give \`${shorten(sharing, EXAMPLE_TEXT_MAX)}\` its own copy of the body, then let TypeScript check the fallback:`,
+      `give \`${shorten(sharing, EXAMPLE_TEXT_MAX)}\` its own copy of the body, then check the fallback, so a case added later fails to compile:`,
       example([
         shorten(sharing, EXAMPLE_TEXT_MAX),
         ...(sharingBody === undefined ? [] : [`  ${shorten(sharingBody, EXAMPLE_TEXT_MAX)}`]),
@@ -476,7 +458,7 @@ function completeHint(input: {
     ].join("\n");
   }
   return [
-    `keep the fallback but let TypeScript check it:`,
+    `check the fallback, so a case added later fails to compile:`,
     example(["default:", `  ${proof}`, ...body]),
   ].join("\n");
 }
@@ -523,7 +505,7 @@ function computedHint(subject: ts.Expression, ctx: FileContext): string {
       : shown;
   return fitted(
     (cut) =>
-      `put it in a \`const\` first: \`const ${name} = ${cut(value)}; switch (${name}) …\`, then check \`${name}\` in the \`default\``,
+      `put the value in a \`const\` first: \`const ${name} = ${cut(value)}; switch (${name}) …\`, then check \`${name}\` in the \`default\``,
   );
 }
 
@@ -531,17 +513,20 @@ export const defaultHidesCases = defineRule({
   kind: "file",
   meta: {
     description:
-      "A switch over a union handles every case, so a value added later fails to compile instead of falling into the default.",
+      "A case added to the union later goes to the `default` with no compile error; listing the cases makes each switch fail to compile until it handles the new case.",
+    summary:
+      "a `default` that handles cases the switch does not list, or that has no `never` check",
     defaultSeverity: "error",
     tier: "core",
     group: "cases",
+    fixNeedsStrictNulls: true,
     options: {
       maxHidden: option.number({
         default: 5,
         min: 0,
         integer: true,
         description:
-          'A `default` that hides more cases than this is reported as info: it often means "everything else".',
+          'A `default` that handles more unlisted cases than this is reported as info: it often means "everything else".',
       }),
       ignore: option.strings({
         default: [],
@@ -551,8 +536,9 @@ export const defaultHidesCases = defineRule({
       severities: option.severities({
         kinds: {
           complete: "every case is listed, and the default has no check",
-          hidden: "the default hides up to maxHidden cases",
-          "many-hidden": "the default hides more than maxHidden cases (info unless set here)",
+          hidden: "the default handles up to maxHidden unlisted cases",
+          "many-hidden":
+            "the default handles more than maxHidden unlisted cases (info unless set here)",
         },
         description: "A severity per kind of finding.",
       }),
@@ -607,7 +593,7 @@ function checkSwitch(node: ts.SwitchStatement, settings: Settings, ctx: FileCont
     const target = oneLineText(proofTarget(subject, ctx), ctx.sourceFile);
     ctx.unknown({
       node: fallback.getFirstToken(ctx.sourceFile) ?? fallback,
-      message: `stateward cannot tell whether \`${oneLineText(unresolved.expression, ctx.sourceFile)}(…)\` checks every case of \`${oneLineText(subject, ctx.sourceFile)}\`: its type does not resolve`,
+      message: `not checked: whether \`${oneLineText(unresolved.expression, ctx.sourceFile)}(…)\` checks every case of \`${oneLineText(subject, ctx.sourceFile)}\`: its type does not resolve`,
       hint: `make its import resolve (install or build the package that declares it), or put \`${satisfiesStatement(target)}\` first in the \`default\``,
     });
     return;
@@ -621,7 +607,9 @@ function checkSwitch(node: ts.SwitchStatement, settings: Settings, ctx: FileCont
   const where = fallback.getFirstToken(ctx.sourceFile) ?? fallback;
   const many = hidden.length > settings.maxHidden;
   const headline =
-    hidden.length > 0 ? hiddenHeadline(hidden, shown, settings.maxHidden) : completeHeadline(shown);
+    hidden.length > 0
+      ? hiddenHeadline(hidden, shown, settings.maxHidden)
+      : completeHeadline(shown, fallback.statements.some(ts.isThrowStatement));
   // TypeScript narrows only a name or a property path: `a ?? "none"` or `f()` stays as wide in
   // the `default` as before the switch, so no check on it compiles.
   if (!isPlainReference(subject)) {

@@ -4,119 +4,279 @@
 
 Values that effects and memoized components depend on keep their identity; effects do not copy state, loop, leak or race; state updates see the latest state; flags do not stand in for one state.
 
+## Turn it on
+
+Install `@stateward/plugin-react` and add `react()` to `plugins` in `stateward.config.ts`, with a `preset` (`npx stateward init` does both):
+
+```ts
+plugins: [react()], preset: "recommended", // or "strict"
+```
+
+Each rule's page has its options and what it does not catch. One rule or a whole group is set under `rules` or `groups`: `rules: { "react/<rule>": "warning" }`.
+
 ## Rules
 
-Rules sit under their group. Set a whole group in the config, `groups: { "react/effects": "warning" }`, or one rule under `rules`; a rule's own entry wins.
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [effect-copies-derived-value](../rules/react/effect-copies-derived-value.md) | an effect that only copies a value computed from props or state into state | Copying a computed value into state in an effect adds a render that shows the old value first; computing it while rendering shows the new value at once. | Core | warning | warning |
+| [effect-loops](../rules/react/effect-loops.md) | an effect that sets, every time it runs, a state it depends on: a render loop | An effect that sets one of its own dependencies to a new value each time it runs triggers itself again, so the component renders without end. | Core | error | error |
+| [effect-missing-cleanup](../rules/react/effect-missing-cleanup.md) | an effect that starts a listener, timer, subscription or connection and never stops it | A listener, timer or subscription that an effect starts and never stops keeps running after unmount, and each run of the effect adds another one. | Core | warning | warning |
+| [effect-response-race](../rules/react/effect-response-race.md) | an effect that calls a loader taking an `AbortSignal` and does not abort it in its cleanup | Without an abort in the cleanup, the response to an old request can arrive after a newer one and replace the newer data on screen. | Core | error | error |
+| [timer-runs-after-unmount](../rules/react/timer-runs-after-unmount.md) | a timer kept in a ref, never cleared on unmount, that navigates or calls out later | A timer kept in a ref and not cleared on unmount still runs after the component is gone, and can navigate or call out from a page the user left. | Core | warning | warning |
+| [dependency-changes-every-render](../rules/react/dependency-changes-every-render.md) | an effect or memo dependency that a hook in the project creates anew on every render | A dependency that a hook in the project creates on every render makes the effect or `useMemo` run on every render, and a `memo` child render every time. | Core | warning | warning |
+| [index-key-on-reordered-list](../rules/react/index-key-on-reordered-list.md) | `key={index}` on a list that is filtered, sorted or added to at the front (guess) | With `key={index}` on a list that is filtered or reordered, React keeps each row's state by position, so the state moves to a different item. | Core | warning | warning |
+| [provider-value-changes-every-render](../rules/react/provider-value-changes-every-render.md) | a context Provider given a new object or function on every render | A Provider value created on every render re-renders every component that reads the context, even when nothing in the value changed. | Core | warning | warning |
+| [closure-reads-stale-state](../rules/react/closure-reads-stale-state.md) | a timer, listener or callback that sets state from a value captured in an old render | A timer or listener created in an earlier render reads the state of that render; setting state from it overwrites newer values, which an updater avoids. | Core | warning | warning |
+| [state-copies-prop](../rules/react/state-copies-prop.md) | a state copied from a prop and kept in sync by an effect | A state that copies a prop, kept in sync by an effect, differs from the prop for one render after each change and can overwrite what the user typed. | Core | warning | warning |
 
-### effects
+## [effect-copies-derived-value](../rules/react/effect-copies-derived-value.md)
 
-| Rule | Kind | recommended | strict | What it checks |
-| --- | --- | --- | --- | --- |
-| [effect-copies-derived-value](../rules/react/effect-copies-derived-value.md) | Core | warning | warning | A value computed from props or state is computed while rendering, not copied into state by an effect. |
-| [effect-loops](../rules/react/effect-loops.md) | Core | error | error | An effect does not set, every time it runs, a state it depends on to a new value: that is a render loop. |
-| [effect-missing-cleanup](../rules/react/effect-missing-cleanup.md) | Core | warning | warning | An effect that starts a listener, timer, subscription, observer or connection returns a cleanup that stops it. |
-| [timer-runs-after-unmount](../rules/react/timer-runs-after-unmount.md) | Core | warning | warning | A timer a component keeps in a ref is cleared when the component unmounts, so it cannot run after the component is gone. |
-| [effect-response-race](../rules/react/effect-response-race.md) | Add-on `effect-race` | warning | warning | An effect that loads data ignores a response that arrives after its inputs have changed. (heuristic) |
+Copying a computed value into state in an effect adds a render that shows the old value first; computing it while rendering shows the new value at once.
 
-### render
+```tsx
+import { useEffect, useState } from "react";
 
-| Rule | Kind | recommended | strict | What it checks |
-| --- | --- | --- | --- | --- |
-| [dependency-changes-every-render](../rules/react/dependency-changes-every-render.md) | Core | warning | warning | A dependency of an effect, `useMemo` or `useCallback`, or a prop of a `memo` component, is not a new value that a custom hook creates on every render. |
-| [index-key-on-reordered-list](../rules/react/index-key-on-reordered-list.md) | Core | warning | warning | A list that is filtered, sorted, reversed, spliced or added to at the front is not keyed by the position of its rows. (heuristic) |
-| [provider-value-changes-every-render](../rules/react/provider-value-changes-every-render.md) | Core | warning | warning | A context Provider is not given a value created anew on every render. |
+export function Greeting({ first, last }: { first: string; last: string }) {
+  const [fullName, setFullName] = useState("");
+  useEffect(() => {
+    setFullName(`${first} ${last}`);
+  }, [first, last]);
+  return <p>Hello, {fullName}</p>;
+}
+```
 
-### state
+```text
+warning[react/effect-copies-derived-value]: `fullName` is copied from `first` and `last` in an effect: each change first renders a stale value
+```
 
-| Rule | Kind | recommended | strict | What it checks |
-| --- | --- | --- | --- | --- |
-| [closure-reads-stale-state](../rules/react/closure-reads-stale-state.md) | Core | warning | warning | A state setter called from a timer, a listener or a callback that outlives its render passes an updater function, not a value computed from the state. |
-| [state-copies-prop](../rules/react/state-copies-prop.md) | Core | warning | warning | A state is not a copy of a prop that an effect keeps in step: one value, one owner. |
-| [flags-allow-impossible-combos](../rules/react/flags-allow-impossible-combos.md) | Add-on `flag-combos` | warning | warning | Boolean or nullable useState values that are read or set together become one state, so combinations that make no sense cannot happen. (heuristic) |
+Fix: compute the value while rendering, and remove the state and the effect.
 
-## Options
+Core rule: warning under `recommended` and `strict`. Group: `react/effects`.
 
-Set in the config as `rules: { "<rule>": [severity, { option: value }] }`.
+## [effect-loops](../rules/react/effect-loops.md)
 
-### closure-reads-stale-state
+An effect that sets one of its own dependencies to a new value each time it runs triggers itself again, so the component renders without end.
 
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `listenerMethods` | list of strings | `["addEventListener","on","once","subscribe","addListener"]` | Methods that keep a function to call later, like a listener (add your event bus's `listen`…). |
+```tsx
+import { useEffect, useState } from "react";
 
-### dependency-changes-every-render
+export function Results() {
+  const [filters, setFilters] = useState({ query: "", page: 3 });
+  useEffect(() => {
+    setFilters({ ...filters, page: 1 });
+  }, [filters]);
+  return <p>Page {filters.page}</p>;
+}
+```
 
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `memoProps` | boolean | `true` | Also check the props passed to `memo` components, not only hook dependencies. |
-| `ignore` | list of strings | `[]` | Your hooks and functions (names or globs like use*Form) whose new values you accept. |
-| `stableHooks` | list of strings | `[]` | Your hooks (names or globs like use*Store) whose every returned value is the same each render. `react/effect-response-race` reads this list too; a name here is also the hook the advice for a handler on a `memo` child suggests. |
-| `stableFunctions` | list of strings | `[]` | Your memoized functions (names or globs like bind*Handlers) that return the same value for the same arguments. |
-| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per place the new value comes from. Kinds: `from-hook`: the value is created inside one of your hooks: wrap it there; `from-function`: the value comes from a plain function of yours (`getColumns(prefix)`), called here or in a hook: wrap the call; `derived`: the value is built from the state whose change causes the render, so stabilising it gains nothing (reported as info). |
+```text
+error[react/effect-loops]: render loop: the effect sets `filters`, one of its own dependencies, to a new value each time
+```
 
-### effect-copies-derived-value
+Fix: set the state only when it must change, with a condition that compares the old and the new value.
 
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `ignore` | list of strings | `[]` | State names (globs like draft*) that may be copied this way on purpose. |
+Core rule: error under `recommended` and `strict`. Group: `react/effects`.
 
-### effect-missing-cleanup
+## [effect-missing-cleanup](../rules/react/effect-missing-cleanup.md)
 
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `observers` | list of strings | `["ResizeObserver","IntersectionObserver","MutationObserver"]` | Built-in classes whose instance is stopped with `disconnect()` (add PerformanceObserver…). |
-| `connections` | list of strings | `["WebSocket","EventSource"]` | Built-in classes whose instance is stopped with `close()` (add BroadcastChannel…). |
-| `subscribeMethods` | list of strings | `["subscribe","on"]` | Methods that start a subscription and return a way to stop it (an unsubscribe function or object). |
-| `timeouts` | boolean | `true` | Check `setTimeout` too; false checks only intervals, listeners and the rest. |
-| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of finding. Kinds: `inline-handler`: a listener written inline: no cleanup can remove it, even one you add later; `missing-cleanup`: something the effect starts and no cleanup stops. |
+A listener, timer or subscription that an effect starts and never stops keeps running after unmount, and each run of the effect adds another one.
 
-### effect-response-race
+```tsx
+import { useEffect, useState } from "react";
 
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `notRequests` | list of strings | `[]` | Awaited calls that are not requests, so a late answer cannot happen (sleep, delay, wait*; globs on the name as called). |
-| `stableHooks` | list of strings | `[]` | Hooks (names or globs) whose values keep their identity; this rule also reads the `stableHooks` of `react/dependency-changes-every-render`, so set it there once. |
+export function WindowWidth() {
+  const [width, setWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    window.addEventListener("resize", () => setWidth(window.innerWidth));
+  }, []);
+  return <p>{width}px</p>;
+}
+```
 
-### flags-allow-impossible-combos
+```text
+warning[react/effect-missing-cleanup]: `resize` listener on `window` is an inline function: no cleanup can remove it
+```
 
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `minVariables` | number, whole number, min 2 | `2` | How many variables used together make a finding: 3 reports only larger piles of flags. |
-| `setTogether` | boolean | `true` | Count variables set in one callback as used together; false counts only those read in one condition. |
-| `ignore` | list of strings | `[]` | State variable names (globs like is*Open) that are independent flags: never counted. |
+Fix: keep what the effect starts in a variable, and return a function that stops it.
 
-### index-key-on-reordered-list
+Core rule: warning under `recommended` and `strict`. Group: `react/effects`.
 
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `textOnlyRows` | boolean | `false` | Also report rows made only of plain elements and text, which have no state to move (their focus and selection still can). |
-| `ignore` | list of strings | `[]` | Lists (names or globs like *Log) keyed by position on purpose. |
+## [effect-response-race](../rules/react/effect-response-race.md)
 
-### provider-value-changes-every-render
+Without an abort in the cleanup, the response to an old request can arrive after a newer one and replace the newer data on screen.
 
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `ignore` | list of strings | `[]` | Contexts (names or globs) whose readers are few or cheap, so a new value each render is fine. |
+```tsx
+import { useEffect, useState } from "react";
 
-### state-copies-prop
+declare function fetchUser(id: string, options?: { signal?: AbortSignal }): Promise<{ name: string }>;
 
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `ignore` | list of strings | `[]` | State names (globs like draft*) that may be copied this way on purpose. |
+export function Profile({ userId }: { userId: string }) {
+  const [name, setName] = useState("");
+  useEffect(() => {
+    fetchUser(userId).then((user) => setName(user.name));
+  }, [userId]);
+  return <h1>{name}</h1>;
+}
+```
+
+```text
+error[react/effect-response-race]: `fetchUser(…)` takes an AbortSignal the effect never passes: an answer for an old `userId` can overwrite a newer one
+```
+
+Fix: create an `AbortController` in the effect, pass its signal, and abort it in the cleanup. The quick fix writes all three.
+
+Core rule: error under `recommended` and `strict`. It checks more with the add-ons `react/effect-race`. Group: `react/effects`.
+
+## [timer-runs-after-unmount](../rules/react/timer-runs-after-unmount.md)
+
+A timer kept in a ref and not cleared on unmount still runs after the component is gone, and can navigate or call out from a page the user left.
+
+```tsx
+import { useRef } from "react";
+
+export function RailMenu({ onClose }: { onClose: () => void }) {
+  const closeTimer = useRef<number | undefined>(undefined);
+  const choose = () => {
+    closeTimer.current = window.setTimeout(() => onClose(), 150);
+  };
+  return <button onClick={choose}>Done</button>;
+}
+```
+
+```text
+warning[react/timer-runs-after-unmount]: `closeTimer` can still run `onClose(…)` after `RailMenu` unmounts
+```
+
+Fix: clear the timer in an effect cleanup that runs on unmount.
+
+Core rule: warning under `recommended` and `strict`. Group: `react/effects`.
+
+## [dependency-changes-every-render](../rules/react/dependency-changes-every-render.md)
+
+A dependency that a hook in the project creates on every render makes the effect or `useMemo` run on every render, and a `memo` child render every time.
+
+```tsx
+import { useEffect } from "react";
+import { useCart } from "./cart.js";
+
+export function CartPage() {
+  const { items, onSave } = useCart();
+  useEffect(() => {
+    const timer = setInterval(onSave, 5000);
+    return () => clearInterval(timer);
+  }, [onSave]);
+  return <p>{items.length} items</p>;
+}
+```
+
+```text
+warning[react/dependency-changes-every-render]: effect runs after every render: `onSave` from `useCart()` is a new function each time
+```
+
+Fix: make the value stable where the hook creates it, in `cart.ts`, which fixes every caller at once.
+
+Core rule: warning under `recommended` and `strict`. Group: `react/render`.
+
+## [index-key-on-reordered-list](../rules/react/index-key-on-reordered-list.md)
+
+With `key={index}` on a list that is filtered or reordered, React keeps each row's state by position, so the state moves to a different item.
+
+```tsx
+// …
+export function Todos({ initial }: { initial: Todo[] }) {
+  const [todos, setTodos] = useState(initial);
+  const remove = (id: string) => setTodos(todos.filter((todo) => todo.id !== id));
+  return todos.map((todo, index) => (
+    <label key={index}>
+      <input type="checkbox" onChange={() => remove(todo.id)} /> {todo.text}
+    </label>
+  ));
+}
+```
+
+```text
+warning[react/index-key-on-reordered-list]: list keyed by index, but `todos` is filtered: a row's state can move to the wrong item
+```
+
+Fix: key each row by something that belongs to the item and does not change.
+
+Core rule: warning under `recommended` and `strict`. It judges from patterns in the code, not only from types, so it can be wrong: it is never an error unless you make it one. Group: `react/render`.
+
+## [provider-value-changes-every-render](../rules/react/provider-value-changes-every-render.md)
+
+A Provider value created on every render re-renders every component that reads the context, even when nothing in the value changed.
+
+```tsx
+import { createContext, useState, type ReactNode } from "react";
+
+type Theme = { theme: string; setTheme: (theme: string) => void };
+const ThemeContext = createContext<Theme | undefined>(undefined);
+
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  const [theme, setTheme] = useState("light");
+  return <ThemeContext.Provider value={{ theme, setTheme }}>{children}</ThemeContext.Provider>;
+}
+```
+
+```text
+warning[react/provider-value-changes-every-render]: `ThemeContext` value is a new object every render: all its readers re-render
+```
+
+Fix: wrap the value in `useMemo`, with what it reads as dependencies.
+
+Core rule: warning under `recommended` and `strict`. Group: `react/render`.
+
+## [closure-reads-stale-state](../rules/react/closure-reads-stale-state.md)
+
+A timer or listener created in an earlier render reads the state of that render; setting state from it overwrites newer values, which an updater avoids.
+
+```tsx
+import { useEffect, useState } from "react";
+
+export function Counter() {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setCount(count + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <p>{count}</p>;
+}
+```
+
+```text
+warning[react/closure-reads-stale-state]: the interval always sets 1: `count` is the value from the first render
+```
+
+Fix: pass an updater function, which React calls with the latest value.
+
+Core rule: warning under `recommended` and `strict`. Group: `react/state`.
+
+## [state-copies-prop](../rules/react/state-copies-prop.md)
+
+A state that copies a prop, kept in sync by an effect, differs from the prop for one render after each change and can overwrite what the user typed.
+
+```tsx
+import { useEffect, useState } from "react";
+
+export function NameEditor({ name }: { name: string }) {
+  const [draft, setDraft] = useState(name);
+  useEffect(() => {
+    setDraft(name);
+  }, [name]);
+  return <input value={draft} onChange={(event) => setDraft(event.target.value)} />;
+}
+```
+
+```text
+warning[react/state-copies-prop]: effect overwrites the draft `draft` with `name` whenever it changes: edits are lost
+```
+
+Fix: remove the effect, and give the component a `key` where it is rendered, so a new value starts a new editor.
+
+Core rule: warning under `recommended` and `strict`. Group: `react/state`.
 
 ## Add-ons
 
-- `react/effect-race`: `effect-response-race`
-- `react/flag-combos`: `flags-allow-impossible-combos`
+List an add-on in `addons` to turn on its rules: `addons: ["react/<add-on>"]`.
 
-## Settings
-
-Presets and add-ons are set in the config, not on the plugin:
-
-```ts
-export default defineConfig({
-  plugins: [react()],
-  preset: "strict",
-  // addons: ["react/<addon>"],
-});
-```
+- `react/effect-race`: `effect-response-race` (checks more with it)

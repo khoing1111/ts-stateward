@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CACHE_SUBDIR, defaultCacheDir } from "@stateward/core/internal";
+import { CACHE_SUBDIR, PROJECT_CACHE_DIR, defaultCacheDir } from "@stateward/core/internal";
 import { main } from "../src/main.js";
 import type { CliEnv } from "../src/main.js";
 
@@ -56,6 +56,13 @@ const withoutTime = (json: string): unknown => {
 };
 
 describe("stateward check: the disk cache", { timeout: 30_000 }, () => {
+  it("says where it keeps the results with --verbose", async () => {
+    const { stderr } = await run(["check", "--verbose"]);
+    expect(stderr).toContain(`stateward: results cache ${path.relative(example, cacheDir)}`);
+    const off = await run(["check", "--verbose", "--no-cache"]);
+    expect(off.stderr).toContain("stateward: results are not kept for the next run (--no-cache)");
+  });
+
   it("writes the results once and gives the same output from them", async () => {
     const uncached = await run(["check", "--format", "json"], false);
     const cold = await run(["check", "--format", "json"]);
@@ -201,14 +208,46 @@ describe("stateward check: the disk cache after a rebuild", { timeout: 60_000 },
 });
 
 describe("defaultCacheDir", () => {
-  it("is node_modules/.cache/stateward when node_modules exists, else STATEWARD_CACHE_DIR or none", () => {
+  const home = path.join(tmpdir(), "a-home");
+  const linux = { home, platform: "linux" as const };
+
+  it("is node_modules/.cache/stateward when node_modules exists; STATEWARD_CACHE_DIR wins", () => {
     const project = mkdtempSync(path.join(tmpdir(), "stateward-project-"));
     try {
-      expect(defaultCacheDir(project, {})).toBeUndefined();
-      expect(defaultCacheDir(project, { STATEWARD_CACHE_DIR: "c" })).toBe(path.join(project, "c"));
-      expect(defaultCacheDir(example, {})).toBe(path.join(example, CACHE_SUBDIR));
+      expect(defaultCacheDir(project, { STATEWARD_CACHE_DIR: "c" }, linux)).toBe(
+        path.join(project, "c"),
+      );
+      expect(defaultCacheDir(example, {}, linux)).toBe(path.join(example, CACHE_SUBDIR));
     } finally {
       rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  // User trial 1.0.2: an app checked before its packages are installed ran cold every time.
+  it("falls back to the user's cache folder keyed by the project's path, else .stateward-cache", () => {
+    const project = mkdtempSync(path.join(tmpdir(), "stateward-project-"));
+    const other = mkdtempSync(path.join(tmpdir(), "stateward-project-"));
+    try {
+      const dir = defaultCacheDir(project, {}, linux);
+      expect(path.dirname(dir)).toBe(path.join(home, ".cache", "stateward", "results"));
+      expect(path.basename(dir)).toMatch(new RegExp(`^${path.basename(project)}-[0-9a-f]{16}$`));
+      expect(defaultCacheDir(project, {}, linux)).toBe(dir);
+      expect(defaultCacheDir(other, {}, linux)).not.toBe(dir);
+      expect(
+        path.dirname(defaultCacheDir(project, { XDG_CACHE_HOME: path.join(home, "xdg") }, linux)),
+      ).toBe(path.join(home, "xdg", "stateward", "results"));
+      expect(path.dirname(defaultCacheDir(project, {}, { home, platform: "darwin" }))).toBe(
+        path.join(home, "Library", "Caches", "stateward", "results"),
+      );
+      expect(defaultCacheDir(project, {}, { home: "", platform: "linux" })).toBe(
+        path.join(project, PROJECT_CACHE_DIR),
+      );
+      expect(defaultCacheDir(project, {}, { home, platform: "win32" })).toBe(
+        path.join(project, PROJECT_CACHE_DIR),
+      );
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+      rmSync(other, { recursive: true, force: true });
     }
   });
 });

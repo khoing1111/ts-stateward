@@ -1,6 +1,24 @@
 import ts from "@stateward/core/typescript";
 import type { FileContext, TypeQueries } from "@stateward/core";
-import { capitalized, shorten } from "./text.js";
+import { capitalized } from "./text.js";
+import { declareOwnedFix, type DeclareFix } from "./declare-owned.js";
+import {
+  OWNED,
+  scanOwned,
+  type OwnedChange,
+  type OwnedDeclaration,
+  type OwnerFunction,
+  type OwnerWrite,
+} from "./owned.js";
+import {
+  assignmentExample,
+  baseName,
+  call,
+  isWrapper,
+  isWriteTarget,
+  methodExample,
+  unwrapped,
+} from "./syntax.js";
 
 /**
  * One change this file makes to a piece of shared state that another file declares: where the
@@ -17,6 +35,8 @@ export type Write = {
   start: number;
   end: number;
   example: string;
+  /** The quick fix that states the declaration owned by its file, when it can be written. */
+  declare: DeclareFix | null;
 };
 
 /** Shared state handed to a function as argument `index`; a change only if that function writes it. */
@@ -39,7 +59,19 @@ export type ParamSummary = {
   forwards: { id: string; index: number }[];
 };
 
-export type FileSummary = { writes: Write[]; passes: Pass[]; params: ParamSummary[] };
+export type FileSummary = {
+  writes: Write[];
+  passes: Pass[];
+  params: ParamSummary[];
+  /** What this file does to values stated owned (owned.ts). */
+  owned: OwnedChange[];
+  /** This file's functions that change the values it states owned. */
+  ownerFns: OwnerFunction[];
+  /** The values this file states owned, changed or not: what `stateward guarantees` lists. */
+  ownedDeclared: OwnedDeclaration[];
+  /** Where this file changes the values it states owned: the writers a guarantee lists. */
+  ownerWrites: OwnerWrite[];
+};
 
 /** Whether a file sets state up for a test: `*.test.*`, `*.spec.*` or a file under `__tests__`. */
 export function isTestFile(file: string): boolean {
@@ -93,30 +125,6 @@ function changesCollection(kind: CollectionKind | undefined, method: string): bo
   }
 }
 
-function isWrapper(node: ts.Node): boolean {
-  return (
-    ts.isParenthesizedExpression(node) ||
-    ts.isNonNullExpression(node) ||
-    ts.isAsExpression(node) ||
-    ts.isSatisfiesExpression(node) ||
-    ts.isTypeAssertionExpression(node)
-  );
-}
-
-function unwrapped(expression: ts.Expression): ts.Expression {
-  let current = expression;
-  while (
-    ts.isParenthesizedExpression(current) ||
-    ts.isNonNullExpression(current) ||
-    ts.isAsExpression(current) ||
-    ts.isSatisfiesExpression(current) ||
-    ts.isTypeAssertionExpression(current)
-  ) {
-    current = current.expression;
-  }
-  return current;
-}
-
 /** The global `Map`, `Set`, `WeakMap` or `WeakSet`: declared in a TypeScript library, not the project. */
 function isGlobalCollection(callee: ts.Expression, types: TypeQueries): boolean {
   if (!ts.isIdentifier(callee)) return false;
@@ -160,118 +168,6 @@ function isSharedState(declaration: ts.VariableDeclaration, types: TypeQueries):
     (isGlobalCollection(initializer.expression, types) ||
       isProjectClass(initializer.expression, types))
   );
-}
-
-/** `a = v`, `a += v`, `a++`, `delete a`, `[a] = list`, `({ k: a } = obj)`, `for (a of list)`. */
-function isWriteTarget(expression: ts.Expression): boolean {
-  let current: ts.Node = expression;
-  for (;;) {
-    const parent: ts.Node = current.parent;
-    const inPattern =
-      ts.isArrayLiteralExpression(parent) ||
-      ts.isObjectLiteralExpression(parent) ||
-      ts.isSpreadElement(parent) ||
-      ts.isSpreadAssignment(parent) ||
-      ts.isShorthandPropertyAssignment(parent) ||
-      (ts.isPropertyAssignment(parent) && parent.initializer === current);
-    if (!inPattern) break;
-    current = parent;
-  }
-  const parent = current.parent;
-  if (ts.isBinaryExpression(parent)) {
-    const { kind } = parent.operatorToken;
-    return (
-      parent.left === current &&
-      kind >= ts.SyntaxKind.FirstAssignment &&
-      kind <= ts.SyntaxKind.LastAssignment
-    );
-  }
-  if (ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) {
-    return (
-      parent.operator === ts.SyntaxKind.PlusPlusToken ||
-      parent.operator === ts.SyntaxKind.MinusMinusToken
-    );
-  }
-  if (ts.isDeleteExpression(parent)) return true;
-  return (
-    (ts.isForInStatement(parent) || ts.isForOfStatement(parent)) && parent.initializer === current
-  );
-}
-
-/** What a change is called in the example: the last name along the path, or the variable's own. */
-function baseName(expression: ts.Expression, fallback: string): string {
-  const current = unwrapped(expression);
-  if (ts.isIdentifier(current)) return current.text;
-  if (ts.isPropertyAccessExpression(current)) return current.name.text;
-  if (ts.isElementAccessExpression(current)) {
-    const key = current.argumentExpression;
-    if (ts.isStringLiteral(key) && /^[A-Za-z_$][\w$]*$/.test(key.text)) return key.text;
-    return baseName(current.expression, fallback);
-  }
-  return fallback;
-}
-
-/** The key of `a[key]` when it is not a literal: the example passes it on. */
-function dynamicKey(expression: ts.Expression, sourceFile: ts.SourceFile): string | undefined {
-  const current = unwrapped(expression);
-  if (!ts.isElementAccessExpression(current)) return undefined;
-  const key = current.argumentExpression;
-  return ts.isStringLiteral(key) || ts.isNumericLiteral(key) ? undefined : key.getText(sourceFile);
-}
-
-function call(name: string, args: readonly (string | undefined)[]): string {
-  const given = args.filter((arg): arg is string => arg !== undefined);
-  return `${name}(${shorten(given.join(", "), 30)})`;
-}
-
-const COMPOUND_VERBS = new Map<ts.SyntaxKind, string>([
-  [ts.SyntaxKind.EqualsToken, "set"],
-  [ts.SyntaxKind.PlusEqualsToken, "add"],
-  [ts.SyntaxKind.MinusEqualsToken, "subtract"],
-]);
-
-/** The owner's function that would make an assignment, increment or `delete` of `target`. */
-function assignmentExample(target: ts.Expression, root: string, sourceFile: ts.SourceFile): string {
-  const prop = capitalized(baseName(target, root));
-  const key = dynamicKey(target, sourceFile);
-  const parent = target.parent;
-  if (ts.isBinaryExpression(parent) && parent.left === target) {
-    const verb = COMPOUND_VERBS.get(parent.operatorToken.kind) ?? "update";
-    return call(`${verb}${prop}`, [key, parent.right.getText(sourceFile)]);
-  }
-  if (ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) {
-    const verb = parent.operator === ts.SyntaxKind.PlusPlusToken ? "increment" : "decrement";
-    return call(`${verb}${prop}`, [key]);
-  }
-  if (ts.isDeleteExpression(parent)) {
-    return key === undefined ? call(`clear${prop}`, []) : call(`remove${prop}`, [key]);
-  }
-  return call(`update${prop}`, ["value"]);
-}
-
-const METHOD_VERBS = new Map<string, string>([
-  ["push", "add"],
-  ["unshift", "add"],
-  ["pop", "removeLast"],
-  ["shift", "removeFirst"],
-  ["splice", "remove"],
-  ["set", "set"],
-  ["add", "add"],
-  ["delete", "remove"],
-  ["clear", "clear"],
-]);
-
-function methodExample(
-  receiver: ts.Expression,
-  method: string,
-  args: readonly ts.Expression[],
-  root: string,
-  sourceFile: ts.SourceFile,
-): string {
-  const verb = METHOD_VERBS.get(method) ?? method;
-  const prop = capitalized(baseName(receiver, root));
-  const lastWord = ["pop", "shift", "clear"].includes(method);
-  return call(`${verb}${prop}`, lastWord ? [] : args.map((arg) => arg.getText(sourceFile)));
 }
 
 /** What the code does where a reference's chain ends. */
@@ -421,12 +317,20 @@ function sharedStateBehind(
   if (!ts.isVariableDeclaration(declaration) || !ts.isIdentifier(declaration.name)) {
     return undefined;
   }
+  // A value stated owned is proven strictly instead (owned.ts).
+  if (types.guaranteesOf(symbol).includes(OWNED)) return undefined;
   return isSharedState(declaration, types)
     ? { declaration, id: symbol.id, file: found.file }
     : undefined;
 }
 
-type Found = { writes: Write[]; passes: Pass[]; params: ParamSummary[] };
+type Found = {
+  writes: Write[];
+  passes: Pass[];
+  params: ParamSummary[];
+  /** The declare fix of each declaration this file changes, made once. */
+  declares: Map<string, DeclareFix | null>;
+};
 
 function visit(node: ts.Node, imports: Imports, found: Found, ctx: FileContext): void {
   if (ts.isImportDeclaration(node)) return;
@@ -550,6 +454,12 @@ function collect(
   const change = followChain(reference, name.text, ctx);
   if (change === undefined) return;
   const declSource = behind.declaration.getSourceFile();
+  let declare = found.declares.get(behind.id);
+  if (declare === undefined) {
+    const owner = behind.id.slice(0, Math.max(0, behind.id.indexOf("#")));
+    declare = declareOwnedFix(behind.declaration, owner, types) ?? null;
+    found.declares.set(behind.id, declare);
+  }
   const write: Write = {
     id: behind.id,
     name: name.text,
@@ -559,6 +469,7 @@ function collect(
     start: change.node.getStart(sourceFile),
     end: change.node.end,
     example: change.example,
+    declare,
   };
   if (change.kind === "write") {
     found.writes.push(write);
@@ -579,12 +490,20 @@ function byPlace(a: { start: number; end: number }, b: { start: number; end: num
 export function summarizeFile(ctx: FileContext): FileSummary | undefined {
   if (isTestFile(ctx.file)) return undefined;
   const imports = importsOf(ctx.sourceFile);
-  const found: Found = { writes: [], passes: [], params: [] };
+  const found: Found = { writes: [], passes: [], params: [], declares: new Map() };
   visit(ctx.sourceFile, imports, found, ctx);
+  const { owned, ownerFns, declared, ownerWrites } = scanOwned(ctx);
   found.writes.sort(byPlace);
   found.passes.sort(byPlace);
   found.params.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : a.index - b.index));
-  return found.writes.length === 0 && found.passes.length === 0 && found.params.length === 0
+  const { writes, passes, params } = found;
+  return writes.length === 0 &&
+    passes.length === 0 &&
+    params.length === 0 &&
+    owned.length === 0 &&
+    ownerFns.length === 0 &&
+    declared.length === 0 &&
+    ownerWrites.length === 0
     ? undefined
-    : found;
+    : { writes, passes, params, owned, ownerFns, ownedDeclared: declared, ownerWrites };
 }

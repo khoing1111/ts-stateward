@@ -8,7 +8,6 @@ import { RULES } from "./rules.meta.js";
 /** Each rule's module, imported the first time the rule is on. */
 const load = {
   catchHidesUnexpected: moduleLoader(() => import("./catch-hides-unexpected.js")),
-  catchWithoutIntent: moduleLoader(() => import("./catch-without-intent.js")),
   finallyCanThrow: moduleLoader(() => import("./finally-can-throw.js")),
   catchMissesError: moduleLoader(() => import("./catch-misses-error.js")),
   throwsDocMismatch: moduleLoader(() => import("./throws-doc-mismatch.js")),
@@ -23,17 +22,12 @@ export function errors() {
   return definePlugin({
     name: "errors",
     description:
-      "Errors are handled where they can happen: nothing swallowed, nothing lost in finally, no Result dropped.",
+      "Errors are handled where they can happen: none ignored, none replaced in `finally`, no `Result` dropped.",
     rules: {
       "catch-hides-unexpected": lazyRule(
         RULES["catch-hides-unexpected"],
         load.catchHidesUnexpected,
         (module) => module.catchHidesUnexpected,
-      ),
-      "catch-without-intent": lazyRule(
-        RULES["catch-without-intent"],
-        load.catchWithoutIntent,
-        (module) => module.catchWithoutIntent,
       ),
       "finally-can-throw": lazyRule(
         RULES["finally-can-throw"],

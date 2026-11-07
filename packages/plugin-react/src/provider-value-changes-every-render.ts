@@ -8,64 +8,54 @@ import { RenderScope, isFunctionLike, renderFunctionOf, type Value } from "./val
 
 const EXPLAIN = `# react/provider-value-changes-every-render
 
-A context Provider is not given a value created anew on every render.
+A Provider value created on every render re-renders every component that reads the context, even when nothing in the value changed.
 
-## Why
+\`\`\`tsx example-bad
+import { createContext, useState, type ReactNode } from "react";
 
-Every component that reads a context re-renders when the Provider's \`value\` changes. \`value={{ theme, setTheme }}\` is a new object on every render of the component that provides it, so every reader re-renders with it, and every effect that depends on the context runs again, even when nothing in it changed.
+type Theme = { theme: string; setTheme: (theme: string) => void };
+const ThemeContext = createContext<Theme | undefined>(undefined);
 
-## When to use it
-
-Use it in any React app that does not use the React Compiler. It is a warning in every preset. With the React Compiler (\`babel-plugin-react-compiler\` or \`react-compiler-runtime\` in the nearest \`package.json\`), it stays quiet, since the compiler keeps the value stable.
-
-## What it catches
-
-\`<Ctx.Provider value={…}>\`, or \`<Ctx value={…}>\` for a context from \`createContext\` (React 19), whose value is an object or array literal, an inline function or \`new X()\`, written in the prop or in a local \`const\` of the providing component.
-
-### Bad
-
-\`\`\`tsx
-<ThemeContext.Provider value={{ theme, setTheme }}>
-\`\`\`
-
-### Good
-
-\`\`\`tsx
-const themeValue = useMemo(() => ({ theme, setTheme }), [theme]);
-<ThemeContext.Provider value={themeValue}>
-\`\`\`
-
-### Fix
-
-Wrap the value in \`useMemo\` (or \`useCallback\` for a function), with what it reads as dependencies. There is no quick fix.
-
-When the value reads something that is itself new on every render (a plain function in the component, an inline function, object or array in a \`const\`), a \`useMemo\` would list it as a dependency and run again every render. The message names it and says to stabilise it first, where it is created (\`useCallback\` for a function), then the value.
-
-When the value uses the parameters of a function inside the component (a \`.map\` callback, a render prop), no hook can be called there: move the item into a component that takes them as props, and use \`useMemo\` in it.
-
-\`\`\`tsx
-{ids.map((id, index) => <ItemProvider key={id} id={id} index={index} />)}
-
-function ItemProvider({ id, index }: { id: string; index: number }) {
-  const itemValue = useMemo(() => ({ id, index }), [id, index]);
-  return <ItemContext.Provider value={itemValue}>…</ItemContext.Provider>;
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  const [theme, setTheme] = useState("light");
+  return <ThemeContext.Provider value={{ theme, setTheme }}>{children}</ThemeContext.Provider>;
 }
 \`\`\`
 
+Wrap the value in \`useMemo\`, with what it reads as dependencies:
+
+\`\`\`tsx example-good
+import { createContext, useMemo, useState, type ReactNode } from "react";
+
+type Theme = { theme: string; setTheme: (theme: string) => void };
+const ThemeContext = createContext<Theme | undefined>(undefined);
+
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  const [theme, setTheme] = useState("light");
+  const value = useMemo(() => ({ theme, setTheme }), [theme]);
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+}
+\`\`\`
+
+Use \`useCallback\` for a function. There is no quick fix. When the value reads something that is itself new on every render (a plain function in the component, an object in a \`const\`), \`useMemo\` would list it as a dependency and run again every render: the message names it, and says to make it stable first, where it is created. When the value uses the parameters of a function inside the component (a \`.map\` callback, a render prop), no hook can be called there: move the item into a component that takes them as props, and use \`useMemo\` in it.
+
+## Why it matters
+
+Every component that reads a context re-renders when the Provider's \`value\` changes. \`value={{ theme, setTheme }}\` is a new object on every render of the component that provides it, so every reader re-renders with it, and every effect that depends on the context runs again, even when nothing in it changed.
+
 ## What it does not catch
 
-- A value from a custom hook (\`value={useCartState()}\`).
-- An input that is a prop the parent passes inline (\`<ThemeProvider onChange={() => …}>\`): the props are the parent's, which this file rule does not read.
-- \`<Ctx value>\` for a context made by a helper other than React's \`createContext\`: only its \`<Ctx.Provider>\` form is recognised.
-- Apps built with the React Compiler.
+It looks at \`<Ctx.Provider value={…}>\`, or \`<Ctx value={…}>\` for a context from \`createContext\` (React 19), whose value is an object or array literal, an inline function or \`new X()\`, written in the prop or in a local \`const\` of the providing component. It is silent on:
+
+- a value from a custom hook (\`value={useCartState()}\`);
+- an input that is a prop the parent passes inline (\`<ThemeProvider onChange={() => …}>\`): this rule reads one file at a time, and those props are the parent's;
+- \`<Ctx value>\` for a context made by a helper other than React's \`createContext\`: only its \`<Ctx.Provider>\` form is recognised;
+- apps built with the React Compiler (\`babel-plugin-react-compiler\` or \`react-compiler-runtime\` in the nearest \`package.json\`), which keeps the value stable.
 
 ## Turn it on or off
 
-In \`stateward.config.ts\`:
-
 \`\`\`ts
 rules: { "react/provider-value-changes-every-render": "off" } // or "error"
-groups: { "react/render-stability": "off" } // the whole group
 rules: { "react/provider-value-changes-every-render": ["warning", { ignore: ["ToastContext"] }] } // a context with few readers
 \`\`\`
 `;
@@ -259,7 +249,7 @@ function inputsHint(inputs: readonly UnstableInput[]): string {
               (input) => `${name(input)} (\`${wrapper(input.value.what)}\`, line ${line(input)})`,
             )
             .join(" and ")}${rest} first`;
-    return `${step}: ${they} new every render, so a memo of the value would be too`;
+    return `${step}: ${they} new every render, so a memo of the value would be new too`;
   });
 }
 
@@ -310,10 +300,13 @@ function hintFor(
 export const providerValueChangesEveryRender = defineRule({
   kind: "file",
   meta: {
-    description: "A context Provider is not given a value created anew on every render.",
+    description:
+      "A Provider value created on every render re-renders every component that reads the context, even when nothing in the value changed.",
+    summary: "a context Provider given a new object or function on every render",
     defaultSeverity: "warning",
     tier: "core",
     group: "render",
+    needsTypes: { library: "React", modules: ["react"] },
     options: {
       ignore: option.strings({
         default: [],
@@ -358,7 +351,7 @@ export const providerValueChangesEveryRender = defineRule({
               ctx.report({
                 message: fitted(
                   (cut) =>
-                    `\`${cut.name(context)}\` gets a new ${noun(value.what)} every render, so all its readers re-render`,
+                    `\`${cut.name(context)}\` value is a new ${noun(value.what)} every render: all its readers re-render`,
                 ),
                 hint: fix.hint,
                 node: init.expression,
@@ -368,12 +361,12 @@ export const providerValueChangesEveryRender = defineRule({
                     : [
                         {
                           node: nodeAt(sourceFile, value.at) ?? expression,
-                          message: `\`${shorten(value.label)}\` is created here on every render`,
+                          message: `\`${shorten(value.label)}\` is created on every render`,
                         },
                       ]),
                   ...fix.inputs.map((input) => ({
                     node: input.node,
-                    message: `\`${shorten(input.name)}\` is created here on every render`,
+                    message: `\`${shorten(input.name)}\` is created on every render`,
                   })),
                 ],
               });

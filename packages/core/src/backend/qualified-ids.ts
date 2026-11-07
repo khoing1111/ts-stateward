@@ -4,13 +4,16 @@ import ts from "typescript";
  * Qualified ids: `<file relative to the project>#<path>`, where the
  * path is the chain of declaration names from the file down (`src/cart.ts#useCart.onAdd`). A name
  * that repeats under the same parent gets a counter in file order (`#App.handler$2`); a declaration
- * without a name is `$<SyntaxKind>` (`#default.$ArrowFunction`). The module itself is `<file>#`.
+ * without a name is `$<SyntaxKind>` (`#default.$ArrowFunction`). An assignment statement
+ * `X.y = …` (or `X["y"] = …`), where TypeScript declares `y` on `X` (an expando), is
+ * `$expando:y`, with a counter among the same-named ones under its parent (`#$expando:label$2`):
+ * never its offset, so a comment above it keeps the id. The module itself is `<file>#`.
  * Syntax only: an edit that does not rename, add or remove a declaration of the same name before
  * this one under the same parent keeps every id, unlike an offset.
  */
 
 /** The text of a declaration's name; undefined for a binding pattern or no name. */
-function nameText(name: ts.Node | undefined): string | undefined {
+function nameText(name: ts.Node | undefined, sourceFile: ts.SourceFile): string | undefined {
   if (name === undefined) return undefined;
   if (
     ts.isIdentifier(name) ||
@@ -20,7 +23,8 @@ function nameText(name: ts.Node | undefined): string | undefined {
   ) {
     return name.text;
   }
-  if (ts.isComputedPropertyName(name)) return `[${name.expression.getText()}]`;
+  // The file is passed: a file parsed for a read (`declarationAtPath`) may have no parents yet.
+  if (ts.isComputedPropertyName(name)) return `[${name.expression.getText(sourceFile)}]`;
   if (ts.isJsxNamespacedName(name)) return `${name.namespace.text}:${name.name.text}`;
   return undefined;
 }
@@ -32,9 +36,9 @@ function isDefaultExport(node: ts.FunctionDeclaration | ts.ClassDeclaration): bo
 }
 
 /** The path segment a node adds, when it is a named declaration. */
-function declarationName(node: ts.Node): string | undefined {
+function declarationName(node: ts.Node, sourceFile: ts.SourceFile): string | undefined {
   if (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) {
-    return nameText(node.name) ?? (isDefaultExport(node) ? "default" : undefined);
+    return nameText(node.name, sourceFile) ?? (isDefaultExport(node) ? "default" : undefined);
   }
   if (ts.isConstructorDeclaration(node)) return "constructor";
   if (ts.isExportAssignment(node)) return node.isExportEquals === true ? "export=" : "default";
@@ -66,12 +70,40 @@ function declarationName(node: ts.Node): string | undefined {
     ts.isImportEqualsDeclaration(node) ||
     ts.isJsxAttribute(node)
   ) {
-    return nameText(node.name);
+    return nameText(node.name, sourceFile);
   }
   return undefined;
 }
 
 const K = ts.SyntaxKind;
+
+/**
+ * The target of a statement `X.y = …`: the access expression TypeScript declares an expando
+ * property by, with the name it declares. Undefined for any other statement. No parent pointers.
+ */
+function expandoOf(
+  statement: ts.ExpressionStatement,
+  sourceFile: ts.SourceFile,
+): { readonly target: ts.Node; readonly name: string } | undefined {
+  const { expression } = statement;
+  if (!ts.isBinaryExpression(expression) || expression.operatorToken.kind !== K.EqualsToken) {
+    return undefined;
+  }
+  const { left } = expression;
+  if (ts.isPropertyAccessExpression(left)) {
+    const name = nameText(left.name, sourceFile);
+    return name === undefined ? undefined : { target: left, name };
+  }
+  if (ts.isElementAccessExpression(left)) {
+    const argument = left.argumentExpression;
+    const name =
+      ts.isStringLiteralLike(argument) || ts.isNumericLiteral(argument)
+        ? argument.text
+        : `[${argument.getText(sourceFile)}]`;
+    return { target: left, name };
+  }
+  return undefined;
+}
 
 /** The kinds `declarationName` names: a cheap test before the typed one, as the walk visits every node. */
 const NAMED_KINDS: ReadonlySet<ts.SyntaxKind> = new Set([
@@ -159,8 +191,15 @@ function computePaths(sourceFile: ts.SourceFile): ReadonlyMap<ts.Node, string> {
     return qualified;
   };
   const visit = (node: ts.Node, parent: string): void => {
-    const name = NAMED_KINDS.has(node.kind) ? declarationName(node) : undefined;
+    const name = NAMED_KINDS.has(node.kind) ? declarationName(node, sourceFile) : undefined;
     let inner = parent;
+    // Named by its ordinal, not its offset: a comment above it keeps the id (and the file's shape,
+    // fingerprints.ts). What it assigns keeps the parent, as before.
+    const expando = ts.isExpressionStatement(node) ? expandoOf(node, sourceFile) : undefined;
+    if (expando !== undefined) {
+      const segment = `$expando:${expando.name}`;
+      record(expando.target, parent === "" ? segment : `${parent}.${segment}`);
+    }
     if (name !== undefined) {
       inner = record(node, parent === "" ? name : `${parent}.${name}`);
     } else if (ANONYMOUS_KINDS.has(node.kind) && isAnonymousDeclaration(node)) {
@@ -182,14 +221,38 @@ function computePaths(sourceFile: ts.SourceFile): ReadonlyMap<ts.Node, string> {
   return paths;
 }
 
-/** The path of `declaration` in its file (see above); "" for the file itself. */
-export function declarationPath(declaration: ts.Node): string {
-  const sourceFile = declaration.getSourceFile();
+function pathsOf(sourceFile: ts.SourceFile): ReadonlyMap<ts.Node, string> {
   let paths = pathsByFile.get(sourceFile);
   if (paths === undefined) {
     paths = computePaths(sourceFile);
     pathsByFile.set(sourceFile, paths);
   }
+  return paths;
+}
+
+/** Declarations by path, per parsed file: the inverse of `pathsByFile`. */
+const nodesByFile = new WeakMap<ts.SourceFile, ReadonlyMap<string, ts.Node>>();
+
+/**
+ * The declaration at `path` in `sourceFile` (see above; "" is the file itself), or undefined when
+ * the file has none there: it was renamed, moved or removed. Only the paths the walk names: one
+ * placed by its offset (`$Kind@12`) is not looked up. Needs no parent pointers.
+ */
+export function declarationAtPath(sourceFile: ts.SourceFile, path: string): ts.Node | undefined {
+  let nodes = nodesByFile.get(sourceFile);
+  if (nodes === undefined) {
+    const inverse = new Map<string, ts.Node>();
+    for (const [node, at] of pathsOf(sourceFile)) inverse.set(at, node);
+    nodes = inverse;
+    nodesByFile.set(sourceFile, nodes);
+  }
+  return nodes.get(path);
+}
+
+/** The path of `declaration` in its file (see above); "" for the file itself. */
+export function declarationPath(declaration: ts.Node): string {
+  const sourceFile = declaration.getSourceFile();
+  const paths = pathsOf(sourceFile);
   const found = paths.get(declaration);
   if (found !== undefined) return found;
   // A declaration kind the walk does not name: placed under its nearest named ancestor, by its

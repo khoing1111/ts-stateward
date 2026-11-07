@@ -75,10 +75,10 @@ describe("stateward check and ignore comments", { timeout: 30_000 }, () => {
     edit((text) => `// stateward-ignore unions/tag-does-not-discriminate: old\n${text}`);
     const checked = await run(["check"]);
     expect(checked.stdout).toContain(
-      "warning[stateward/ignore]: this ignore does not say why the case is fine",
+      "warning[stateward/ignore]: ignore comment does not say why the case is fine",
     );
     expect(checked.stdout).toContain(
-      "warning[stateward/ignore]: this ignore is not needed: `unions/tag-does-not-discriminate` finds nothing here",
+      "warning[stateward/ignore]: ignore comment is not needed: `unions/tag-does-not-discriminate` finds nothing in the code it covers",
     );
     expect(checked.stdout).toContain("1 ignored in the code");
   });
@@ -144,7 +144,7 @@ describe("stateward check and ignore comments", { timeout: 30_000 }, () => {
       ),
     );
     const edited = await cached();
-    expect(edited).toContain("this ignore does not say why the case is fine");
+    expect(edited).toContain("ignore comment does not say why the case is fine");
     expect(edited).not.toBe(cold);
   });
 

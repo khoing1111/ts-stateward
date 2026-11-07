@@ -39,12 +39,14 @@ describe("react-context hover: needs / provides", () => {
 
   it("says what a component reads", () => {
     expect(hoverAt(checker, "Avatar.tsx", "Avatar()")).toEqual([
-      "**<Avatar>** needs `ThemeCtx` (read here)",
+      "**<Avatar>** needs `ThemeCtx` (read in the component)",
     ]);
   });
 
   it("says what a component needs through a child, on the declaration and on a tag", () => {
-    const expected = ["**<Profile>** needs `AuthCtx` (read here), `ThemeCtx` (via `<Avatar>`)"];
+    const expected = [
+      "**<Profile>** needs `AuthCtx` (read in the component), `ThemeCtx` (via `<Avatar>`)",
+    ];
     expect(hoverAt(checker, "Profile.tsx", "Profile()")).toEqual(expected);
     expect(hoverAt(checker, "main.tsx", "<Profile />", 2)).toEqual(expected);
   });
@@ -63,7 +65,7 @@ describe("react-context hover: needs / provides", () => {
 
   it("says both, on two lines, for a component that reads and provides", () => {
     expect(hoverAt(checker, "Gate.tsx", "Gate(")).toEqual([
-      "**<Gate>** needs `AuthCtx` (read here)\n\nprovides `ThemeCtx` to its children",
+      "**<Gate>** needs `AuthCtx` (read in the component)\n\nprovides `ThemeCtx` to its children",
     ]);
   });
 

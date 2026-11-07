@@ -7,7 +7,8 @@ export const RULES = {
     kind: "project",
     meta: {
       description:
-        "Shared module-level state is changed only by the module that declares it; others call its functions.",
+        "When several modules change the same module-level state, each change must be read to know its value; one owning module with functions keeps that in one place.",
+      summary: "shared module state changed by a file other than the one that declares it",
       defaultSeverity: "error",
       tier: "core",
       group: "owners",
@@ -22,7 +23,7 @@ export const RULES = {
           kind: "strings",
           default: [],
           description:
-            "Names of shared state (globs like *Registry) that any file may change, such as a registry built up by plugins.",
+            "Names of shared state (globs like *Registry) that any file may change, such as a registry built up by plugins. A value stated `Owned` is never left out.",
         },
         severities: {
           kind: "severities",
@@ -33,7 +34,8 @@ export const RULES = {
             "through-call":
               "the other file passes it to a function of yours, declared elsewhere, that changes its argument.",
           },
-          description: "A severity per way the state is changed.",
+          description:
+            "A severity per way the state is changed. A value stated `Owned` is reported at the rule's severity, whatever these say.",
         },
       },
     },
@@ -42,7 +44,8 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "A branded value that has a check is built only by that check, in the file that declares the brand.",
+        "A cast to a checked brand like `Positive` outside its check skips the validation the brand stands for, so the type promises more than the value holds.",
+      summary: "a cast to a checked brand like `as Positive` outside the file that owns its check",
       defaultSeverity: "error",
       tier: "core",
       group: "owners",

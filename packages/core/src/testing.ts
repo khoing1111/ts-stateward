@@ -173,6 +173,16 @@ export function messageProblems(finding: Finding): readonly string[] {
   const prose = finding.message.replace(/`[^`]*`/g, "code");
   if (/^You(?:r|rs|rself)?\b/.test(prose)) problems.push('headline must not start with "You"');
   if (prose.includes("!")) problems.push('headline must not contain "!"');
+  // M15, M16, M19: a fact about the code, with no pointing words and no question; a place not
+  // checked says so first, never "stateward cannot tell".
+  const pointing = /\b(?:this|here|you)\b/i.exec(prose);
+  if (pointing !== null) problems.push(`headline must not point with "${pointing[0]}"`);
+  if (prose.includes("?")) problems.push("headline must not be a question");
+  if (/\bstateward cannot\b/i.test(prose))
+    problems.push('headline must not say "stateward cannot"');
+  if (finding.kind === "unknown" && !prose.startsWith("not checked: ")) {
+    problems.push('a place not checked must start with "not checked: "');
+  }
   if (finding.kind === "problem") {
     finding.related.forEach((related, index) => {
       problems.push(
@@ -204,3 +214,4 @@ export function expectMessageStandard(findings: readonly Finding[]): void {
     );
   }
 }
+export { typeErrors, typeErrorsOfText, typeErrorsOfTexts } from "./testing-tsc.js";

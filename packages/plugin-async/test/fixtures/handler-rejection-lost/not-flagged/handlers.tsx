@@ -165,3 +165,41 @@ export function generator(): void {
     yield 1;
   }, 100);
 }
+
+// The awaited function catches its own failures: every await in it is inside a `try` with a
+// `catch` that neither throws nor awaits (Infisical's dialogs, user trial 1.0.2).
+export function ConfirmRemove() {
+  const handleRemove = async (): Promise<void> => {
+    try {
+      await save();
+      log("removed");
+    } catch {
+      // the global request handler shows a toast
+    }
+  };
+  async function handleRotate(id: string): Promise<void> {
+    if (id === "") return;
+    try {
+      const items = await load();
+      log(String(items.length));
+    } catch (e) {
+      showError(e);
+    }
+  }
+  return (
+    <div>
+      <button
+        onClick={async () => {
+          await handleRemove();
+        }}
+      />
+      <button
+        onClick={async () => {
+          await handleRotate("a");
+          log("rotated");
+        }}
+      />
+      <button onClick={async () => handleRemove()} />
+    </div>
+  );
+}

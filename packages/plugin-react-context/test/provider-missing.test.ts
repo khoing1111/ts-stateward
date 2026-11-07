@@ -42,12 +42,24 @@ function run(
   return findings.map((finding) => show(finding, dir));
 }
 
+/** The value type of each fixture context: the hint shows the call that states it required. */
+const VALUE_TYPES: Readonly<Record<string, string>> = {
+  AuthCtx: "User",
+  AuthContext: "User",
+  ThemeCtx: "Theme",
+  ThemeContext: "Theme",
+};
+
 const FIX_MISSING = (context: string): string =>
-  `fix: wrap it in \`<${context}.Provider value={…}>\`, or render it inside a component that provides it`;
+  [
+    `fix: wrap it in \`<${context}.Provider value={…}>\`, or render it inside a component that provides it`,
+    "    // if it is always under its Provider, state it (quick fix); stateward proves every reader:",
+    `    const ${context} = requiredContext<${VALUE_TYPES[context] ?? "?"}>();`,
+  ].join("\n");
 const FIX_UNREACHABLE =
   "fix: render it from your app, or list it in `entries` in the react-context options";
 const UNREACHABLE_PROFILE =
-  "info src/Profile.tsx:4: `Profile` needs `AuthCtx`, but no entry point renders it";
+  "info src/Profile.tsx:4: not checked: whether `Profile` is under the Provider of `AuthCtx`: no entry point renders it";
 
 function missing(site: string, tag: string, context: string, ...notes: string[]): string[] {
   return [
@@ -67,18 +79,18 @@ const PLAIN =
 const NARROW =
   "fix: render the component directly, or pick it from a `const` object by a key of a finite type";
 const unreachable = (site: string, name: string, context: string): string[] => [
-  `info ${site}: \`${name}\` needs \`${context}\`, but no entry point renders it`,
+  `info ${site}: not checked: whether \`${name}\` is under the Provider of \`${context}\`: no entry point renders it`,
   FIX_UNREACHABLE,
 ];
 const cannotTell = (site: string, tag: string, fix: string): string[] => [
-  `info ${site}: stateward cannot tell which component \`<${tag}>\` is`,
+  `info ${site}: not checked: the component behind \`<${tag}>\`: it is chosen at run time`,
   fix,
 ];
 
 const ROUTER_ADDON = ["react-context/react-router"];
 const FIX_ROUTER = 'fix: add `"react-context/react-router"` to `addons` in your stateward config';
 const routerNotFollowed = (site: string): string[] => [
-  `info ${site}: stateward does not follow React Router routes without the react-router add-on`,
+  `info ${site}: not checked: the components of React Router routes: the react-router add-on is off`,
   FIX_ROUTER,
 ];
 
@@ -107,7 +119,7 @@ describe("react-context/provider-missing: missing", () => {
         "src/main.tsx:5",
         "Dashboard",
         "AuthCtx",
-        "src/Dashboard.tsx:8: `<Profile>` is rendered here",
+        "src/Dashboard.tsx:8: `<Profile>` is rendered",
         reads,
       ),
     ]);
@@ -119,7 +131,7 @@ describe("react-context/provider-missing: missing", () => {
         "src/main.tsx:5",
         "Profile",
         "AuthCtx",
-        "src/Profile.tsx:4: `useSession` is called here",
+        "src/Profile.tsx:4: `useSession` is called",
         "src/useSession.ts:5: `useSession` reads `AuthCtx`",
       ),
     ]);
@@ -131,8 +143,8 @@ describe("react-context/provider-missing: missing", () => {
         "src/main.tsx:5",
         "App",
         "AuthCtx",
-        "src/App.tsx:8: `<Landing>` is rendered here",
-        "src/Landing.tsx:4: `<Profile>` is rendered here",
+        "src/App.tsx:8: `<Landing>` is rendered",
+        "src/Landing.tsx:4: `<Profile>` is rendered",
         reads,
       ),
     ]);
@@ -158,9 +170,9 @@ describe("react-context/provider-missing: missing", () => {
   it("shows at most five notes: the first three, the steps left out in the middle, and the read", () => {
     const [finding] = run("missing-long-path");
     expect(finding?.slice(2)).toEqual([
-      "note src/Step1.tsx:4: `<Step2>` is rendered here",
-      "note src/Step2.tsx:4: `<Step3>` is rendered here",
-      "note src/Step3.tsx:4: `<Step4>` is rendered here",
+      "note src/Step1.tsx:4: `<Step2>` is rendered",
+      "note src/Step2.tsx:4: `<Step3>` is rendered",
+      "note src/Step3.tsx:4: `<Step4>` is rendered",
       "note src/Step4.tsx:4: … 4 more steps …",
       "note src/Leaf.tsx:5: `Leaf` reads `AuthCtx`",
     ]);
@@ -178,7 +190,7 @@ describe("react-context/provider-missing: missing", () => {
         "src/main.tsx:5",
         "Badge",
         "AuthCtx",
-        "src/Badge.tsx:5: `<Profile>` is rendered here",
+        "src/Badge.tsx:5: `<Profile>` is rendered",
         "src/Profile.tsx:7: `Profile` reads `AuthCtx`",
       ),
     ]);
@@ -190,7 +202,7 @@ describe("react-context/provider-missing: missing", () => {
         "src/main.tsx:5",
         "Tree",
         "AuthCtx",
-        "src/Tree.tsx:5: `<Profile>` is rendered here",
+        "src/Tree.tsx:5: `<Profile>` is rendered",
         reads,
       ),
     ]);
@@ -204,8 +216,8 @@ describe("react-context/provider-missing: slots", () => {
         "src/main.tsx:5",
         "App",
         "AuthCtx",
-        "src/App.tsx:7: `<Profile>` is rendered here",
-        "src/Wrapper.tsx:8: `Wrapper` renders its `children` here, not under the Provider",
+        "src/App.tsx:7: `<Profile>` is rendered",
+        "src/Wrapper.tsx:8: `Wrapper` renders its `children` outside the Provider",
         reads,
       ),
     ]);
@@ -221,8 +233,8 @@ describe("react-context/provider-missing: slots", () => {
         "src/main.tsx:5",
         "App",
         "AuthCtx",
-        "src/App.tsx:5: `<Profile>` is rendered here",
-        "src/List.tsx:4: `List` renders its `renderItem` here, not under the Provider",
+        "src/App.tsx:5: `<Profile>` is rendered",
+        "src/List.tsx:4: `List` renders its `renderItem` outside the Provider",
         reads,
       ),
     ]);
@@ -234,8 +246,8 @@ describe("react-context/provider-missing: slots", () => {
         "src/main.tsx:5",
         "App",
         "AuthCtx",
-        "src/App.tsx:5: `<Profile>` is rendered here",
-        "src/Panel.tsx:6: `Panel` renders its `as` here, not under the Provider",
+        "src/App.tsx:5: `<Profile>` is rendered",
+        "src/Panel.tsx:6: `Panel` renders its `as` outside the Provider",
         reads,
       ),
     ]);
@@ -249,7 +261,7 @@ describe("react-context/provider-missing: Providers and slots found through decl
         "src/main.tsx:7",
         "Dashboard",
         "ThemeCtx",
-        "src/Dashboard.tsx:11: `<Themed>` is rendered here",
+        "src/Dashboard.tsx:11: `<Themed>` is rendered",
         "src/Profile.tsx:10: `Themed` reads `ThemeCtx`",
       ),
     ]);
@@ -261,7 +273,7 @@ describe("react-context/provider-missing: Providers and slots found through decl
         "src/main.tsx:14",
         "Profile",
         "AuthCtx",
-        "src/Gates.tsx:23: `LeakyGate` renders its `children` here, not under the Provider",
+        "src/Gates.tsx:23: `LeakyGate` renders its `children` outside the Provider",
         reads,
       ),
     ]);
@@ -273,7 +285,7 @@ describe("react-context/provider-missing: Providers and slots found through decl
         "src/main.tsx:7",
         "Bare",
         "AuthCtx",
-        "src/Pages.tsx:25: `<Cell>` is rendered here",
+        "src/Pages.tsx:25: `<Cell>` is rendered",
         "src/Pages.tsx:20: `Cell` reads `AuthCtx`",
       ),
     ]);
@@ -286,14 +298,14 @@ describe("react-context/provider-missing: Providers and slots found through decl
         "src/main.tsx:7",
         "Greeting",
         "AuthCtx",
-        "src/Greeting.tsx:4: `useSession` is called here",
+        "src/Greeting.tsx:4: `useSession` is called",
         hook,
       ),
       missing(
         "src/main.tsx:8",
         "Farewell",
         "AuthCtx",
-        "src/Farewell.tsx:4: `useSession` is called here",
+        "src/Farewell.tsx:4: `useSession` is called",
         hook,
       ),
     ]);
@@ -305,14 +317,14 @@ describe("react-context/provider-missing: Providers and slots found through decl
         "src/main.tsx:9",
         "Dashboard",
         "AuthCtx",
-        "src/pages/Dashboard.tsx:5: `<Profile>` is rendered here",
+        "src/pages/Dashboard.tsx:5: `<Profile>` is rendered",
         reads,
       ),
       missing(
         "src/main.tsx:10",
         "LazyPage",
         "AuthCtx",
-        "src/pages/Lazy.tsx:4: `<Profile>` is rendered here",
+        "src/pages/Lazy.tsx:4: `<Profile>` is rendered",
         reads,
       ),
     ]);
@@ -338,9 +350,9 @@ describe("react-context/provider-missing: React Router", () => {
           "src/main.tsx:4",
           "App",
           "AuthCtx",
-          "src/App.tsx:9: `<Dashboard>` is rendered here",
-          "src/Layout.tsx:6: `Layout` renders its `outlet` here, not under the Provider",
-          "src/pages/Dashboard.tsx:4: `<Profile>` is rendered here",
+          "src/App.tsx:9: `<Dashboard>` is rendered",
+          "src/Layout.tsx:6: `Layout` renders its `outlet` outside the Provider",
+          "src/pages/Dashboard.tsx:4: `<Profile>` is rendered",
           reads,
         ),
       ]);
@@ -356,8 +368,8 @@ describe("react-context/provider-missing: React Router", () => {
         "src/main.tsx:5",
         "RouterProvider",
         "AuthCtx",
-        "src/router.tsx:16: `<Login>` is rendered here",
-        "src/pages/Login.tsx:4: `<Profile>` is rendered here",
+        "src/router.tsx:16: `<Login>` is rendered",
+        "src/pages/Login.tsx:4: `<Profile>` is rendered",
         reads,
       );
       expect(run("router-objects", reactContext(), ROUTER_ADDON)).toEqual([login]);
@@ -394,8 +406,8 @@ describe("react-context/provider-missing: React Router", () => {
           "src/main.tsx:5",
           "RouterProvider",
           "AuthCtx",
-          "src/router.tsx:21: `<Reports>` is rendered here",
-          "src/pages/Reports.tsx:4: `<Profile>` is rendered here",
+          "src/router.tsx:21: `<Reports>` is rendered",
+          "src/pages/Reports.tsx:4: `<Profile>` is rendered",
           reads,
         ),
       ]);
@@ -448,7 +460,7 @@ describe("react-context/provider-missing: entry points", () => {
   it("says when there is no entry point", () => {
     expect(run("entry-none")).toEqual([
       [
-        "info src/contexts.ts:6: stateward found no entry point, so `AuthCtx` is not checked",
+        "info src/contexts.ts:6: not checked: the Providers of `AuthCtx`: no entry point is found",
         "fix: render your app with `createRoot(…).render(<App/>)`, or list it in `entries` in the react-context options",
       ],
     ]);
@@ -458,7 +470,7 @@ describe("react-context/provider-missing: entry points", () => {
     expect(run("unreachable")).toEqual([
       [UNREACHABLE_PROFILE, FIX_UNREACHABLE],
       [
-        "info src/Settings.tsx:3: `Settings` needs `AuthCtx`, but no entry point renders it",
+        "info src/Settings.tsx:3: not checked: whether `Settings` is under the Provider of `AuthCtx`: no entry point renders it",
         FIX_UNREACHABLE,
       ],
     ]);
@@ -473,11 +485,11 @@ describe("react-context/provider-missing: entry points", () => {
         "src/App.tsx:3",
         "App",
         "AuthCtx",
-        "src/App.tsx:4: `<Profile>` is rendered here",
+        "src/App.tsx:4: `<Profile>` is rendered",
         "src/Profile.tsx:5: `Profile` reads `AuthCtx`",
       ),
       [
-        "info src/Page.tsx:3: `Page` needs `AuthCtx` and `ThemeCtx`, but no entry point renders it",
+        "info src/Page.tsx:3: not checked: whether `Page` is under the Providers of `AuthCtx` and `ThemeCtx`: no entry point renders it",
         FIX_UNREACHABLE,
       ],
     ]);
@@ -506,11 +518,11 @@ describe("react-context/provider-missing: entry points", () => {
     );
     expect(unknowns).toEqual([
       [
-        "info src/contexts.ts:6: entry `src/App.tsx#App` provides `Typo`, which is not a required context",
+        "info src/contexts.ts:6: not checked: `Typo` from entry `src/App.tsx#App`: it is not a required context",
         "fix: check the names in `provides` against your required contexts (made with no default, read through a check)",
       ],
       [
-        "info src/contexts.ts:6: entry `src/Nope.tsx#Nope` matches no component",
+        "info src/contexts.ts:6: not checked: entry `src/Nope.tsx#Nope`: it matches no component",
         "fix: check the file and export name in `entries`",
       ],
     ]);
@@ -520,7 +532,10 @@ describe("react-context/provider-missing: entry points", () => {
 describe("react-context/provider-missing: unknowns", () => {
   it("says it cannot tell which component a computed tag is", () => {
     expect(run("unknown-computed")).toEqual([
-      ["info src/Dashboard.tsx:7: stateward cannot tell which component `<Panel>` is", FIX_DYNAMIC],
+      [
+        "info src/Dashboard.tsx:7: not checked: the component behind `<Panel>`: it is chosen at run time",
+        FIX_DYNAMIC,
+      ],
       [UNREACHABLE_PROFILE, FIX_UNREACHABLE],
     ]);
   });
@@ -529,11 +544,11 @@ describe("react-context/provider-missing: unknowns", () => {
     const fix = "fix: render it in JSX under the Provider it needs";
     expect(run("unknown-escapes")).toEqual([
       [
-        "info src/Dashboard.tsx:5: `<Profile>` is passed to `toast()`, so stateward cannot tell where it renders",
+        "info src/Dashboard.tsx:5: not checked: where `<Profile>` renders: it is passed to `toast()`",
         fix,
       ],
       [
-        "info src/Dashboard.tsx:6: `<Profile>` is passed to `stored`, so stateward cannot tell where it renders",
+        "info src/Dashboard.tsx:6: not checked: where `<Profile>` renders: it is passed to `stored`",
         fix,
       ],
     ]);
@@ -544,7 +559,7 @@ describe("react-context/provider-missing: unknowns of declarations", () => {
   it("says it does not check an own class component", () => {
     expect(run("unknown-class")).toEqual([
       [
-        "info src/main.tsx:8: stateward does not check class components like `<ErrorBoundary>`",
+        "info src/main.tsx:8: not checked: the components under `<ErrorBoundary>`: it is a class component, and class components are not followed",
         "fix: render the components that read contexts as function components inside it",
       ],
     ]);
@@ -553,7 +568,7 @@ describe("react-context/provider-missing: unknowns of declarations", () => {
   it("says once per context that one declared outside the checked files is not checked", () => {
     expect(run("external-context")).toEqual([
       [
-        "info src/Profile.tsx:5: `AuthCtx` is declared outside the checked files, so its Providers are not checked",
+        "info src/Profile.tsx:5: not checked: the Providers of `AuthCtx`: it is declared outside the checked files",
         "fix: add the package that declares it to the tsconfig stateward checks",
       ],
     ]);
@@ -567,7 +582,7 @@ describe("react-context/provider-missing: React's usual pattern", () => {
         "src/main.tsx:4",
         "Profile",
         "AuthContext",
-        "src/Profile.tsx:4: `useAuth` is called here",
+        "src/Profile.tsx:4: `useAuth` is called",
         "src/auth.ts:8: `useAuth` reads `AuthContext`",
       ),
     ]);
@@ -640,8 +655,8 @@ describe("react-context/provider-missing: engine contract", () => {
     const rule = ruleCode(reactContext(), "provider-missing");
     expect(rule.kind).toBe("project");
     expect(rule.meta.defaultSeverity).toBe("error");
-    expect(rule.meta.explain).toContain("## Bad");
-    expect(rule.meta.explain).toContain("## Good");
+    expect(rule.meta.explain).toContain("example-bad");
+    expect(rule.meta.explain).toContain("example-good");
   });
 
   it("can be switched off", () => {
@@ -675,7 +690,7 @@ describe("react-context/provider-missing: dynamic-components add-on", () => {
         "src/main.tsx:7",
         "Dashboard",
         "ThemeCtx",
-        "src/Dashboard.tsx:8: `<Panel>` is rendered here",
+        "src/Dashboard.tsx:8: `<Panel>` is rendered",
         'src/Dashboard.tsx:4: `panels["settings"]` is `<Settings>`',
         "src/Settings.tsx:5: `Settings` reads `ThemeCtx`",
       ),
@@ -696,7 +711,7 @@ describe("react-context/provider-missing: dynamic-components add-on", () => {
         "src/main.tsx:6",
         "Dashboard",
         "AuthCtx",
-        "src/Dashboard.tsx:8: `<Panel>` is rendered here",
+        "src/Dashboard.tsx:8: `<Panel>` is rendered",
         'src/Dashboard.tsx:4: `panels["profile"]` is `<Profile>`',
         reads,
       ),
@@ -704,7 +719,7 @@ describe("react-context/provider-missing: dynamic-components add-on", () => {
         "src/main.tsx:6",
         "Dashboard",
         "ThemeCtx",
-        "src/Dashboard.tsx:8: `<Panel>` is rendered here",
+        "src/Dashboard.tsx:8: `<Panel>` is rendered",
         "src/Dashboard.tsx:4: `panels[3]` is `<Settings>`",
         "src/Settings.tsx:5: `Settings` reads `ThemeCtx`",
       ),
@@ -712,7 +727,7 @@ describe("react-context/provider-missing: dynamic-components add-on", () => {
         "src/main.tsx:7",
         "Account",
         "AuthCtx",
-        "src/Dashboard.tsx:13: `<Panel>` is rendered here",
+        "src/Dashboard.tsx:13: `<Panel>` is rendered",
         'src/Dashboard.tsx:4: `panels["profile"]` is `<Profile>`',
         reads,
       ),
@@ -748,7 +763,7 @@ describe("react-context/provider-missing: dynamic-components add-on", () => {
         "src/main.tsx:4",
         "Home",
         "AuthCtx",
-        "src/Home.tsx:6: `<Page>` is rendered here",
+        "src/Home.tsx:6: `<Page>` is rendered",
         "src/Home.tsx:5: `Page` may be `<Profile>`",
         reads,
       ),

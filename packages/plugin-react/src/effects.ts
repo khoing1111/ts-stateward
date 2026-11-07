@@ -263,6 +263,10 @@ export function cleanupsOf(types: TypeQueries, effect: Effect): Cleanups {
   const { callback } = effect;
   const add = (expression: ts.Expression): void => {
     const value = unwrapped(expression);
+    // `return undefined;` and `return void 0;` leave the effect without a cleanup on that path.
+    if ((ts.isIdentifier(value) && value.text === "undefined") || ts.isVoidExpression(value)) {
+      return;
+    }
     if (ts.isArrowFunction(value) || ts.isFunctionExpression(value)) {
       cleanups.functions.push(value);
       return;

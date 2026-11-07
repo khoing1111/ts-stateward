@@ -22,14 +22,14 @@ import {
 const FLAGGED = fixture("table-type-too-loose/flagged");
 const NOT_FLAGGED = fixture("table-type-too-loose/not-flagged");
 
-const FIXED = "It is a fixed table: use satisfies";
+const FIXED = "Use satisfies: the keys are fixed";
 /** No type names the keys: `satisfies` checks them as written. */
-const AS_WRITTEN = "It is a fixed table: use satisfies (fixes only the keys written here)";
-const open = (kind: string): string => `It is an open dictionary: Partial<Record<${kind}, …>>`;
+const AS_WRITTEN = "Use satisfies with the keys as written: the keys are fixed";
+const open = (kind: string): string => `Use Partial<Record<${kind}, …>>: keys come from outside`;
 
-/** The headline asks one question everywhere; names and types are shown whole. */
+/** The headline says the same everywhere; names are shown whole. */
 function headline(name: string, type: string): string {
-  return `\`${name}\` is typed \`${type}\`: a fixed table or an open dictionary?`;
+  return `\`${name}\` accepts any ${parts(type).kind} key, so a misspelt or missing key still compiles`;
 }
 
 /** `V` and the key kind of `Record<string, V>` or `{ [key: string]: V }`. */
@@ -48,7 +48,7 @@ function record(file: string, name: string, type: string, keys: string, note: st
     file,
     name,
     message: headline(name, type),
-    hint: `every key known: \`satisfies Record<${keys}, ${value}>\`; keys from outside: \`Partial<Record<${kind}, ${value}>>\``,
+    hint: `use \`satisfies Record<${keys}, ${value}>\` for fixed keys, \`Partial<Record<${kind}, ${value}>>\` for keys from outside`,
     notes: [`keys: ${note}`],
     fix: /^[A-Za-z]\w*$/.test(keys) ? FIXED : AS_WRITTEN,
   };
@@ -62,7 +62,7 @@ function wider(file: string, name: string, type: string, note: string, exported 
   const { value, kind } = parts(type);
   return {
     ...record(file, name, type, "", note),
-    hint: `keys from outside: \`Partial<Record<${kind}, ${value}>>\`; every key known: look keys up as \`keyof typeof ${name}\`, then use \`satisfies\``,
+    hint: `use \`Partial<Record<${kind}, ${value}>>\` for keys from outside; for fixed keys, look keys up as \`keyof typeof ${name}\` and use \`satisfies\``,
     fix: exported ? undefined : open(kind),
   };
 }
@@ -72,7 +72,7 @@ function entries(file: string, name: string, type: string, note: string): Shown 
   const { value, kind } = parts(type);
   return {
     ...record(file, name, type, "", note),
-    hint: `every key known: read \`Object.entries(${name})\`, then use \`satisfies\`; keys from outside: \`Partial<Record<${kind}, ${value}>>\``,
+    hint: `read \`Object.entries(${name})\` and use \`satisfies\` for fixed keys; \`Partial<Record<${kind}, ${value}>>\` for keys from outside`,
     fix: open(kind),
   };
 }
@@ -81,7 +81,7 @@ function map(file: string, name: string, keys: string): Shown {
   return {
     file,
     name,
-    message: `\`${name}\` is a Map with a fixed set of keys that is never changed`,
+    message: `\`${name}\` is a Map whose keys are fixed and never change`,
     hint: "use an object `{ … } satisfies Record<…>`, so a missing key fails to compile",
     notes: [`keys: ${keys}`],
     fix: undefined,
@@ -101,8 +101,8 @@ describe("records/table-type-too-loose: flagged", () => {
         file: "action-impacts.ts",
         name: "ACTION_IMPACTS",
         message:
-          "`ACTION_IMPACTS` is typed `Record<string, string>`: a fixed table or an open dictionary?",
-        hint: "every key known: `satisfies Record<Action, string>`; keys from outside: `Partial<Record<string, string>>`",
+          "`ACTION_IMPACTS` accepts any string key, so a misspelt or missing key still compiles",
+        hint: "use `satisfies Record<Action, string>` for fixed keys, `Partial<Record<string, string>>` for keys from outside",
         notes: ['keys: "approve", "reject", "escalate"'],
         fix: FIXED,
       },
@@ -131,19 +131,18 @@ describe("records/table-type-too-loose: flagged", () => {
           '"first"',
         ),
         message:
-          "`aVeryLongVariableNameThatGoesOnAndOn` is typed `Record<string, TheValueOfEveryEntryInTheTable>`: a fixed table or an open dictionary?",
-        hint: 'every key known: `satisfies Record<"first", TheValueOfEveryEntryIn…>`; keys from outside: `Partial<Record<string, TheValueOfEveryEntryIn…>>`',
+          "`aVeryLongVariableNameThatGoesOnAndOn` accepts any string key, so a misspelt or missing key still compiles",
+        hint: 'use `satisfies Record<"first", TheValueOfEveryEntr…>` for fixed keys, `Partial<Record<string, TheValueOfEveryEntr…>>` for keys from outside',
       },
       {
         ...record("long-names.ts", "shortName", LONG_VALUE, "", '"first"'),
-        message:
-          "`shortName` is typed `Record<string, TheValueOfEveryEntryInTheTable>`: a fixed table or an open dictionary?",
-        hint: 'every key known: `satisfies Record<"first", TheValueOfEveryEntryIn…>`; keys from outside: `Partial<Record<string, TheValueOfEveryEntryIn…>>`',
+        message: "`shortName` accepts any string key, so a misspelt or missing key still compiles",
+        hint: 'use `satisfies Record<"first", TheValueOfEveryEntr…>` for fixed keys, `Partial<Record<string, TheValueOfEveryEntr…>>` for keys from outside',
       },
       {
         ...map("long-names.ts", "aVeryLongMapNameThatKeepsGoingOnAndOn", '"x"'),
         message:
-          "`aVeryLongMapNameThatKeepsGoingOnAndOn` is a Map with a fixed set of keys that is never changed",
+          "`aVeryLongMapNameThatKeepsGoingOnAndOn` is a Map whose keys are fixed and never change",
       },
       {
         ...record(
@@ -153,7 +152,7 @@ describe("records/table-type-too-loose: flagged", () => {
           "",
           '"mon", "tue", "wed", "thu", "fri" and 2 more',
         ),
-        hint: 'every key known: `satisfies Record<"mon" | "tue" | "wed" | "thu" | "fri" | …, number>`; keys from outside: `Partial<Record<string, number>>`',
+        hint: 'use `satisfies Record<"mon" | "tue" | "wed" | "thu" | "fr…, number>` for fixed keys, `Partial<Record<string, number>>` for keys from outside',
       },
       record(
         "many-keys.ts",
@@ -184,14 +183,19 @@ describe("records/table-type-too-loose: flagged", () => {
     expect(names).toContain("unitNames");
   });
 
-  it("asks its question in the same words for every table, and never cuts a name", () => {
-    const question = ": a fixed table or an open dictionary?";
-    const records = findings.filter((finding) => finding.message.includes(" is typed "));
+  it("says the same headline for every table, and never cuts a name", () => {
+    const ending = " key, so a misspelt or missing key still compiles";
+    const records = findings.filter((finding) => finding.message.includes(" accepts any "));
     expect(records.length).toBeGreaterThan(20);
-    expect(records.every((finding) => finding.message.endsWith(question))).toBe(true);
+    expect(records.every((finding) => finding.message.endsWith(ending))).toBe(true);
     const longName = records.find((finding) => finding.message.includes("aVeryLongVariableName"));
-    expect(longName?.message).toContain("`aVeryLongVariableNameThatGoesOnAndOn` is typed");
-    expect(longName?.message.length).toBeGreaterThan(100);
+    expect(longName?.message).toContain("`aVeryLongVariableNameThatGoesOnAndOn` accepts any");
+    expect(longName?.message).toBe(
+      headline(
+        "aVeryLongVariableNameThatGoesOnAndOn",
+        "Record<string, TheValueOfEveryEntryInTheTable>",
+      ),
+    );
   });
 
   it("reports at the variable name, with the key list noted at the initializer", () => {
@@ -379,7 +383,7 @@ describe("records/table-type-too-loose: the quick fixes", { timeout: 30_000 }, (
       const { findings: after } = checkFixture(dir, [records()]);
       const [finding] = inFile(after, "keys-of-itself-map.ts");
       expect(finding?.hint).toBe(
-        'every key known: `satisfies Record<"narrow" | "wide", number>`; keys from outside: `Partial<Record<string, number>>`',
+        'use `satisfies Record<"narrow" | "wide", number>` for fixed keys, `Partial<Record<string, number>>` for keys from outside',
       );
     } finally {
       rmSync(dir, { recursive: true, force: true });

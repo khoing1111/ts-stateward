@@ -8,7 +8,7 @@ import { factSummaries } from "./inlay.js";
 type CodeActions = NonNullable<EditorContributions["codeActions"]>;
 
 /** The title of the refactoring that wraps a catch-all for the errors its `try` can throw. */
-export const HANDLE_KNOWN_TITLE = "Handle the known errors here, rethrow the rest";
+export const HANDLE_KNOWN_TITLE = "Handle the known errors, rethrow the rest";
 
 /**
  * On a `catch (e)` with no `instanceof` branches, whose `try` can throw at least one error class

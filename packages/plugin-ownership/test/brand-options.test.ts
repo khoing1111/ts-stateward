@@ -26,8 +26,8 @@ describe("ownership/brand-built-outside-owner options", () => {
       owners: { SocketId: ["**/socket.ts"] },
     });
     expect(findings.map((finding) => [finding.message, finding.hint])).toEqual([
-      ["`SocketId` is built here without its check", "build it in `./socket.ts`, its owner"],
-      ["`SocketId` is built here without its check", "build it in `./socket.ts`, its owner"],
+      ["`SocketId` is built without its check", "build it in `./socket.ts`, its owner"],
+      ["`SocketId` is built without its check", "build it in `./socket.ts`, its owner"],
       [
         "`isSocketId` says a value is `SocketId` without its check",
         "build it in `./socket.ts`, its owner",

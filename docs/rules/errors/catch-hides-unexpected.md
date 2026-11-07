@@ -2,85 +2,88 @@
 
 # errors/catch-hides-unexpected
 
-A catch that handles some errors with instanceof also rethrows or handles all the others.
-
-- Group: errors/catch
-- Tier: core (on in every preset)
-- Add-on: none
-- Heuristic: no
-- Severity under `recommended`: error
-- Severity under `strict`: error
-
-## Why
-
-A `catch` that handles `NotFoundError` and `AuthError` with `instanceof`, and has no last branch, silently drops every other error: a bug, a network failure, a string someone threw. `save(order)` fails with a `TypeError`, neither branch matches, and the code carries on as if the order was saved.
-
-## When to use it
-
-Use it in any code that catches by class. It is on as an error in every preset; keep it on. It needs no knowledge of what the `try` throws, so it works even where `errors/catch-misses-error` cannot see.
-
-## What it catches
-
-A `catch (e)` with an `if` / `else if` chain or `switch (true)` that tests `e instanceof X`, and no branch for the other errors. It is fine when:
-
-- a last `else` or `default` does something: rethrows, wraps the error with `{ cause: e }`, or handles it;
-- any statement follows the chain in the `catch`, since it runs for every error.
-
-### Bad
+A `catch` that tests some error classes and has no last branch ignores every other error, bugs included; rethrowing the rest keeps them visible.
 
 ```ts
-try {
-  await save(order);
-} catch (e) {
-  if (e instanceof NotFoundError) {
-    showMissing();
-  } else if (e instanceof AuthError) {
-    redirectToLogin();
+class NotFoundError extends Error {}
+class AuthError extends Error {}
+
+declare function save(order: string): Promise<void>;
+
+export async function submit(order: string, show: (text: string) => void): Promise<void> {
+  try {
+    await save(order);
+  } catch (e) {
+    if (e instanceof NotFoundError) {
+      show("This order no longer exists.");
+    } else if (e instanceof AuthError) {
+      show("Please sign in again.");
+    }
   }
 }
 ```
 
-### Good
+`stateward check` prints:
+
+```text
+error[errors/catch-hides-unexpected]: `catch` ignores errors other than `NotFoundError` and `AuthError`
+  --> example.ts:10:5
+   |
+10 |     if (e instanceof NotFoundError) {
+   |     ^^
+   = fix: end the chain with a branch that rethrows the rest, so they reach the caller:
+         } else {
+           throw e;
+         }
+   = docs: stateward explain errors/catch-hides-unexpected
+```
+
+End the chain with a branch for every other error, which rethrows it or handles it:
 
 ```ts
-try {
-  await save(order);
-} catch (e) {
-  if (e instanceof NotFoundError) {
-    showMissing();
-  } else if (e instanceof AuthError) {
-    redirectToLogin();
-  } else {
-    throw e;
+class NotFoundError extends Error {}
+class AuthError extends Error {}
+
+declare function save(order: string): Promise<void>;
+
+export async function submit(order: string, show: (text: string) => void): Promise<void> {
+  try {
+    await save(order);
+  } catch (e) {
+    if (e instanceof NotFoundError) {
+      show("This order no longer exists.");
+    } else if (e instanceof AuthError) {
+      show("Please sign in again.");
+    } else {
+      throw e;
+    }
   }
 }
 ```
 
-### Fix
+A quick fix adds `else { throw e; }` to an `if` chain. For a `switch (true)`, add `default: throw e;` yourself; the message shows it. Wrapping the error with `{ cause: e }`, or any statement after the chain, counts too, since it runs for every error.
 
-A quick fix adds `else { throw e; }` to an `if` chain. For a `switch (true)`, add `default: throw e;` yourself; the message shows it.
+## Why it matters
+
+A `catch` that handles `NotFoundError` and `AuthError` and has no last branch ignores every other error: a bug, a network failure, a string someone threw. `save(order)` fails with a `TypeError`, neither branch matches, and the code carries on as if the order was saved. The rule needs no knowledge of what the `try` throws, so it works even where `errors/catch-misses-error` cannot see.
 
 ## What it does not catch
 
-- A chain that tests another value, or tests other than `instanceof`.
+- A chain that tests another value, or tests with something other than `instanceof`.
 - A `catch` with no parameter, or a destructured one.
-- A last `else` that does something but still ignores the error (`else { showGenericError(); }`): it counts as handling the rest, unless you set `restUsesError` (below). `errors/catch-misses-error` looks at what that `else` does with the error.
-- A `catch` with no `instanceof` chain that ignores the error: that is `errors/catch-without-intent`.
+- A last `else` that does something but still ignores the error (`else { showGenericError(); }`): it counts as handling the rest, unless you set `restUsesError`. `errors/catch-misses-error` looks at what that `else` does with the error.
 
 ## Turn it on or off
 
-In `stateward.config.ts`:
-
 ```ts
 rules: { "errors/catch-hides-unexpected": "off" } // or "warning"
-groups: { "errors/catch": "off" } // the whole group
 rules: { "errors/catch-hides-unexpected": ["error", { restUsesError: true }] } // the last branch must use the error
 ```
 
-### Options
-
-Set as `rules: { "errors/catch-hides-unexpected": ["error", { … }] }`.
+Options, set as `rules: { "errors/catch-hides-unexpected": ["error", { … }] }`:
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `restUsesError` | boolean | `false` | The branch for the other errors must use the error (rethrow it, wrap it, report it); a generic message alone does not count. |
+
+Core rule: error under `recommended` and `strict`. Group: `errors/catch`.

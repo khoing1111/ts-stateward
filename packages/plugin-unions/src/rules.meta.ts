@@ -7,10 +7,13 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "A switch over a union handles every case, so a value added later fails to compile instead of falling into the default.",
+        "A case added to the union later goes to the `default` with no compile error; listing the cases makes each switch fail to compile until it handles the new case.",
+      summary:
+        "a `default` that handles cases the switch does not list, or that has no `never` check",
       defaultSeverity: "error",
       tier: "core",
       group: "cases",
+      fixNeedsStrictNulls: true,
       options: {
         maxHidden: {
           kind: "number",
@@ -18,7 +21,7 @@ export const RULES = {
           min: 0,
           integer: true,
           description:
-            'A `default` that hides more cases than this is reported as info: it often means "everything else".',
+            'A `default` that handles more unlisted cases than this is reported as info: it often means "everything else".',
         },
         ignore: {
           kind: "strings",
@@ -31,8 +34,9 @@ export const RULES = {
           default: {},
           kinds: {
             complete: "every case is listed, and the default has no check",
-            hidden: "the default hides up to maxHidden cases",
-            "many-hidden": "the default hides more than maxHidden cases (info unless set here)",
+            hidden: "the default handles up to maxHidden unlisted cases",
+            "many-hidden":
+              "the default handles more than maxHidden unlisted cases (info unless set here)",
           },
           description: "A severity per kind of finding.",
         },
@@ -49,10 +53,12 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "An if / else if chain over a union handles every case, so a value added later fails to compile.",
+        "A case added to the union later goes to the last `else` with no compile error; testing every case and checking the rest with `never` makes the chain fail to compile.",
+      summary: "an `if` / `else if` chain over a union that misses a case or has no `never` check",
       defaultSeverity: "error",
       tier: "core",
       group: "cases",
+      fixNeedsStrictNulls: true,
       options: {
         report: {
           kind: "string",
@@ -67,7 +73,7 @@ export const RULES = {
           min: 0,
           integer: true,
           description:
-            'An `else` that hides more cases than this is reported as info: it often means "everything else".',
+            'An `else` that handles more untested cases than this is reported as info: it often means "everything else".',
         },
         ignore: {
           kind: "strings",
@@ -81,8 +87,9 @@ export const RULES = {
           kinds: {
             complete: "every case is handled, and the else has no check",
             missing: "a chain without an else misses cases",
-            hidden: "the else hides up to maxHidden cases",
-            "many-hidden": "the else hides more than maxHidden cases (info unless set here)",
+            hidden: "the else handles up to maxHidden untested cases",
+            "many-hidden":
+              "the else handles more than maxHidden untested cases (info unless set here)",
           },
           description: "A severity per kind of finding.",
         },
@@ -99,7 +106,9 @@ export const RULES = {
     kind: "project",
     meta: {
       description:
-        "A property like kind that tells a union's members apart is a literal in every member, not string or number in one.",
+        "When `kind` is `string` in one member, testing `kind` does not narrow the union, so TypeScript cannot check which properties each branch reads.",
+      summary:
+        "a tag like `kind` that is `string` in one member, so a test on it does not pick a member",
       defaultSeverity: "warning",
       tier: "coverage",
       group: "cases",

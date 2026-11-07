@@ -55,30 +55,30 @@ describe("stateward check", { timeout: 20_000 }, () => {
           "        type SystemEvent = Load \\| Timeout \\| …;",
           "  = docs: stateward explain team/max-union-members",
           "",
-          'error\\[unions/default-hides-cases\\]: this `default` hides 1 case of `status`: "failed"',
+          'error\\[unions/default-hides-cases\\]: "failed" of `status` is not listed; `default` handles it',
           " --> src/status.ts:9:5",
           "  \\|",
           "9 \\|     default:",
           "  \\| {5}\\^{7}",
-          "  = fix: list the case, then put `status satisfies never;` in the `default`, or if the `default` is right for it, say so:",
+          "  = fix: list the case, then put `status satisfies never;` in the `default`; or name it in the `default` instead, if that is where it belongs:",
           '        default: status satisfies "failed";',
           "  = docs: stateward explain unions/default-hides-cases",
           "",
-          "error\\[records/table-type-too-loose\\]: `labels` is typed `Record<string, string>`: a fixed table or an open dictionary\\?",
+          "error\\[records/table-type-too-loose\\]: `labels` accepts any string key, so a misspelt or missing key still compiles",
           "  --> src/status.ts:14:7",
           "   \\|",
           '14 \\| const labels: Record<string, string> = \\{ idle: "Idle", uploading: "Uploading" \\};',
           "   \\| {7}\\^{6}",
-          "   = fix: keys from outside: `Partial<Record<string, string>>`; every key known: look keys up as `keyof typeof labels`, then use `satisfies`",
+          "   = fix: use `Partial<Record<string, string>>` for keys from outside; for fixed keys, look keys up as `keyof typeof labels` and use `satisfies`",
           '   = note: keys: "idle", "uploading"',
           "   = docs: stateward explain records/table-type-too-loose",
           "",
-          "error\\[react-context/fake-default-value\\]: `ThemeContext` gets a placeholder value \\(`\\{\\}`\\) when its Provider is missing",
+          "error\\[react-context/fake-default-value\\]: `ThemeContext` defaults to a fake value, `\\{\\}`",
           " --> src/theme.tsx:5:29",
           "  \\|",
           "5 \\| export const ThemeContext = createContext\\(\\{\\}\\);",
           "  \\| {29}\\^{17}",
-          "  = fix: create it with `undefined` and read it in a hook that throws when it is missing:",
+          "  = fix: create it with `undefined` and read it in a hook that throws, so a missing Provider fails at once:",
           "        const ThemeContext = createContext<Theme \\| undefined>\\(undefined\\);",
           '        // in useTheme\\(\\): if \\(value === undefined\\) throw new Error\\("ThemeContext needs a Provider"\\);',
           "  = docs: stateward explain react-context/fake-default-value",
@@ -127,18 +127,18 @@ describe("stateward check", { timeout: 20_000 }, () => {
         {
           kind: "problem",
           ruleId: "unions/default-hides-cases",
-          hint: 'list the case, then put `status satisfies never;` in the `default`, or if the `default` is right for it, say so:\n    default: status satisfies "failed";',
+          hint: 'list the case, then put `status satisfies never;` in the `default`; or name it in the `default` instead, if that is where it belongs:\n    default: status satisfies "failed";',
         },
         {
           kind: "problem",
           ruleId: "records/table-type-too-loose",
-          hint: "keys from outside: `Partial<Record<string, string>>`; every key known: look keys up as `keyof typeof labels`, then use `satisfies`\nno automatic fix: Type 'string | undefined' is not assignable to type 'string'.",
+          hint: "use `Partial<Record<string, string>>` for keys from outside; for fixed keys, look keys up as `keyof typeof labels` and use `satisfies`\nno automatic fix: Type 'string | undefined' is not assignable to type 'string'.",
         },
         {
           kind: "problem",
           ruleId: "react-context/fake-default-value",
           hint: [
-            "create it with `undefined` and read it in a hook that throws when it is missing:",
+            "create it with `undefined` and read it in a hook that throws, so a missing Provider fails at once:",
             "    const ThemeContext = createContext<Theme | undefined>(undefined);",
             '    // in useTheme(): if (value === undefined) throw new Error("ThemeContext needs a Provider");',
           ].join("\n"),
@@ -173,9 +173,7 @@ describe("stateward check", { timeout: 20_000 }, () => {
     writeFileSync(path.join(dir, "a.ts"), "export const a = ;\n");
     const { stdout } = await run(["check"]);
     expect(stdout).not.toContain("No problems");
-    expect(stdout).toContain(
-      "`a.ts` has a syntax error, so findings in it may be missing or wrong",
-    );
+    expect(stdout).toContain("not checked: `a.ts`: it has a syntax error");
     expect(stdout).toContain("1 place not checked");
     const explained = await run(["explain", "stateward/syntax"]);
     expect(explained.stdout).toContain("stateward/syntax");
@@ -199,7 +197,9 @@ describe("stateward check", { timeout: 20_000 }, () => {
         "1 of 3 files import packages that do not resolve: install the project's packages first (`npm install`, `yarn`, `pnpm install`); findings in those files may be missing.\n",
       ),
     ).toBe(true);
-    expect(stdout).toContain("`a.ts` imports `not-installed`, which does not resolve");
+    expect(stdout).toContain(
+      "not checked: code using `not-installed`: the package is not installed\n --> a.ts:",
+    );
     expect(stdout).toContain("1 place not checked");
     writeFileSync(path.join(dir, "d.ts"), "export const d = 1;\n");
     writeFileSync(path.join(dir, "e.ts"), "export const e = 1;\n");
@@ -210,11 +210,35 @@ describe("stateward check", { timeout: 20_000 }, () => {
     expect(explained.stdout).toContain("It cannot be turned off");
   });
 
+  it("lists more than 20 files whose imports do not resolve only with --verbose", async () => {
+    writeFileSync(
+      path.join(dir, "stateward.config.mjs"),
+      "export default { preset: 'recommended', plugins: [] };\n",
+    );
+    writeFileSync(path.join(dir, "tsconfig.json"), '{ "include": ["*.ts"] }\n');
+    for (let index = 0; index < 21; index += 1) {
+      writeFileSync(
+        path.join(dir, `m${String(index)}.ts`),
+        `import { x } from "not-installed";\nexport const m${String(index)} = x;\n`,
+      );
+    }
+    const { stdout } = await run(["check"]);
+    expect(stdout).toContain(
+      "21 of 21 files import packages that do not resolve: install the project's packages first (`npm install`, `yarn`, `pnpm install`); findings in those files may be missing. `--verbose` lists them.\n",
+    );
+    expect(stdout).not.toContain("not checked: code using `not-installed`");
+    expect(stdout).toContain("21 places not checked");
+    const verbose = await run(["check", "--verbose"]);
+    expect(verbose.stdout).toContain(
+      "not checked: code using `not-installed`: the package is not installed\n --> m0.ts:",
+    );
+  });
+
   it("follows the references of a Vite-style solution tsconfig and exits 1 with the finding", async () => {
     const { code, stdout, stderr } = await run(["check"], path.join(fixtures, "vite-solution"));
     expect(stderr).toBe("");
     expect(stdout).toContain(
-      "error[react-context/fake-default-value]: `ThemeContext` gets a placeholder value (`null!`)",
+      "error[react-context/fake-default-value]: `ThemeContext` defaults to a fake value, `null!`",
     );
     expect(stdout).toContain(" --> src/theme.ts:3:29");
     expect(stdout).toMatch(/1 error in 1 file/);
@@ -321,8 +345,8 @@ describe("stateward coverage", { timeout: 20_000 }, () => {
       [
         "react-context: A component that needs a context is always rendered under its Provider.",
         "1 place it cannot check yet",
-        "  src/theme.tsx:5:29  `ThemeContext` gets a placeholder value (`{}`) when its Provider is missing",
-        "      fix: create it with `undefined` and read it in a hook that throws when it is missing:",
+        "  src/theme.tsx:5:29  `ThemeContext` defaults to a fake value, `{}`",
+        "      fix: create it with `undefined` and read it in a hook that throws, so a missing Provider fails at once:",
         "    const ThemeContext = createContext<Theme | undefined>(undefined);",
         '    // in useTheme(): if (value === undefined) throw new Error("ThemeContext needs a Provider");',
         "0 problems",
@@ -544,15 +568,15 @@ describe("stateward explain", { timeout: 20_000 }, () => {
   it("prints the explanation of a known rule", async () => {
     const { code, stdout } = await run(["explain", "react-context/fake-default-value"], example);
     expect(code).toBe(0);
-    expect(stdout).toContain("## Bad");
-    expect(stdout).toContain("## Good");
+    expect(stdout).toContain("example-bad");
+    expect(stdout).toContain("example-good");
   });
 
   it("exits 2 and lists the known rules for an unknown id", async () => {
     const { code, stderr } = await run(["explain", "react-context/nope"], example);
     expect(code).toBe(2);
     expect(stderr).toBe(
-      'stateward: unknown rule "react-context/nope"; known rules: react-context/fake-default-value, react-context/provider-missing, unions/default-hides-cases, unions/if-chain-misses-case, unions/tag-does-not-discriminate, records/lookup-misses-key, records/table-type-too-loose, records/duplicate-key, records/keyed-maps-out-of-sync, team/max-union-members\n',
+      'stateward: unknown rule "react-context/nope"; known rules: react-context/fake-default-value, react-context/provider-missing, unions/default-hides-cases, unions/if-chain-misses-case, unions/tag-does-not-discriminate, records/lookup-misses-key, records/table-type-too-loose, records/duplicate-key, team/max-union-members\n',
     );
   });
 });

@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -83,12 +82,8 @@ export function withFixesApplied<T>(
   }
 }
 
-/** The compiler's complaints about a project: checked with the tsc binary, not the checker API. */
-export function typeErrors(dir: string): string {
-  const tsc = fileURLToPath(import.meta.resolve("typescript/bin/tsc"));
-  const result = spawnSync(process.execPath, [tsc, "-p", dir], { encoding: "utf8" });
-  return result.status === 0 ? "" : result.stdout + result.stderr;
-}
+/** The compiler's complaints about a project, as `tsc -p` prints them (computed in this process). */
+export { typeErrors } from "@stateward/core/testing";
 
 /** The findings of the pack over a fixture project under a named preset. */
 export function checkWithPreset(

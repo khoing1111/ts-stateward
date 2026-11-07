@@ -131,6 +131,9 @@ importers:
         specifier: ^1.0.16
         version: 1.0.16
     devDependencies:
+      '@stateward/plugin-ownership':
+        specifier: workspace:*
+        version: link:../plugin-ownership
       '@stateward/plugin-react-context':
         specifier: workspace:*
         version: link:../plugin-react-context
@@ -240,6 +243,12 @@ importers:
       esbuild:
         specifier: ^0.28.2
         version: 0.28.2
+      smol-toml:
+        specifier: 1.4.2
+        version: 1.4.2
+      vscode-jsonrpc:
+        specifier: 10.0.0
+        version: 10.0.0
       vscode-languageclient:
         specifier: ^11.0.0
         version: 11.0.0
@@ -1537,6 +1546,10 @@ packages:
 
   signal-exit@3.0.7:
     resolution: {integrity: sha512-wnD2ZE+l+SPC/uoS0vXeE9L1+0wuaMqKlfz9AMUo38JsyLSBWSFcHR1Rri62LZc12vLr1gb3jl7iwQhgwpAbGQ==}
+
+  smol-toml@1.4.2:
+    resolution: {integrity: sha512-rInDH6lCNiEyn3+hH8KVGFdbjc099j47+OSgbMrfDYX1CmXLfdKd7qi6IfcWj2wFxvSVkuI46M+wPGYfEOEj6g==}
+    engines: {node: '>= 18'}
 
   source-map-js@1.2.2:
     resolution: {integrity: sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==}
@@ -2970,6 +2983,8 @@ snapshots:
       side-channel-weakmap: 1.0.2
 
   signal-exit@3.0.7: {}
+
+  smol-toml@1.4.2: {}
 
   source-map-js@1.2.2: {}
 

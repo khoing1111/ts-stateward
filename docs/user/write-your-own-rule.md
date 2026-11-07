@@ -1,23 +1,24 @@
 # Write a rule of your own
 
-When your team has a convention no pack checks (a limit, a naming rule, a call nobody should make),
-write it as a rule. It lives next to your code, loads from `stateward.config.ts`, and reports in the
-terminal and in VS Code like any other. First check the [rule pages](../rules/): what you want may
-be an option of an existing rule.
+A team convention that no pack checks, such as a size limit, a naming rule or a banned call, can be
+written as a rule. The rule is a file in the app's repository, loads from `stateward.config.ts`, and
+reports in the terminal and in VS Code like any other. Check the [rule pages](../rules/) first; an
+existing rule may already offer it as an option.
 
-You need stateward installed ([install.md](install.md)) and `@stateward/core`, at the same version
-as `stateward`:
+A rule needs stateward installed ([install.md](install.md)) and `@stateward/core` at the same
+version as `stateward`:
 
 ```bash
 npm install --save-dev @stateward/core
 ```
 
-A complete example: [examples/basic/stateward-rules/team.ts](../../examples/basic/stateward-rules/team.ts).
+[examples/basic/stateward-rules/team.ts](../../examples/basic/stateward-rules/team.ts) is a complete
+example.
 
 ## 1. Write the rule
 
-For example in `stateward-rules/team.ts`. This one warns when a union has more members than the
-team allows:
+This rule, in `stateward-rules/team.ts`, warns when a union has more members than the team's
+limit:
 
 ```ts
 import ts from "@stateward/core/typescript";
@@ -60,8 +61,9 @@ export const team = definePlugin({
 });
 ```
 
-Import TypeScript from `@stateward/core/typescript`, never your app's `typescript`: another version
-numbers the syntax differently, so its checks match nothing (stateward warns when a rule does this).
+Import TypeScript from `@stateward/core/typescript`, not the app's `typescript`. Another version
+numbers the syntax kinds differently, so its checks match nothing; stateward warns when a rule does
+this.
 To ask about types, use `ctx.types`, not TypeScript's type checker.
 
 A rule that looks across files uses `kind: "project"`;
@@ -138,7 +140,7 @@ in.
 | `option.record({ default, description })`                        | names mapped to lists of strings      |
 | `option.severities({ kinds, description })`                      | a severity per kind of finding        |
 
-The config's types reject an unknown option or a wrong type as you write it. Limits such as `min`
+The config's types reject an unknown option or a value of the wrong type in the editor. Limits such as `min`
 are checked when stateward runs:
 
 ```text
@@ -149,7 +151,7 @@ A rule without `meta.options` refuses any option.
 
 ## Writing the message
 
-- **`message`**: what is wrong, naming their code in backticks, one line of at most 100
+- **`message`**: what is wrong, naming the user's code in backticks, one line of at most 100
   characters. No "You", no "!".
 - **`hint`**: the change to make, one line of at most 140 characters, optionally followed by up to
   4 lines of fixed code, each indented by 4 spaces.
@@ -158,7 +160,7 @@ A rule without `meta.options` refuses any option.
 
 ## Quick fixes
 
-Offer a fix only when it is obvious. A fix is a title and text edits:
+Offer a fix only when there is one clear change. A fix is a title and text edits:
 
 ```ts
 ctx.report({
@@ -178,7 +180,7 @@ ctx.report({
 stateward applies a fix to a copy of the code first and does not offer it if it adds a TypeScript
 error on the lines it changes. `safe: true` says the fix cannot change behaviour, so `check --fix`
 applies it; other fixes are offered in the editor only. When the code can be written several ways,
-list the others in `alternatives`: the first that compiles is offered.
+list the others in `alternatives`; stateward offers the first that compiles.
 
 ```ts
 fixes: [{ ...checkOnObject, alternatives: [checkOnLocalConst] }],
@@ -186,5 +188,5 @@ fixes: [{ ...checkOnObject, alternatives: [checkOnLocalConst] }],
 
 ## When the rule cannot tell
 
-If the rule meets code it cannot decide about, call `ctx.unknown({ message, hint, node })` instead
-of staying silent. It shows as a place not checked, so nobody mistakes it for a pass.
+When the rule cannot decide about some code, call `ctx.unknown({ message, hint, node })` instead of
+reporting nothing. The place then shows as not checked, not as a pass.

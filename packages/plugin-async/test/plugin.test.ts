@@ -38,8 +38,8 @@ describe("async", () => {
       expect(rule.meta.description.length).toBeGreaterThan(0);
       const explain = rule.meta.explain;
       expect(explain).toContain(`# async/${key}`);
-      expect(explain).toContain("## Bad");
-      expect(explain).toContain("## Good");
+      expect(explain).toContain("example-bad");
+      expect(explain).toContain("example-good");
       expect(explain).toContain(`rules: { "async/${key}": "off" }`);
     },
   );

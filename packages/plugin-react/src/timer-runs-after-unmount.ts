@@ -17,64 +17,58 @@ import { fitted } from "./text.js";
 
 const EXPLAIN = `# react/timer-runs-after-unmount
 
-A timer kept in a \`useRef\` is cleared when the component unmounts.
+A timer kept in a ref and not cleared on unmount still runs after the component is gone, and can navigate or call out from a page the user left.
 
-## Why
+\`\`\`tsx example-bad
+import { useRef } from "react";
 
-\`setTimeout\`, \`setInterval\` and \`requestAnimationFrame\` keep running after the component is gone. When the callback only sets the component's own state, that is harmless: React ignores a state update after unmount (it removed its "update on an unmounted component" warning in React 18 for this reason), so this rule stays silent. It speaks when the callback does something that still has an effect: a menu that calls \`navigate(…)\` after a delay moves the user somewhere they did not ask to go; a prop callback, a store dispatch, a request or an analytics event fires for a screen that is closed. The usual place to start such a timer is an event handler, where [\`react/effect-missing-cleanup\`](effect-missing-cleanup.md) cannot see it.
-
-## When to use it
-
-Use it in any React app. It is a warning in every preset.
-
-## What it catches
-
-A \`useRef\` that the component assigns \`setTimeout(…)\`, \`setInterval(…)\` or \`requestAnimationFrame(…)\` (also as \`window.setTimeout\`), in an event handler or anywhere else in the component, when no effect cleanup in the component clears that ref, and the timer's callback (or a function declared in the component that it calls) does one of these:
-
-- navigates: \`navigate(…)\`, \`router.push(…)\`, \`history.replace(…)\`;
-- calls a prop or a value from \`useContext\`;
-- dispatches to a store, starts a request (\`fetch\`, \`axios\`), or sends an analytics event (\`track\`, \`analytics.…\`);
-- writes to storage or \`document\`, or to another ref.
-
-It is cleared when the cleanup of any effect calls \`clearTimeout(ref.current)\`, \`clearInterval(ref.current)\` or \`cancelAnimationFrame(ref.current)\` for that kind of timer (an effect with \`[]\` runs its cleanup only on unmount; any other runs it then too): directly, through a copy of the id (\`const id = ref.current\`), or through a helper declared in the component.
-
-The message names the action: "\`closeTimer\` can still run \`navigate(…)\` after \`RailMenu\` unmounts".
-
-### Bad
-
-\`\`\`tsx
-const closeTimer = useRef<number>();
-const choose = () => {
-  closeTimer.current = window.setTimeout(() => navigate(to), 150);
-};
+export function RailMenu({ onClose }: { onClose: () => void }) {
+  const closeTimer = useRef<number | undefined>(undefined);
+  const choose = () => {
+    closeTimer.current = window.setTimeout(() => onClose(), 150);
+  };
+  return <button onClick={choose}>Done</button>;
+}
 \`\`\`
 
-### Good
+Clear the timer in an effect cleanup that runs on unmount:
 
-\`\`\`tsx
-const closeTimer = useRef<number>();
-useEffect(() => () => window.clearTimeout(closeTimer.current), []);
+\`\`\`tsx example-good
+import { useEffect, useRef } from "react";
+
+export function RailMenu({ onClose }: { onClose: () => void }) {
+  const closeTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(closeTimer.current), []);
+  const choose = () => {
+    closeTimer.current = window.setTimeout(() => onClose(), 150);
+  };
+  return <button onClick={choose}>Done</button>;
+}
 \`\`\`
 
-### Fix
+The quick fix writes that effect after the ref's declaration (and imports \`useEffect\` when the file does not); it is tried on a copy of your code before it is offered.
 
-Add the effect above after the ref's declaration. The quick fix writes it (and imports \`useEffect\` when the file does not) and is tried on a copy of your code before it is offered.
+## Why it matters
+
+\`setTimeout\`, \`setInterval\` and \`requestAnimationFrame\` keep running after the component is gone. When the callback only sets the component's own state, that is harmless: React ignores a state update after unmount, so this rule stays silent. It speaks when the callback still has an effect: a menu that calls \`navigate(…)\` after a delay moves the user somewhere they did not ask to go; a prop callback, a store dispatch, a request or an analytics event fires for a screen that is closed. Such timers are usually started in an event handler, where \`react/effect-missing-cleanup\` cannot see them.
+
+## When it says “not checked”
+
+A cleanup that hands the ref to a function stateward cannot see into (\`return () => stopAll(closeTimer)\`), or an effect that returns a function declared outside it, is listed as not checked. Clear the ref in the cleanup itself.
 
 ## What it does not catch
 
-- A timer whose callback only sets the component's own state.
-- A timer whose id is kept in a variable, an object or a list, not in a \`useRef\`.
-- A timer started in a function outside the component.
-- A cleanup that hands the ref to a function stateward cannot see into (\`return () => stopAll(closeTimer)\`), or an effect that returns a function declared outside it: these are listed as places not checked.
-- A timer an effect starts and \`react/effect-missing-cleanup\` already reports: one cause gives one message, from that rule.
+It reports a \`useRef\` that the component assigns \`setTimeout(…)\`, \`setInterval(…)\` or \`requestAnimationFrame(…)\` (also as \`window.setTimeout\`), anywhere in the component, when no effect cleanup clears that ref and the timer's callback (or a function of the component it calls) navigates (\`navigate(…)\`, \`router.push(…)\`, \`history.replace(…)\`); calls a prop or a value from \`useContext\`; dispatches to a store, starts a request (\`fetch\`, \`axios\`) or sends an analytics event (\`track\`, \`analytics.…\`); or writes to storage, \`document\` or another ref. The message names the action. A cleanup clears it when it calls \`clearTimeout(ref.current)\`, \`clearInterval(ref.current)\` or \`cancelAnimationFrame(ref.current)\`, directly, through a copy of the id, or through a helper declared in the component. It is silent on:
+
+- a timer whose callback only sets the component's own state;
+- a timer whose id is kept in a variable, an object or a list, not in a \`useRef\`;
+- a timer started in a function outside the component;
+- a timer an effect starts that \`react/effect-missing-cleanup\` already reports: one cause, one message.
 
 ## Turn it on or off
 
-In \`stateward.config.ts\`:
-
 \`\`\`ts
 rules: { "react/timer-runs-after-unmount": "off" } // or "error"
-groups: { "react/effects": "off" } // the whole group
 \`\`\`
 `;
 
@@ -497,9 +491,9 @@ function checkRef(ctx: FileContext, ref: ts.VariableDeclaration, effects: readon
     ctx.unknown({
       message: fitted(
         (cut) =>
-          `stateward cannot tell whether \`${cut.name(name)}\` is cleared when the component unmounts`,
+          `not checked: whether \`${cut.name(name)}\` is cleared on unmount: its cleanup is not in the component`,
       ),
-      hint: "clear it in an effect cleanup written in the component (`clearTimeout(ref.current)`) to make it checkable",
+      hint: "clear it in an effect cleanup written in the component (`clearTimeout(ref.current)`), so it can be checked",
       node: first.call,
     });
     return;
@@ -540,10 +534,12 @@ export const timerRunsAfterUnmount = defineRule({
   kind: "file",
   meta: {
     description:
-      "A timer a component keeps in a ref is cleared when the component unmounts, so it cannot run after the component is gone.",
+      "A timer kept in a ref and not cleared on unmount still runs after the component is gone, and can navigate or call out from a page the user left.",
+    summary: "a timer kept in a ref, never cleared on unmount, that navigates or calls out later",
     defaultSeverity: "warning",
     tier: "core",
     group: "effects",
+    needsTypes: { library: "React", modules: ["react"] },
     yieldsTo: ["effect-missing-cleanup"],
     explain: EXPLAIN,
   },

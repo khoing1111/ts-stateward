@@ -11,7 +11,7 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { main } from "../src/main.js";
+import { NEXT_FIRST_RULE, main } from "../src/main.js";
 import type { CliEnv, ExitCode } from "../src/main.js";
 
 const fixtures = fileURLToPath(new URL("fixtures", import.meta.url));
@@ -159,7 +159,7 @@ describe("stateward check with rollout", { timeout: 40_000 }, () => {
     const { code, stdout } = await run(["check"]);
     expect(code).toBe(0);
     expect(stdout).toMatch(
-      /^rollout: no rule is on yet, so nothing was checked; run `stateward next` to turn on the first\n\n/,
+      /^rollout: no rule is on yet, so nothing was checked\nnext: run `npx stateward next` to turn on the first rule\n\n/,
     );
   });
 
@@ -180,7 +180,7 @@ describe("stateward next", { timeout: 40_000 }, () => {
       [
         `also on, nothing to fix: ${ORDER[0]}, ${ORDER[1]}, ${ORDER[5]}`,
         `on: ${ORDER[2]} (1 finding, 0 fixable)`,
-        "An if / else if chain over a union handles every case, so a value added later fails to compile.",
+        "A case added to the union later goes to the last `else` with no compile error; testing every case and checking the rest with `never` makes the chain fail to compile.",
         "run stateward check to see them",
         "",
       ].join("\n"),
@@ -284,7 +284,7 @@ describe("stateward check --rule", { timeout: 20_000 }, () => {
     expect(code).toBe(2);
     expect(stdout).toBe("");
     expect(stderr).toBe(
-      `stateward: unknown rule "guards/nope"; known rules: ${[...ORDER, "records/keyed-maps-out-of-sync"].sort().join(", ")}\n`,
+      `stateward: unknown rule "guards/nope"; known rules: ${[...ORDER].sort().join(", ")}\n`,
     );
   });
 
@@ -406,7 +406,7 @@ describe("stateward init on a project with many findings", { timeout: 20_000 }, 
     expect(stdout).toContain(
       "  29 findings across 3 rules: turning on one rule at a time (stateward plan, stateward next)",
     );
-    expect(stdout).toContain("Then run: stateward plan");
+    expect(stdout).toContain(NEXT_FIRST_RULE);
     // The generated config works: plan reads it and nothing is on yet.
     const plan = await run(["plan"]);
     expect(plan.code).toBe(0);

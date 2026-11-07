@@ -17,7 +17,17 @@ export type Site = {
 
 export type Missing = { site: Site; context: string };
 
-export type WalkResult = { reached: ReadonlySet<string>; missing: readonly Missing[] };
+/** How a component was first reached: the site that renders it, inside `from` (null: an entry). */
+export type Arrival = { site: Site; from: string | null };
+
+export type WalkResult = {
+  reached: ReadonlySet<string>;
+  missing: readonly Missing[];
+  /** Per component reached, each set of Providers that can be above it. */
+  above: ReadonlyMap<string, readonly ContextSet[]>;
+  /** Per component reached, how the walk first got there: the path from an entry, backwards. */
+  arrivals: ReadonlyMap<string, Arrival>;
+};
 
 /** The sites inside a component: each render of an own component, where it is written. */
 export function sitesIn(graph: Graph, componentId: string): Site[] {
@@ -60,24 +70,33 @@ export function walkFromEntries(
   const reached = new Set<string>();
   const missing = new Map<string, Missing>();
   const seen = new Set<string>();
+  const aboveSets = new Map<string, ContextSet[]>();
+  const arrivals = new Map<string, Arrival>();
 
-  const visit = (site: Site, outer: ContextSet, suppressed: ContextSet): void => {
+  const visit = (
+    site: Site,
+    outer: ContextSet,
+    suppressed: ContextSet,
+    from: string | null,
+  ): void => {
     for (const here of site.sets) {
       const above = union(outer, here);
       const key = stateKey(site.target, above, suppressed);
       if (seen.has(key)) continue;
       seen.add(key);
       reached.add(site.target);
+      if (!arrivals.has(site.target)) arrivals.set(site.target, { site, from });
+      aboveSets.set(site.target, [...(aboveSets.get(site.target) ?? []), above]);
       const absent = minus(needs.get(site.target) ?? new Set<string>(), above, suppressed);
       for (const context of absent) {
         const found = siteKey(site, context);
         if (!missing.has(found)) missing.set(found, { site, context });
       }
       const next = union(suppressed, absent);
-      for (const inner of sitesIn(graph, site.target)) visit(inner, above, next);
+      for (const inner of sitesIn(graph, site.target)) visit(inner, above, next, site.target);
     }
   };
 
-  for (const entry of entries) visit(entry, new Set<string>(), new Set<string>());
-  return { reached, missing: [...missing.values()] };
+  for (const entry of entries) visit(entry, new Set<string>(), new Set<string>(), null);
+  return { reached, missing: [...missing.values()], above: aboveSets, arrivals };
 }

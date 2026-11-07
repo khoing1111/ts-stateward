@@ -13,94 +13,83 @@ export const GROUP = "catch";
 
 const EXPLAIN = `# errors/catch-misses-error
 
-A catch that branches with instanceof handles every error class its try can throw, or rethrows the rest; so does an error boundary's fallback.
+An error class the \`try\` can throw and the \`catch\` does not test goes to the generic branch, or is ignored; a branch for it, or a rethrow, handles it explicitly.
 
-## Why
+\`\`\`ts example-bad
+class AuthError extends Error {}
+class RateLimitError extends Error {}
 
-A \`catch\` that checks \`e instanceof AuthError\` says which errors it expects. When \`api.send\` can also throw \`RateLimitError\`, a rate limit falls into the generic branch: the user sees a generic error page, and the retry that would have worked never happens. This rule lists, at the \`catch\`, the classes it leaves out.
+function send(text: string, remaining: number): void {
+  if (remaining === 0) throw new RateLimitError("slow down");
+  if (text === "") throw new AuthError("signed out");
+}
 
-## When to use it
-
-Use it in code that throws its own error classes and catches them by class. It is on as an error in every preset; where a \`catch\` does not branch on \`instanceof\`, it says nothing. It works best when your functions throw classes and document them with \`@throws {T}\`.
-
-## What it catches
-
-A \`catch\` that branches with \`if\` / \`else if\` or \`switch (true)\` on \`instanceof\`, when its \`try\` can throw an error class that no branch names and nothing passes on.
-
-What the \`try\` can throw is worked out from \`throw new X(…)\` in the functions it calls, in any file, their \`@throws\` tags (also on a function declared without a body, such as \`declare function\` or a \`.d.ts\` of your own), the built-ins stateward knows (\`JSON.parse\`, \`new URL\`, \`fetch\`, …), and the packages it calls. \`stateward deps\` shows how well each package's errors are known.
-
-What counts as handled:
-
-- \`e instanceof X\` handles \`X\` and every class that extends it (\`e instanceof Error\` handles them all);
-- a last \`else\` or \`default\`, or a statement after the chain, that throws (\`throw e\`, or a new error with \`{ cause: e }\`) passes the rest on;
-- a last \`else\` or \`default\`, or code after the chain, that uses the error (\`setError(e)\`, logging it, reading a property) handles the rest. An \`else\` that ignores the error (\`showGenericError()\`) does not.
-
-### Bad
-
-\`\`\`ts
-// api.send can throw RateLimitError and AuthError.
-try {
-  await api.send(message);
-} catch (e) {
-  if (e instanceof AuthError) {
-    redirectToLogin();
-  } else {
-    showGenericError();
+export function post(text: string, remaining: number, show: (text: string) => void): void {
+  try {
+    send(text, remaining);
+  } catch (e) {
+    if (e instanceof AuthError) {
+      show("Please sign in again.");
+    } else {
+      show("Something went wrong.");
+    }
   }
 }
 \`\`\`
 
-### Good
+Add a branch for each class the message names, and rethrow what you do not handle:
 
-\`\`\`ts
-try {
-  await api.send(message);
-} catch (e) {
-  if (e instanceof AuthError) {
-    redirectToLogin();
-  } else if (e instanceof RateLimitError) {
-    retryLater();
-  } else {
-    throw e;
+\`\`\`ts example-good
+class AuthError extends Error {}
+class RateLimitError extends Error {}
+
+function send(text: string, remaining: number): void {
+  if (remaining === 0) throw new RateLimitError("slow down");
+  if (text === "") throw new AuthError("signed out");
+}
+
+export function post(text: string, remaining: number, show: (text: string) => void): void {
+  try {
+    send(text, remaining);
+  } catch (e) {
+    if (e instanceof AuthError) {
+      show("Please sign in again.");
+    } else if (e instanceof RateLimitError) {
+      show("Too many messages; try again in a minute.");
+    } else {
+      throw e;
+    }
   }
 }
 \`\`\`
 
-### Fix
+The message shows the branch in the shape of your \`catch\`, and links to the call that throws each class. There is no quick fix.
 
-Add a branch for each missing class, or rethrow what you do not handle. The message shows the branch in the shape of your \`catch\`, and links to the call that throws each class. There is no quick fix.
+## Why it matters
+
+A \`catch\` that checks \`e instanceof AuthError\` says which errors it expects. When \`send\` can also throw \`RateLimitError\`, a rate limit falls into the generic branch: the user sees "Something went wrong", and the wait that would have worked never happens. The rule lists, at the \`catch\`, the classes it leaves out, so a new error class reaches every place that has to decide about it.
 
 ## What it does not catch
 
-- A \`catch\` with no \`instanceof\` branches: it treats every error alike on purpose.
-- Errors stateward cannot see: from a package it cannot read, a callback, or a dynamic call. Only the classes it can see are checked, and the message notes each call it could not see into, with the reason. \`errors/catch-hides-unexpected\` makes sure the rest is not dropped. To fill a gap, declare a package's errors under \`facts\` in the config.
-- A class whose \`extends\` cannot be followed, or a branch with a test that is not only \`instanceof\` (\`e instanceof A && e.code === 1\`, \`isAbort(e)\`): it does not guess what that branch handles.
-- Errors from the JavaScript engine itself, such as reading a property of \`undefined\`.
-- Built-ins other than \`JSON.parse\`, \`JSON.stringify\`, \`new URL\`, \`decodeURIComponent\`, \`decodeURI\`, \`structuredClone\`, \`atob\`, \`fetch\`, \`toFixed\`, \`Array(n)\` and \`BigInt\`: they are taken not to throw.
-- Promises kept in a \`let\`, a parameter or a property; getters, setters and generators; tests other than \`instanceof\` (\`e.name === "AbortError"\`).
+What counts as handled: \`e instanceof X\` handles \`X\` and every class that extends it (\`e instanceof Error\` handles them all); a last \`else\` or \`default\`, or a statement after the chain, that throws (\`throw e\`, or a new error with \`{ cause: e }\`) passes the rest on; and one that uses the error (\`setError(e)\`, logging it, reading a property) handles the rest. An \`else\` that ignores the error, like \`show("Something went wrong.")\` above, does not. The rule is silent on:
 
-## Error boundary fallbacks
+- a \`catch\` with no \`instanceof\` branches: it treats every error alike on purpose;
+- errors stateward cannot see: from a package it cannot read, a callback, or a dynamic call. The message notes each call it could not see into, with the reason, and \`errors/catch-hides-unexpected\` makes sure the rest is not dropped;
+- a class whose \`extends\` cannot be followed, or a branch whose test is not only \`instanceof\` (\`e instanceof A && e.code === 1\`, \`isAbort(e)\`, \`e.name === "AbortError"\`): it does not guess what that branch handles;
+- errors from the JavaScript engine itself, such as reading a property of \`undefined\`;
+- built-ins other than \`JSON.parse\`, \`JSON.stringify\`, \`new URL\`, \`decodeURIComponent\`, \`decodeURI\`, \`structuredClone\`, \`atob\`, \`fetch\`, \`toFixed\`, \`Array(n)\` and \`BigInt\`: they are taken not to throw;
+- promises kept in a \`let\`, a parameter or a property; getters, setters and generators.
 
-An error boundary's fallback is a catch too: what the components below the boundary throw while rendering and in their effects, down to the next boundary, is its \`try\` (the hover on the boundary lists it). A fallback that branches with \`if\` / \`else if\`, \`switch (true)\` or \`? :\` on \`error instanceof X\` is checked the same way: each class the boundary can catch has a branch, or a branch for the rest does more than return \`null\` or nothing. The fallback is react-error-boundary's \`FallbackComponent\`, \`fallbackRender\` or \`onError\`, or a boundary class's \`getDerivedStateFromError\`.
+## Getting the best from it
 
-\`\`\`tsx
-// SettingsPage, under this boundary, can throw ParseError.
-function UserErrorPage({ error }: FallbackProps) {
-  if (error instanceof NotFoundError) return <p>This user does not exist.</p>;
-  return <p>Something went wrong: {String(error)}</p>; // a branch for the rest
-}
-\`\`\`
+What the \`try\` can throw is worked out from \`throw new X(…)\` in the functions it calls, in any file; their \`@throws {X}\` tags (also on a function with no body, such as \`declare function\` or a \`.d.ts\` of your own); the built-ins above; and the packages it calls (\`stateward deps\` shows how well each package's errors are known). So throw classes, not strings, and document what a function throws with \`@throws\`. Declare a package's errors under \`facts\` in the config: \`facts: { "config-lib": { load: { throws: ["ConfigError"] } } }\`.
 
-A fallback that does not branch on \`instanceof\`, or whose tests are not only \`instanceof\`, is left alone; so is one passed as anything other than a function written in place or the name of a function of the project.
+An error boundary's fallback is checked the same way: what the components below the boundary throw while rendering and in their effects, down to the next boundary, is its \`try\` (the hover on the boundary lists it). A fallback (react-error-boundary's \`FallbackComponent\`, \`fallbackRender\` or \`onError\`, or a boundary class's \`getDerivedStateFromError\`) that branches with \`if\` / \`else if\`, \`switch (true)\` or \`? :\` on \`error instanceof X\` needs a branch for each class the boundary can catch, or a branch for the rest that does more than return \`null\` or nothing. A fallback that does not branch on \`instanceof\`, whose tests are not only \`instanceof\`, or that is passed as anything other than a function written in place or the name of one of your functions, is left alone.
 
 ## Turn it on or off
 
-In \`stateward.config.ts\`:
-
 \`\`\`ts
 rules: { "errors/catch-misses-error": "off" } // or "warning"
-groups: { "errors/catch": "off" } // the whole group
-facts: { "config-lib": { load: { throws: ["ConfigError"] } } } // declare a package's errors
 rules: { "errors/catch-misses-error": ["error", { ignoreClasses: ["SyntaxError"] }] } // never require a branch for these
 \`\`\`
 `;
@@ -112,8 +101,8 @@ const MAX_UNKNOWN_NOTES = 2;
 
 function headline(names: readonly string[], via: string | undefined): string {
   return fitted((cut) => {
-    const source = via === undefined ? "its `try` block" : `\`${cut(via)}\``;
-    return `this catch does not handle ${codeList(names, cut)}, which ${source} can throw`;
+    const source = via === undefined ? "thrown in its `try` block" : `from \`${cut(via)}\``;
+    return `\`catch\` does not handle ${codeList(names, cut)} ${source}`;
   });
 }
 
@@ -191,7 +180,7 @@ function report(
   for (const source of unknowns.slice(0, MAX_UNKNOWN_NOTES)) {
     related.push({
       location: { file: source.file, start: source.start, end: source.end },
-      message: `\`${source.text}\` may also throw errors stateward cannot list (${source.reason}); rethrow what you do not handle`,
+      message: `\`${source.text}\` may also throw errors that are not known (${source.reason}); rethrow what you do not handle`,
     });
   }
   emit({
@@ -214,7 +203,8 @@ export const catchMissesError = defineRule({
   kind: "project",
   meta: {
     description:
-      "A catch that branches with instanceof handles every error class its try can throw, or rethrows the rest; so does an error boundary's fallback.",
+      "An error class the `try` can throw and the `catch` does not test goes to the generic branch, or is ignored; a branch for it, or a rethrow, handles it explicitly.",
+    summary: "a `catch` that branches on error classes but misses one its `try` can throw",
     defaultSeverity: "error",
     tier: "core",
     group: GROUP,

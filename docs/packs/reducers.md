@@ -4,53 +4,93 @@
 
 A reducer reaches every state it declares and can leave every state it enters.
 
-## Rules
+## Turn it on
 
-Rules sit under their group. Set a whole group in the config, `groups: { "reducers/graph": "warning" }`, or one rule under `rules`; a rule's own entry wins.
-
-### graph
-
-| Rule | Kind | recommended | strict | What it checks |
-| --- | --- | --- | --- | --- |
-| [state-cannot-leave](../rules/reducers/state-cannot-leave.md) | Core | warning | warning | A state a reducer reaches but never leaves is marked final, so a missing way out does not go unnoticed. |
-| [state-unreachable](../rules/reducers/state-unreachable.md) | Core | error | error | A state of a reducer that no event can lead to. |
-| [reducer-not-readable](../rules/reducers/reducer-not-readable.md) | Coverage | info | error | A place in or around a reducer that stateward cannot read, so its other reducer checks cannot cover it. |
-
-## Options
-
-Set in the config as `rules: { "<rule>": [severity, { option: value }] }`.
-
-### reducer-not-readable
-
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of place stateward cannot read. Kinds: `whole-return`: a `return` typed as the whole state union, or a constant whose state cannot be read; `unknown-start`: a `useReducer` start that is not a known state; `may-start-anywhere`: a reducer used outside `useReducer`, or exported from your package, with no `@initial`; `unquoted-tag`: an `@initial` or `@final` tag that lists states without quotes; `unknown-initial`: a name in `@initial` that is not a state. |
-
-### state-cannot-leave
-
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `finalStates` | list of strings | `[]` | State names that are final in every reducer, as if listed in `@final` (done, cancelled, closed*). |
-| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of finding. Kinds: `never-left`: a state the reducer reaches and never leaves, not marked final; `final-left`: a state marked `@final` that the reducer does leave; `unknown-final`: a name in `@final` that is not a state of the type. |
-
-### state-unreachable
-
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `ignoreStates` | list of strings | `[]` | State names reached from outside the reducer (a restored session, a test setup), never reported (globs allowed). |
-
-## Add-ons
-
-None yet.
-
-## Settings
-
-Presets and add-ons are set in the config, not on the plugin:
+Install `@stateward/plugin-reducers` and add `reducers()` to `plugins` in `stateward.config.ts`, with a `preset` (`npx stateward init` does both):
 
 ```ts
-export default defineConfig({
-  plugins: [reducers()],
-  preset: "strict",
-  // addons: ["reducers/<addon>"],
-});
+plugins: [reducers()], preset: "recommended", // or "strict"
 ```
+
+Each rule's page has its options and what it does not catch. One rule or a whole group is set under `rules` or `groups`: `rules: { "reducers/<rule>": "warning" }`.
+
+## Rules
+
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [state-cannot-leave](../rules/reducers/state-cannot-leave.md) | a reducer state that nothing leaves and that is not marked final | A reducer state with no way out keeps the user there for good, such as a failed payment with no retry; marking it final records that this is intended. | Core | warning | warning |
+| [state-unreachable](../rules/reducers/state-unreachable.md) | a state of a reducer's union that no event can lead to | A reducer state that no event leads to is code that can never run, often a step that was planned and not written. | Core | error | error |
+| [reducer-not-readable](../rules/reducers/reducer-not-readable.md) | a reducer, or a `return` in one, whose states cannot be read, so the reducer checks skip it | The reducer checks skip a place whose states cannot be read; a type that names its states brings it back under those checks. | Coverage | info | error |
+
+## [state-cannot-leave](../rules/reducers/state-cannot-leave.md)
+
+A reducer state with no way out keeps the user there for good, such as a failed payment with no retry; marking it final records that this is intended.
+
+```ts
+// …
+type PaymentEvent = { type: "succeeded" } | { type: "declined" };
+
+function payment(state: PaymentState, event: PaymentEvent): PaymentState {
+  if (state.status !== "paying") return state;
+  return event.type === "succeeded" ? { status: "paid" } : { status: "failed" };
+}
+// …
+```
+
+```text
+warning[reducers/state-cannot-leave]: `payment` reaches "failed" but never leaves it
+```
+
+Fix: add the event that leaves the state (a retry, a cancel).
+
+Core rule: warning under `recommended` and `strict`. Group: `reducers/graph`.
+
+## [state-unreachable](../rules/reducers/state-unreachable.md)
+
+A reducer state that no event leads to is code that can never run, often a step that was planned and not written.
+
+```ts
+// …
+function checkout(state: CheckoutState, event: CheckoutEvent): CheckoutState {
+  switch (event.type) {
+    case "pay":
+      return state.status === "cart" ? { status: "paid" } : state;
+    case "reset":
+      return { status: "cart" };
+  }
+}
+// …
+```
+
+```text
+error[reducers/state-unreachable]: `checkout` never reaches "review": no case returns it
+```
+
+Fix: add the event that leads to `"review"`, or remove `"review"` from the type.
+
+Core rule: error under `recommended` and `strict`. Group: `reducers/graph`.
+
+## [reducer-not-readable](../rules/reducers/reducer-not-readable.md)
+
+The reducer checks skip a place whose states cannot be read; a type that names its states brings it back under those checks.
+
+```ts
+// …
+function advance(state: JobState, event: JobEvent): JobState {
+  if (event.type === "start") return state.status === "queued" ? { status: "running" } : state;
+  return state.status === "running" ? { status: "done" } : state;
+}
+
+function job(state: JobState, event: JobEvent): JobState {
+  return advance(state, event);
+}
+// …
+```
+
+```text
+info[reducers/reducer-not-readable]: `advance(state, event)` can return any state of `JobState`
+```
+
+Fix: write the steps in the reducer itself, or give the helper a return type that names its states (`Extract<JobState, { status: "running" | "done" }>`).
+
+Coverage rule (it points at code whose types do not say enough to check it): info under `recommended`, error under `strict`. Group: `reducers/graph`.

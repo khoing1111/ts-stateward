@@ -47,7 +47,7 @@ describe("quick pick items", () => {
       ["Show the rule plan", COMMANDS.plan],
       ["Turn on the next rule", COMMANDS.next],
       ["Explain a rule…", COMMANDS.explain],
-      ["Re-check now", COMMANDS.recheck],
+      ["Check again", COMMANDS.recheck],
     ]);
   });
 });

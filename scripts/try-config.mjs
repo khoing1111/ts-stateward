@@ -12,10 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
  * fails when this list and the add-ons the packs declare differ.
  */
 export const ALL_ADDONS = [
-  "records/keyed-maps",
-  "react/flag-combos",
   "react/effect-race",
-  "errors/catch-intent",
   "errors/narrow-try",
   "react-context/react-router",
   "react-context/dynamic-components",

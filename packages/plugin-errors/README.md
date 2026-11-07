@@ -42,10 +42,9 @@ rules: {
 Add-on rules stay off until you list their add-on:
 
 ```ts
-addons: ["errors/catch-intent", "errors/narrow-try"],
+addons: ["errors/narrow-try"],
 ```
 
-- `errors/catch-intent`: `catch-without-intent`
 - `errors/narrow-try`: `narrow-try`
 
 Every key of the config: [config.md](https://github.com/khoing1111/ts-stateward/blob/main/docs/user/config.md).
@@ -56,24 +55,24 @@ Every key of the config: [config.md](https://github.com/khoing1111/ts-stateward/
 
 ## Rules
 
-| Rule | What it finds | Kind | `recommended` | `strict` |
-| --- | --- | --- | --- | --- |
-| [must-handle-error](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/must-handle-error.md) | An error class marked @mustHandle is named in a catch or passed on with @throws by every call that can throw it. | Core | error | error |
-| [result-ignored](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/result-ignored.md) | The Result of a call is checked or passed on, not dropped as a statement, after void or after await. | Core | error | error |
-| [result-unchecked](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/result-unchecked.md) | A call that reports failure in its value, not by throwing, is checked before the code goes on as if it worked. (heuristic) | Core | warning | warning |
-| [throws-doc-mismatch](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/throws-doc-mismatch.md) | A function's @throws tag lists exactly the error classes it can throw, as far as stateward can see. | Core | error | error |
-| [catch-hides-unexpected](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/catch-hides-unexpected.md) | A catch that handles some errors with instanceof also rethrows or handles all the others. | Core | error | error |
-| [catch-misses-error](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/catch-misses-error.md) | A catch that branches with instanceof handles every error class its try can throw, or rethrows the rest; so does an error boundary's fallback. | Core | error | error |
-| [finally-can-throw](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/finally-can-throw.md) | A finally block does not call something that throws, so the error that led to it is not lost. | Core | error | error |
-| [catch-without-intent](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/catch-without-intent.md) | Experimental: on real projects it is mostly wrong; it may change or be removed. A catch that handles every error says how: it narrows, reports, or falls back; one that only logs, or calls something stateward cannot judge, and carries on is reported. (heuristic) | Add-on `catch-intent` | warning | warning |
-| [narrow-try](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/narrow-try.md) | Calls to your own code placed in a `try` after the call it is for: move them after the `try`. | Add-on `narrow-try` | warning | warning |
-| [render-throw-without-boundary](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/render-throw-without-boundary.md) | A component that can throw a known error while rendering has an error boundary above it. | Core | warning | warning |
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [must-handle-error](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/must-handle-error.md) | a call that can throw an error marked `@mustHandle`, with no code that handles or passes it on | An error marked `@mustHandle` needs a decision at each call, such as a message to the user; a call that neither catches it nor passes it on lets it reach the top. | Core | error | error |
+| [result-ignored](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/result-ignored.md) | a `Result` dropped as a statement, after `void` or after `await` | A `Result` dropped as a statement discards its error, so a failed call looks the same as a successful one. | Core | error | error |
+| [result-unchecked](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/result-unchecked.md) | a call that fails in its value (an RTK Query trigger, a Result) used as if it had worked (guess) | A call that returns its failure instead of throwing never reaches the `catch`; without a check, the code after it runs as if the call worked. | Core | warning | warning |
+| [throws-doc-mismatch](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/throws-doc-mismatch.md) | a `@throws` tag that lists an error the function cannot throw, or misses one it can | Callers decide what to catch from `@throws`: a class it omits reaches them unhandled, and a class listed in excess asks them to handle a case that cannot happen. | Core | error | error |
+| [catch-hides-unexpected](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/catch-hides-unexpected.md) | a `catch` that handles some error classes with `instanceof` and ignores the rest | A `catch` that tests some error classes and has no last branch ignores every other error, bugs included; rethrowing the rest keeps them visible. | Core | error | error |
+| [catch-misses-error](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/catch-misses-error.md) | a `catch` that branches on error classes but misses one its `try` can throw | An error class the `try` can throw and the `catch` does not test goes to the generic branch, or is ignored; a branch for it, or a rethrow, handles it explicitly. | Core | error | error |
+| [finally-can-throw](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/finally-can-throw.md) | a `finally` that calls something that can throw and replace the original error | An error thrown in `finally` replaces the error that was already thrown, so the report names the cleanup instead of the original cause. | Core | error | error |
+| [narrow-try](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/narrow-try.md) | calls to your own code inside a `try` after the call it is for, so their bugs look like its failure | A bug in code inside a `try` meant for another call is caught and reported as that call's failure; moving the code after the `try` keeps the two apart. | Add-on `narrow-try` | warning | warning |
+| [render-throw-without-boundary](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/errors/render-throw-without-boundary.md) | a component that can throw a known error while rendering, with no error boundary above it | An error thrown while rendering, with no error boundary above the component, unmounts the whole React tree and leaves a blank page. | Core | warning | warning |
 
-Kind: **Core** rules are on in every preset. **Coverage** rules ask your types to say more; they
-are info under `recommended` and errors under `strict`. **Add-on** rules stay off until you list
-their add-on in `addons`; the table shows their severity once it is listed. A heuristic rule
-guesses, so it is never an error unless you set it.
+**Core** rules are on in every preset. **Coverage** rules point at code whose types do not say
+enough for stateward to check it; they are info under `recommended` and errors under `strict`.
+**Add-on** rules stay off until you list their add-on in `addons`; the table shows their severity
+once it is listed. A rule marked (guess) judges from patterns in the code, not only from types, so
+it can be wrong and is never an error unless you make it one.
 
-Each rule's page says why it matters, what it catches and misses, how to fix what it finds, and its options. The pack's page: [docs/packs/errors.md](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/errors.md). Every pack's rules: [the rules index](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/README.md).
+Each rule's page shows an example with what stateward prints for it, the fix, why it matters, what it misses, and its options. The pack's page: [docs/packs/errors.md](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/errors.md). Every pack's rules: [the rules index](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/README.md).
 
 <!-- /generated:rules -->

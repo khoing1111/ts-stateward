@@ -2,83 +2,96 @@
 
 # react/effect-response-race
 
-An effect that loads data ignores a response that arrives after its inputs have changed.
-
-- Group: react/effects
-- Tier: add-on (off until you list its add-on)
-- Add-on: react/effect-race
-- Heuristic: yes: it guesses, so it is never an error unless you set it
-- Severity under `recommended`: warning
-- Severity under `strict`: warning
-
-## Why
-
-`useEffect(() => { fetchUser(userId).then(setUser); }, [userId])` starts a request every time `userId` changes, and nothing stops the old ones. When the user clicks from profile 1 to profile 2 and the request for 1 is slower, it answers last and `setUser` shows profile 1 under the heading for 2. The bug depends on timing, so it shows up on slow networks and almost never in development.
-
-## When to use it
-
-Use it in an app that loads data in effects. It is off until you add its add-on (below), then a warning in every preset: it guesses that the awaited call is a request whose answer can arrive late. It stays on with the React Compiler, which does not change effects. Turn it off if you load data with a library that already handles this (TanStack Query, SWR, a router loader) and the effects it finds are not requests.
-
-## What it catches
-
-An effect with dependencies (or none listed, so it runs after every render) that sets state after an `await` or in a `.then`/`.catch` callback, with no cleanup that sets a flag or aborts the request.
-
-### Bad
+Without an abort in the cleanup, the response to an old request can arrive after a newer one and replace the newer data on screen.
 
 ```tsx
-useEffect(() => {
-  fetchUser(userId).then((user) => setUser(user));
-}, [userId]);
+import { useEffect, useState } from "react";
+
+declare function fetchUser(id: string, options?: { signal?: AbortSignal }): Promise<{ name: string }>;
+
+export function Profile({ userId }: { userId: string }) {
+  const [name, setName] = useState("");
+  useEffect(() => {
+    fetchUser(userId).then((user) => setName(user.name));
+  }, [userId]);
+  return <h1>{name}</h1>;
+}
 ```
 
-### Good
+`stateward check` prints:
+
+```text
+error[react/effect-response-race]: `fetchUser(…)` takes an AbortSignal the effect never passes: an answer for an old `userId` can overwrite a newer one
+ --> example.tsx:8:5
+  |
+8 |     fetchUser(userId).then((user) => setName(user.name));
+  |     ^^^^^^^^^^^^^^^^^
+  = fix: create a controller in the effect, pass its signal to `fetchUser(…)`, and abort it in the cleanup:
+        const controller = new AbortController();
+        fetchUser(…, { signal: controller.signal })
+        return () => controller.abort();
+  = note: state is set from the answer
+  = docs: stateward explain react/effect-response-race
+```
+
+Create an `AbortController` in the effect, pass its signal, and abort it in the cleanup. The quick fix writes all three:
 
 ```tsx
-useEffect(() => {
-  let ignore = false;
-  fetchUser(userId).then((user) => {
-    if (!ignore) setUser(user);
-  });
-  return () => {
-    ignore = true;
-  };
-}, [userId]);
+import { useEffect, useState } from "react";
+
+declare function fetchUser(id: string, options?: { signal?: AbortSignal }): Promise<{ name: string }>;
+
+export function Profile({ userId }: { userId: string }) {
+  const [name, setName] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchUser(userId, { signal: controller.signal }).then((user) => setName(user.name));
+    return () => controller.abort();
+  }, [userId]);
+  return <h1>{name}</h1>;
+}
 ```
 
-An `AbortController` whose `abort()` the cleanup calls works too, and also cancels the request.
+A flag that the cleanup sets, checked before each write, is proven too (the React docs' pattern): `let ignore = false;`, `if (!ignore) setName(…)`, `return () => { ignore = true; };`. It drops the late answer but lets the request run to the end.
 
-### Fix
+## Why it matters
 
-Keep a flag that the cleanup sets, and set state only while it is not set; or abort the request in the cleanup. When the project uses `@tanstack/react-query` or `swr`, the fix line suggests loading the data with it instead, since it ignores late responses for you. There is no quick fix.
+The effect starts a request every time `userId` changes, and nothing stops the old ones. When the user clicks from profile 1 to profile 2 and the request for 1 is slower, it answers last, and profile 1's name shows on profile 2's page. The bug depends on timing, so it shows up on slow networks and almost never in development.
 
 ## What it does not catch
 
-- An effect with an empty dependency list, or whose dependencies all keep their identity between renders: it runs once, so no newer request can be overtaken. Setters and `dispatch` from React, react-redux's `dispatch`, react-router's `navigate`, RTK Query's triggers and `refetch`, and the values of the hooks named in `stableHooks` (functions or objects, such as a store read from context: `stableHooks: ["useStores"]`; the setting of `react/dependency-changes-every-render`, read here too) keep their identity; the message never names one of them as the input that changed.
-- A request started in a function the effect calls but does not declare.
-- A cleanup that sets a flag the write does not check: any assignment in the cleanup counts as a guard.
-- A write after `if (…) return;` whose test reads a ref (`if (request !== latest.current) return;`, or a function of the effect that does, `if (isStale()) return;`), or an update that keeps the previous state in one branch (`setLib((prev) => (prev.api === api ? next : prev))`): the code already drops a late response.
+A function whose parameters take an `AbortSignal`, directly or as `signal` in an options object (`fetch(url, { signal })`, axios's `signal`, your own `fetchUser(id, signal)`), says it can be cancelled. For every call to one in an effect whose answer sets state (after an `await`, in a `.then`, or through a function of the component that sets state), the rule proves that the call gets the signal of an `AbortController` the effect creates and aborts in its cleanup, or that every write checks a flag the cleanup sets. What it cannot prove is an error that names the missing step. A signal received by a function written in the effect (`async function load(signal)`) counts when every call of it passes the effect's signal. It is silent on:
+
+- an effect that runs once (an empty dependency list, or dependencies that keep their identity): no newer request can overtake it;
+- the calls of TanStack Query, SWR and RTK Query, which manage their own cancellation;
+- a `catch` that sets state when the request is aborted: test `signal.aborted` there;
+- calls that take no signal, unless you list the add-on below.
+
+It stays on with the React Compiler, which does not change effects.
+
+## Getting the best from it
+
+Give your loaders a `signal` parameter and pass it on to `fetch`: the rule then proves every effect that calls them. Name your hooks whose values keep their identity in `stableHooks` (shared with `react/dependency-changes-every-render`).
+
+### Calls that cannot be cancelled
+
+With the `react/effect-race` add-on the rule also warns, as a guess, about an effect that sets state after an `await` of a call that takes no signal, when a prop or a route parameter in its dependencies can change while the request runs and no cleanup sets a flag. A write after `if (…) return;` whose test reads a ref, or an update that keeps the previous state in one branch, already drops a late response and is not reported. Name the awaited calls that are not requests in `notRequests` (`sleep`, `delay`).
 
 ## Turn it on or off
 
-Turn it on in `stateward.config.ts`:
+It is on in `recommended` and `strict`. The add-on adds the guesses about calls that cannot be cancelled.
 
 ```ts
 addons: ["react/effect-race"]
+rules: { "react/effect-response-race": ["error", { notRequests: ["sleep", "delay"] }] } // awaited calls that are not requests
+rules: { "react/effect-response-race": "off" }
 ```
 
-Then change or turn off the rule itself:
-
-```ts
-rules: { "react/effect-response-race": "off" } // or "error"
-groups: { "react/effects": "off" } // the whole group
-rules: { "react/effect-response-race": ["warning", { notRequests: ["sleep", "delay"] }] } // awaited calls that are not requests
-```
-
-### Options
-
-Set as `rules: { "react/effect-response-race": ["warning", { … }] }`.
+Options, set as `rules: { "react/effect-response-race": ["error", { … }] }`:
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
-| `notRequests` | list of strings | `[]` | Awaited calls that are not requests, so a late answer cannot happen (sleep, delay, wait*; globs on the name as called). |
+| `notRequests` | list of strings | `[]` | Awaited calls that are not requests, so a late answer cannot happen (sleep, delay, wait*; globs on the name as called). Read by the `react/effect-race` add-on. |
 | `stableHooks` | list of strings | `[]` | Hooks (names or globs) whose values keep their identity; this rule also reads the `stableHooks` of `react/dependency-changes-every-render`, so set it there once. |
+
+Core rule: error under `recommended` and `strict`. It checks more with the add-ons `react/effect-race`. Group: `react/effects`.

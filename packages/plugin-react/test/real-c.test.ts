@@ -18,11 +18,11 @@ describe("react/state-copies-prop", () => {
         file: "Blocker.tsx",
         at: "setShouldBlock(isDirty)",
         message:
-          "`shouldBlock` follows the prop `isDirty` except when set elsewhere, kept in step by an effect",
+          "`shouldBlock` copies the prop `isDirty`, except when set elsewhere, and an effect keeps them in sync",
         hint: "derive it from `isDirty` and whatever sets it to `false` (in `handleProceed`): `const shouldBlock = isDirty && !<that state>`",
         notes: [
-          "Blocker.tsx: useState(isDirty): `shouldBlock` starts as `isDirty` here",
-          "Blocker.tsx: setShouldBlock(false): `shouldBlock` is set here, not from `isDirty`",
+          "Blocker.tsx: useState(isDirty): `shouldBlock` starts as `isDirty`",
+          "Blocker.tsx: setShouldBlock(false): `shouldBlock` is set, not from `isDirty`",
         ],
         fixes: [],
       },
@@ -32,11 +32,11 @@ describe("react/state-copies-prop", () => {
         file: "Blocker.tsx",
         at: "setText(query)",
         message:
-          "`text` follows the prop `query` except when set elsewhere, kept in step by an effect",
+          "`text` copies the prop `query`, except when set elsewhere, and an effect keeps them in sync",
         hint: 'derive it from `query` and whatever sets it to `""` (in `onClear`): `const text = <that state> ? "" : query`',
         notes: [
-          "Blocker.tsx: useState(query): `text` starts as `query` here",
-          'Blocker.tsx: setText(""): `text` is set here, not from `query`',
+          "Blocker.tsx: useState(query): `text` starts as `query`",
+          'Blocker.tsx: setText(""): `text` is set, not from `query`',
         ],
         fixes: [],
       },
@@ -46,9 +46,9 @@ describe("react/state-copies-prop", () => {
         file: "Blocker.tsx",
         at: "setDraft(body)",
         message:
-          "an effect overwrites the draft `draft` with `body` whenever it changes, losing edits",
+          "effect overwrites the draft `draft` with `body` whenever it changes: edits are lost",
         hint: "drop the effect and render `<Note key={…}>` so the draft starts over when `body` changes",
-        notes: ["Blocker.tsx: useState(body): `draft` starts as `body` here"],
+        notes: ["Blocker.tsx: useState(body): `draft` starts as `body`"],
         fixes: [],
       },
     ]);

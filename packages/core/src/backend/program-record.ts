@@ -30,7 +30,7 @@ export type ProgramRecord = {
   /** Their dependency fingerprints. */
   readonly fingerprints: Readonly<Record<string, string>>;
   /**
-   * The full fingerprints (`Fingerprints.full`) of the files rules read the syntax of, by file:
+   * The hashes of what rules read of other files, by read id (`ProjectUnit.readFingerprint`):
    * filled while the run that built the program asks for them.
    */
   readonly reads: Record<string, string>;

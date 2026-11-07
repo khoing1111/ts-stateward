@@ -27,7 +27,7 @@ export default defineConfig({
   // No React code here, so no React packs.
   plugins: [unions(), records(), asyncFlow(), errors(), ownership(), reducers()],
   preset: "recommended",
-  addons: ["records/keyed-maps", "errors/catch-intent", "errors/narrow-try"],
+  addons: ["errors/narrow-try"],
   // Fixtures are deliberately bad code.
   exclude: ["**/test/**", "**/fixtures/**", "**/dist/**", "**/node_modules/**"],
 });

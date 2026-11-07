@@ -14,7 +14,7 @@ function flagged(): readonly Finding[] {
 }
 
 function failure(name: string, role: "handler" | "listener" | "callback"): string {
-  return `a failure in this async \`${name}\` ${role} is an unhandled rejection`;
+  return `unhandled rejection: nothing catches a failure of the async \`${name}\` ${role}`;
 }
 
 function body(code: string): string {
@@ -22,7 +22,7 @@ function body(code: string): string {
 }
 
 function jsx(name: string, code = "await save();"): string {
-  return `nothing awaits the handler, so catch inside it:\n    ${name}={async () => {\n    ${body(code)}\n    }}`;
+  return `catch inside the handler, since nothing awaits it:\n    ${name}={async () => {\n    ${body(code)}\n    }}`;
 }
 
 /** The example repeats the call the listener or callback was passed to, with its own arguments. */
@@ -32,7 +32,7 @@ function passed(
   last: string,
   code = "await save();",
 ): string {
-  return `nothing awaits the ${role}, so catch inside it:\n    ${first}\n    ${body(code)}\n    ${last}`;
+  return `catch inside the ${role}, since nothing awaits it:\n    ${first}\n    ${body(code)}\n    ${last}`;
 }
 
 function at(file: string, message: string, hint: string) {
@@ -92,6 +92,12 @@ describe(`async/${RULE}: an async function that nothing awaits`, () => {
         listener('someVeryLongObjectName.addEventListener("x"'),
       ),
       at(
+        "partly-caught.tsx",
+        failure("onClick", "handler"),
+        jsx("onClick", "await removeThenReload();"),
+      ),
+      at("partly-caught.tsx", failure("onClick", "handler"), jsx("onClick", "await rethrows();")),
+      at(
         "then.ts",
         failure("setTimeout", "callback"),
         callback("setTimeout", "});", 'await save().then(() => showError("saved"));'),
@@ -127,7 +133,7 @@ describe(`async/${RULE}: an async function that nothing awaits`, () => {
       "await",
       "await",
       'fetch("/api")',
-      ...Array<string>(10).fill("await"),
+      ...Array<string>(12).fill("await"),
     ]);
     for (const finding of flagged()) {
       expect(finding).toMatchObject({

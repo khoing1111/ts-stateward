@@ -116,7 +116,10 @@ describe("stateward deps", { timeout: 30_000 }, () => {
   });
 });
 
-describe("stateward cache", { timeout: 30_000 }, () => {
+// In this order: the first test needs the package cache that `deps` writes when it infers the facts,
+// and this process infers them once (the errors pack keeps them in memory), so a `cache clean` of
+// a later test before it would leave nothing to show.
+describe("stateward cache", { timeout: 30_000, shuffle: false }, () => {
   it("shows the package cache's size, and clean removes only it, saying what it removed", async () => {
     await run(["deps"]);
     const stats = await run(["cache", "stats"]);

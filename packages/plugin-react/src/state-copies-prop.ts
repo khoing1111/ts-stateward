@@ -19,63 +19,56 @@ import { fitted } from "./text.js";
 
 const EXPLAIN = `# react/state-copies-prop
 
-A state is not a copy of a prop that an effect keeps in step: one value, one owner.
+A state that copies a prop, kept in sync by an effect, differs from the prop for one render after each change and can overwrite what the user typed.
 
-## Why
+\`\`\`tsx example-bad
+import { useEffect, useState } from "react";
 
-\`const [draft, setDraft] = useState(name)\` plus \`useEffect(() => setDraft(name), [name])\` keeps two copies of one value. They disagree for a render after every change of \`name\` (the effect runs after the screen shows the old copy), and an edit the user typed into \`draft\` is silently thrown away whenever the parent passes a new \`name\`, even the same text in a new render of a list.
-
-## When to use it
-
-Use it in any React app. It is a warning in every preset. It stays on with the React Compiler, which does not change what an effect sets.
-
-## What it catches
-
-In one component or hook: \`useState(prop)\` (also \`useState(props.name)\` and \`useState(() => name)\`), and an effect that sets that state from the same prop.
-
-### Bad
-
-\`\`\`tsx
-function NameEditor({ name }: { name: string }) {
+export function NameEditor({ name }: { name: string }) {
   const [draft, setDraft] = useState(name);
   useEffect(() => {
     setDraft(name);
   }, [name]);
-  return <input value={draft} onChange={(e) => setDraft(e.target.value)} />;
+  return <input value={draft} onChange={(event) => setDraft(event.target.value)} />;
 }
 \`\`\`
 
-### Good
+Remove the effect, and give the component a \`key\` where it is rendered, so a new value starts a new editor:
 
-\`\`\`tsx
-// Where it is rendered: a new user starts a new editor.
-<NameEditor key={user.id} name={user.name} />
+\`\`\`tsx example-good
+import { useState } from "react";
 
-function NameEditor({ name }: { name: string }) {
+export function NameEditor({ name }: { name: string }) {
   const [draft, setDraft] = useState(name);
-  return <input value={draft} onChange={(e) => setDraft(e.target.value)} />;
+  return <input value={draft} onChange={(event) => setDraft(event.target.value)} />;
+}
+
+export function Profile({ user }: { user: { id: string; name: string } }) {
+  return <NameEditor key={user.id} name={user.name} />;
 }
 \`\`\`
 
-### Fix
+React then creates the editor anew when the \`key\` changes, with the new prop as its first value. When the component never changes the value itself, use the prop directly and remove the state. There is no quick fix.
 
-When the component never changes the value itself, use the prop directly and remove the state. When it does (a form the user edits), remove the effect and give the component a \`key\` that changes when it should start over: React then creates it anew, with the new prop as the initial value. There is no quick fix.
+## Why it matters
+
+\`useState(name)\` plus an effect that sets it from \`name\` keeps two copies of one value. They disagree for a render after every change of \`name\` (the effect runs after the screen shows the old copy), and what the user typed into \`draft\` is silently thrown away whenever the parent passes a new \`name\`, even the same text in a new render of a list.
 
 ## What it does not catch
 
-- A copy whose initial value is computed (\`useState(name.trim())\`) or comes from another prop.
-- A copy re-synced somewhere else than an effect (during rendering, in a parent).
-- State copied from a context or from another hook's result.
+It looks, in one component or hook, for \`useState(prop)\` (also \`useState(props.name)\` and \`useState(() => name)\`) and an effect that sets that state from the same prop. It is silent on:
 
-It says nothing of a copy that is meant to differ from the prop: a debounce or throttle hook (the state is set from the prop inside a \`setTimeout\` or another timer), or a previous value (the effect reads the copy to compare it with the prop, or counts the changes in another state). A draft the user edits (the setter is also called outside the effect, from an input) is reported with only the \`key\` fix, since the state is needed. A copy the component also sets to a fixed value elsewhere (\`setShouldBlock(false)\` when the user proceeds) follows the prop except after that event: it is reported with a value derived from the prop and a state for that event instead, \`const shouldBlock = isDirty && !<that state>\`.
+- a copy whose first value is computed (\`useState(name.trim())\`) or comes from another prop;
+- a copy set again somewhere else than an effect (during rendering, in a parent);
+- state copied from a context or from another hook's result;
+- a copy meant to differ from the prop: a debounce or throttle hook (the state is set from the prop inside a timer), or a previous value (the effect compares the copy with the prop, or counts the changes in another state).
+
+A draft the user edits (the setter is also called outside the effect, as above) is reported with only the \`key\` fix, since the state is needed. A copy the component also sets to a fixed value elsewhere (\`setShouldBlock(false)\` when the user proceeds) follows the prop except after that event: the message suggests a value derived from the prop and a state for that event, \`const shouldBlock = isDirty && !<that state>\`. The rule stays on with the React Compiler, which does not change what an effect sets.
 
 ## Turn it on or off
 
-In \`stateward.config.ts\`:
-
 \`\`\`ts
 rules: { "react/state-copies-prop": "off" } // or "error"
-groups: { "react/effects": "off" } // the whole group
 rules: { "react/state-copies-prop": ["warning", { ignore: ["draft*"] }] } // states copied on purpose
 \`\`\`
 `;
@@ -259,10 +252,12 @@ export const stateCopiesProp = defineRule({
   kind: "file",
   meta: {
     description:
-      "A state is not a copy of a prop that an effect keeps in step: one value, one owner.",
+      "A state that copies a prop, kept in sync by an effect, differs from the prop for one render after each change and can overwrite what the user typed.",
+    summary: "a state copied from a prop and kept in sync by an effect",
     defaultSeverity: "warning",
     tier: "core",
     group: "state",
+    needsTypes: { library: "React", modules: ["react"] },
     options: {
       ignore: option.strings({
         default: [],
@@ -305,7 +300,7 @@ export const stateCopiesProp = defineRule({
           ctx.report({
             message: fitted(
               (cut) =>
-                `\`${cut.name(state)}\` follows the prop \`${cut.name(prop)}\` except when set elsewhere, kept in step by an effect`,
+                `\`${cut.name(state)}\` copies the prop \`${cut.name(prop)}\`, except when set elsewhere, and an effect keeps them in sync`,
             ),
             hint: fitted(
               (cut) =>
@@ -315,9 +310,9 @@ export const stateCopiesProp = defineRule({
             related: [
               {
                 node: set.binding.call,
-                message: `\`${state}\` starts as \`${textOf(set.binding.initial ?? value, sourceFile)}\` here`,
+                message: `\`${state}\` starts as \`${textOf(set.binding.initial ?? value, sourceFile)}\``,
               },
-              { node: elsewhere.call, message: `\`${state}\` is set here, not from \`${prop}\`` },
+              { node: elsewhere.call, message: `\`${state}\` is set, not from \`${prop}\`` },
             ],
           });
           return;
@@ -326,8 +321,8 @@ export const stateCopiesProp = defineRule({
         ctx.report({
           message: fitted((cut) =>
             draft
-              ? `an effect overwrites the draft \`${cut.name(state)}\` with \`${cut.name(prop)}\` whenever it changes, losing edits`
-              : `\`${cut.name(state)}\` is a copy of the prop \`${cut.name(prop)}\`, kept in step by an effect: two sources of truth`,
+              ? `effect overwrites the draft \`${cut.name(state)}\` with \`${cut.name(prop)}\` whenever it changes: edits are lost`
+              : `\`${cut.name(state)}\` copies the prop \`${cut.name(prop)}\` and an effect keeps them in sync`,
           ),
           hint: fitted((cut) =>
             draft
@@ -342,7 +337,7 @@ export const stateCopiesProp = defineRule({
           related: [
             {
               node: set.binding.call,
-              message: `\`${state}\` starts as \`${textOf(set.binding.initial ?? value, sourceFile)}\` here`,
+              message: `\`${state}\` starts as \`${textOf(set.binding.initial ?? value, sourceFile)}\``,
             },
           ],
         });

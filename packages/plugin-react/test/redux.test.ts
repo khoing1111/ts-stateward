@@ -10,8 +10,8 @@ const handlers = {
   file: "Board.tsx",
   at: "onOpen",
   message:
-    "stateward cannot tell whether `onOpen` from `useStableCardHandlers()` is a new value each render",
-  hint: "declare `useStableCardHandlers` as a function at module level (`function useX() { … }`) to make it checkable",
+    "not checked: whether `onOpen` from `useStableCardHandlers()` is new each render: `useStableCardHandlers` is not a module-level function",
+  hint: "declare `useStableCardHandlers` as a module-level function (`function useX() { … }`), so it can be checked",
   notes: [],
   fixes: [],
 };

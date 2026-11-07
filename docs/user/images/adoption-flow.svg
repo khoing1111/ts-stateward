@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="230" viewBox="0 0 780 230" role="img" aria-labelledby="t d">
+  <title id="t">Adopting stateward on an existing app</title>
+  <desc id="d">Run init, then plan to see each rule's findings, then next to turn rules on one at a time: fix or baseline, then next again. Finally check the changed files of each pull request in CI.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#475569"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; fill: #0f172a; }
+    .h { font-size: 15px; font-weight: 600; }
+    .s { font-size: 13px; fill: #334155; }
+    .c { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; fill: #1e3a8a; }
+    .box { fill: #f8fafc; stroke: #94a3b8; stroke-width: 1.5; }
+    .loop { fill: #eff6ff; stroke: #3b82f6; stroke-width: 1.5; }
+    .ln { stroke: #475569; stroke-width: 1.8; fill: none; }
+  </style>
+  <rect width="780" height="230" rx="10" fill="#ffffff"/>
+
+  <rect class="box" x="20" y="40" width="160" height="110" rx="8"/>
+  <text class="h" x="36" y="68">1. Set up</text>
+  <text class="c" x="36" y="92">stateward init</text>
+  <text class="s" x="36" y="116">writes the config,</text>
+  <text class="s" x="36" y="134">rollout on</text>
+
+  <path class="ln" d="M180 95H208" marker-end="url(#a)"/>
+
+  <rect class="box" x="214" y="40" width="160" height="110" rx="8"/>
+  <text class="h" x="230" y="68">2. See the cost</text>
+  <text class="c" x="230" y="92">stateward plan</text>
+  <text class="s" x="230" y="116">findings per rule,</text>
+  <text class="s" x="230" y="134">in the order to go</text>
+
+  <path class="ln" d="M374 95H402" marker-end="url(#a)"/>
+
+  <rect class="loop" x="408" y="40" width="170" height="110" rx="8"/>
+  <text class="h" x="424" y="68">3. One rule at a time</text>
+  <text class="c" x="424" y="92">stateward next</text>
+  <text class="s" x="424" y="116">then fix, or accept</text>
+  <text class="s" x="424" y="134">with a baseline</text>
+  <path class="ln" d="M470 150C470 205 540 205 540 158" marker-end="url(#a)"/>
+  <text class="s" x="415" y="212">repeat until every rule is on</text>
+
+  <path class="ln" d="M578 95H606" marker-end="url(#a)"/>
+
+  <rect class="box" x="612" y="40" width="150" height="110" rx="8"/>
+  <text class="h" x="628" y="68">4. Keep it</text>
+  <text class="c" x="628" y="92">check --changed</text>
+  <text class="s" x="628" y="116">in CI: each pull</text>
+  <text class="s" x="628" y="134">request's files</text>
+</svg>

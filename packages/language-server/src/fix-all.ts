@@ -1,5 +1,14 @@
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { FixForm } from "@stateward/core/internal";
-import type { CodeAction, Range, TextEdit, WorkspaceEdit } from "vscode-languageserver/node";
+import type {
+  CodeAction,
+  CreateFile,
+  Range,
+  TextDocumentEdit,
+  TextEdit,
+  WorkspaceEdit,
+} from "vscode-languageserver/node";
 
 /**
  * Where one finding is, and the quick fixes it offers (the first is the one "fix all" applies).
@@ -113,13 +122,23 @@ export function kindWanted(only: readonly string[] | undefined, kind: string): b
 export function versionedEdit(
   changes: Readonly<Record<string, readonly TextEdit[]>>,
   versionOf: (uri: string) => number | null,
+  exists: (uri: string) => boolean = fileExists,
 ): WorkspaceEdit {
   return {
-    documentChanges: Object.entries(changes).map(([uri, edits]) => ({
-      textDocument: { uri, version: versionOf(uri) },
-      edits: [...edits],
-    })),
+    documentChanges: Object.entries(changes).flatMap(
+      ([uri, edits]): (CreateFile | TextDocumentEdit)[] => {
+        const version = versionOf(uri);
+        const edit: TextDocumentEdit = { textDocument: { uri, version }, edits: [...edits] };
+        // A fix may write a file once (a guarantees file): it is created first, then filled.
+        if (version !== null || exists(uri)) return [edit];
+        return [{ kind: "create", uri, options: { ignoreIfExists: true } }, edit];
+      },
+    ),
   };
+}
+
+function fileExists(uri: string): boolean {
+  return !uri.startsWith("file:") || existsSync(fileURLToPath(uri));
 }
 
 /** `action` with its `changes` edit turned into versioned `documentChanges`; unchanged when it has none. */

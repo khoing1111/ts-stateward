@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 /**
  * How to start `command` on `platform`: `{ file, args, shell: false }` for a program started
@@ -67,6 +67,33 @@ export function run(command, args, options = {}) {
   return { status: result.status ?? 1, output };
 }
 
+/**
+ * Like `run`, for steps that go side by side: a promise of the same `{ status, output }`. Never
+ * rejects.
+ */
+export function runAsync(command, args, options = {}) {
+  const plan = spawnPlan(command, args);
+  const settings = {
+    cwd: options.cwd,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, FORCE_COLOR: "0" },
+  };
+  return new Promise((resolve) => {
+    const child = plan.shell
+      ? spawn(plan.line, { ...settings, shell: true })
+      : spawn(plan.file, plan.args, settings);
+    const chunks = [];
+    child.stdout.on("data", (chunk) => chunks.push(chunk));
+    child.stderr.on("data", (chunk) => chunks.push(chunk));
+    child.once("error", (error) => {
+      resolve({ status: 1, output: `${Buffer.concat(chunks).toString("utf8")}${String(error)}\n` });
+    });
+    child.once("close", (status) => {
+      resolve({ status: status ?? 1, output: Buffer.concat(chunks).toString("utf8") });
+    });
+  });
+}
+
 /** The program and leading arguments that run pnpm: `pnpm` itself, or `corepack pnpm` when it is not on PATH. */
 export function pnpmCommand() {
   if (run("pnpm", ["--version"]).status === 0) return ["pnpm", []];
@@ -77,4 +104,10 @@ export function pnpmCommand() {
 export function runPnpm(args, options = {}, pnpm = pnpmCommand()) {
   const [program, leading] = pnpm;
   return run(program, [...leading, ...args], options);
+}
+
+/** `runPnpm` for steps that go side by side (see `runAsync`). */
+export function runPnpmAsync(args, options = {}, pnpm = pnpmCommand()) {
+  const [program, leading] = pnpm;
+  return runAsync(program, [...leading, ...args], options);
 }

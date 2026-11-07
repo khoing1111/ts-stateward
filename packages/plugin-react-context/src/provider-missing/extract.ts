@@ -1,9 +1,10 @@
 import path from "node:path";
 import ts from "@stateward/core/typescript";
 import type { FileContext } from "@stateward/core";
+import { declareFixOf, removalOf } from "./declare-fix.js";
 import { fateOf, isValueWrapper, type FateEnv } from "./fate.js";
 import { placementOf } from "./placement.js";
-import { createResolver, type Resolver, type Tag } from "./resolve.js";
+import { REQUIRED_CONTEXT, createResolver, type Resolver, type Tag } from "./resolve.js";
 import { createRoutes } from "./routes.js";
 import {
   ANY_CONTEXT,
@@ -115,6 +116,9 @@ function exportNamesOf(file: ts.SourceFile, ctx: FileContext): Map<string, strin
  * (what they read, call and render, and where), and the entry points it has. Resolution is by
  * declaration through `ctx.types`; the check that follows needs no type queries.
  */
+/** A marker's type text longer than this is listed by its guarantee's name instead. */
+const MARKER_TEXT_MAX = 60;
+
 export function summarizeFile(
   ctx: FileContext<{ readonly lazyFunctions: readonly string[] }>,
 ): Summary | undefined {
@@ -139,6 +143,8 @@ export function summarizeFile(
     unknowns: [],
     routes: [],
     externalContexts: [],
+    guards: [],
+    declared: [],
   };
   const hookSummaries: HookSummary[] = [];
   const scopes = new Map<ts.Node, Scope>();
@@ -411,6 +417,10 @@ export function summarizeFile(
       case "provider":
       case "route":
         return;
+      case "consumer":
+        addStated({ id: tag.context, name: tag.name, loc: tag.loc });
+        scope?.component.reads.push({ context: tag.context, loc: locOf(opening) });
+        return;
       case "prop":
         if (scope?.kind === "component") addPosition(scope, tag.name, element, opening.tagName);
         return;
@@ -484,8 +494,34 @@ export function summarizeFile(
     }
   }
 
+  /** A context stated required, read in this file: listed once, with where it is declared. */
+  function addStated(context: { id: string; name: string; loc: Loc }): void {
+    if (summary.contexts.some((known) => known.id === context.id)) return;
+    summary.contexts.push({
+      id: context.id,
+      name: context.name,
+      loc: context.loc,
+      stated: true,
+      declare: null,
+    });
+  }
+
   function handleCall(call: ts.CallExpression): void {
     const checked = resolver.checkedContextRead(call);
+    if (checked?.kind === "stated") {
+      addStated(checked);
+      const scope = scopeOf(call);
+      scope?.component.reads.push({ context: checked.id, loc: locOf(call) });
+      if (checked.guard !== undefined && scope?.kind === "hook") {
+        summary.guards.push({
+          context: checked.id,
+          hook: scope.component.name,
+          loc: locOf(checked.guard),
+          removal: removalOf(checked.guard),
+        });
+      }
+      return;
+    }
     if (checked?.kind === "external") {
       summary.externalContexts.push({ id: checked.id, name: checked.name, loc: locOf(call) });
       return;
@@ -501,7 +537,23 @@ export function summarizeFile(
     }
   }
 
+  /** A top-level context whose type states it required, read or not (`Summary.declared`). */
+  function addDeclared(declaration: ts.VariableDeclaration, name: ts.Identifier): void {
+    const statement = declaration.parent.parent;
+    if (!ts.isVariableStatement(statement) || !ts.isSourceFile(statement.parent)) return;
+    const stated = resolver.statedContext(name);
+    if (stated === undefined) return;
+    const text = ctx.types.typeTextOf(name);
+    summary.declared.push({
+      id: stated.id,
+      name: name.text,
+      loc: stated.loc,
+      marker: text.length <= MARKER_TEXT_MAX ? text : REQUIRED_CONTEXT,
+    });
+  }
+
   function handleDeclaration(declaration: ts.VariableDeclaration): void {
+    if (ts.isIdentifier(declaration.name)) addDeclared(declaration, declaration.name);
     const initializer = declaration.initializer;
     if (!ts.isIdentifier(declaration.name) || initializer === undefined) return;
     const call = ts.isCallExpression(initializer) ? initializer : undefined;
@@ -509,7 +561,14 @@ export function summarizeFile(
     if (!resolver.isMissingDefaultContextCall(call)) return;
     const symbol = ctx.types.symbolAt(declaration.name);
     if (symbol === undefined) return;
-    summary.contexts.push({ id: symbol.id, name: declaration.name.text, loc: locOf(declaration) });
+    const stated = resolver.statedContext(declaration.name) !== undefined;
+    summary.contexts.push({
+      id: symbol.id,
+      name: declaration.name.text,
+      loc: locOf(declaration),
+      stated,
+      declare: stated ? null : (declareFixOf(call, ctx.types, "unknown") ?? null),
+    });
   }
 
   const findEntries = (node: ts.Node): void => {
@@ -559,7 +618,9 @@ export function summarizeFile(
     summary.entryCalls.length === 0 &&
     summary.unknowns.length === 0 &&
     summary.routes.length === 0 &&
-    summary.externalContexts.length === 0;
+    summary.externalContexts.length === 0 &&
+    summary.guards.length === 0 &&
+    summary.declared.length === 0;
   return empty ? undefined : summary;
 }
 

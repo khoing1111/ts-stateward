@@ -18,7 +18,7 @@ import type {
  *
  * - per own file, under its dependency fingerprint (backend/fingerprints.ts), and per rule under
  *   its rule key (`ruleKey`): the findings the rule reported on that file, and a project rule's
- *   summary; with the full fingerprint of each other file whose syntax the rules read there. A
+ *   summary; with the hash of each declaration (or whole file) of another file the rules read there. A
  *   file whose fingerprint and reads are unchanged is not looked at again.
  * - per project rule, under its rule key: a hash of all its summaries, and the findings its check
  *   produced from them. Equal summaries give equal findings (a project rule decides from its
@@ -30,7 +30,7 @@ import type {
  */
 
 /** Bumped whenever what is stored, or how a key is computed, changes. */
-export const CACHE_FORMAT = 5;
+export const CACHE_FORMAT = 7;
 
 /**
  * A project rule's summary of one file: the hash of its JSON text, and either that text or, once a
@@ -93,8 +93,9 @@ export type FileEntry = {
   fingerprint: string;
   rules: ReadonlyMap<string, RuleResult>;
   /**
-   * The other files whose syntax the rules read on this file (`TypeQueries.declarationOf`), with
-   * each one's full fingerprint then: the entry holds while each is the same.
+   * What the rules on this file read of other files (`TypeQueries.declarationOf`), by read id (a
+   * declaration's qualified id, or a file's own id `src/a.ts#` for its whole text:
+   * `ProjectUnit.readsOf`), with each one's hash then: the entry holds while each is the same.
    */
   reads: ReadonlyMap<string, string>;
 };

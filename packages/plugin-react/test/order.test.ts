@@ -124,7 +124,7 @@ describe("react: project rules decide from summaries alone", () => {
     );
     const findings = run(summaries);
     expect(findings.map((finding) => finding.message)).toEqual([
-      "`x` from `useA()` is a new function every render, so this effect runs after every render",
+      "effect runs after every render: `x` from `useA()` is a new function each time",
     ]);
     expect(run([...summaries].reverse())).toEqual(findings);
     expect(run(roundTripped)).toEqual(findings);

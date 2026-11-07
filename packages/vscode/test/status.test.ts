@@ -17,7 +17,7 @@ describe("statusView", () => {
   });
 
   it("says no rules are on, never a check mark, when the config turns none on", () => {
-    expect(statusView({ ...off(0), noRulesOn: true }).text).toBe("stateward: no rules on");
+    expect(statusView({ ...off(0), noRulesOn: true }).text).toBe("Stateward: no rules on");
   });
 
   it("shows a check mark when rollout is off and nothing is an error", () => {

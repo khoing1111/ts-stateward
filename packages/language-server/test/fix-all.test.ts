@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CodeAction, Range } from "vscode-languageserver/node";
-import { fixAllEdits, kindWanted, type FixSite } from "../src/fix-all.js";
+import { fixAllEdits, kindWanted, versionedEdit, type FixSite } from "../src/fix-all.js";
 
 const URI = "file:///p/a.ts";
 const range = (line: number, from: number, to: number): Range => ({
@@ -132,5 +132,34 @@ describe("kindWanted", () => {
     expect(kindWanted(["source.fixAll"], "quickfix")).toBe(false);
     expect(kindWanted(["quickfix"], "source.fixAll.stateward")).toBe(false);
     expect(kindWanted(["source.fix"], "source.fixAll.stateward")).toBe(false);
+  });
+});
+
+describe("versionedEdit", () => {
+  const NEW = "file:///p/src/guarantees.ts";
+  const edit = { range: range(0, 0, 0), newText: "x" };
+
+  it("creates a file a fix writes before filling it, and versions an open one", () => {
+    const made = versionedEdit(
+      { [URI]: [edit], [NEW]: [edit] },
+      (uri) => (uri === URI ? 3 : null),
+      (uri) => uri === URI,
+    );
+    expect(made.documentChanges).toEqual([
+      { textDocument: { uri: URI, version: 3 }, edits: [edit] },
+      { kind: "create", uri: NEW, options: { ignoreIfExists: true } },
+      { textDocument: { uri: NEW, version: null }, edits: [edit] },
+    ]);
+  });
+
+  it("does not create a file that exists but is not open", () => {
+    const made = versionedEdit(
+      { [URI]: [edit] },
+      () => null,
+      () => true,
+    );
+    expect(made.documentChanges).toEqual([
+      { textDocument: { uri: URI, version: null }, edits: [edit] },
+    ]);
   });
 });

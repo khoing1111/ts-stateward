@@ -40,8 +40,8 @@ describe("unions", () => {
       expect(rule.meta.description.length).toBeGreaterThan(0);
       const explain = rule.meta.explain;
       expect(explain).toContain(`# unions/${key}`);
-      expect(explain).toContain("## Bad");
-      expect(explain).toContain("## Good");
+      expect(explain).toContain("example-bad");
+      expect(explain).toContain("example-good");
       expect(explain).toContain(`rules: { "unions/${key}": "off" }`);
     },
   );

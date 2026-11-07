@@ -36,8 +36,31 @@ describe("messageProblems: a hint with a code example", () => {
 describe("messageProblems", () => {
   it("accepts a good finding, problem or unknown", () => {
     expect(messageProblems(problem())).toEqual([]);
-    const unknown: Finding = { kind: "unknown", ruleId: "r", message: "m", hint: "h", location };
+    const unknown: Finding = {
+      kind: "unknown",
+      ruleId: "r",
+      message: "not checked: which cases `kind` has: its type is `any`",
+      hint: "h",
+      location,
+    };
     expect(messageProblems(unknown)).toEqual([]);
+  });
+
+  it('rejects pointing words, a question, "stateward cannot", and a place not checked that does not say so first', () => {
+    expect(messageProblems(problem({ message: "this `default` takes it" }))).toEqual([
+      'headline must not point with "this"',
+    ]);
+    expect(messageProblems(problem({ message: "a fixed table or an open dictionary?" }))).toEqual([
+      "headline must not be a question",
+    ]);
+    expect(messageProblems(problem({ message: "stateward cannot tell what `x` is" }))).toEqual([
+      'headline must not say "stateward cannot"',
+    ]);
+    expect(messageProblems(problem({ message: "the case in `this` is missing" }))).toEqual([]);
+    const unknown: Finding = { kind: "unknown", ruleId: "r", message: "m", hint: "h", location };
+    expect(messageProblems(unknown)).toEqual([
+      'a place not checked must start with "not checked: "',
+    ]);
   });
 
   it("rejects an empty, multi-line or too long headline", () => {
@@ -66,6 +89,7 @@ describe("messageProblems", () => {
   it('rejects a headline that starts with "You" or has "!"', () => {
     expect(messageProblems(problem({ message: "You forgot it" }))).toEqual([
       'headline must not start with "You"',
+      'headline must not point with "You"',
     ]);
     expect(messageProblems(problem({ message: "Wrong!" }))).toEqual([
       'headline must not contain "!"',

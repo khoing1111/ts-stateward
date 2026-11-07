@@ -36,7 +36,8 @@ export type PlanRule = {
 
 export type Plan = { rollout: boolean; enabled: readonly string[]; rules: readonly PlanRule[] };
 
-export type NextKind = "turned-on" | "all-on" | "blocked" | "rollout-off" | "failed";
+export type NextKind =
+  "turned-on" | "all-on" | "blocked" | "not-checked" | "rollout-off" | "failed";
 export type NextAnswer = { kind: NextKind; message: string };
 
 /** The server answered with something this version of the extension does not understand. */
@@ -144,7 +145,14 @@ export function parsePlan(value: unknown): Plan {
   return { rollout: value.rollout, enabled, rules: complete };
 }
 
-const NEXT_KINDS: readonly NextKind[] = ["turned-on", "all-on", "blocked", "rollout-off", "failed"];
+const NEXT_KINDS: readonly NextKind[] = [
+  "turned-on",
+  "all-on",
+  "blocked",
+  "not-checked",
+  "rollout-off",
+  "failed",
+];
 
 /** The answer to `stateward/next`; throws `UnexpectedAnswerError` for anything else. */
 export function parseNext(value: unknown): NextAnswer {

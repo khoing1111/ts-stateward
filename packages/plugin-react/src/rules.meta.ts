@@ -7,10 +7,13 @@ export const RULES = {
     kind: "project",
     meta: {
       description:
-        "A dependency of an effect, `useMemo` or `useCallback`, or a prop of a `memo` component, is not a new value that a custom hook creates on every render.",
+        "A dependency that a hook in the project creates on every render makes the effect or `useMemo` run on every render, and a `memo` child render every time.",
+      summary:
+        "an effect or memo dependency that a hook in the project creates anew on every render",
       defaultSeverity: "warning",
       tier: "core",
       group: "render",
+      needsTypes: { library: "React", modules: ["react"] },
       options: {
         memoProps: {
           kind: "boolean",
@@ -40,7 +43,7 @@ export const RULES = {
           kind: "severities",
           default: {},
           kinds: {
-            "from-hook": "the value is created inside one of your hooks: wrap it there.",
+            "from-hook": "the value is created inside a hook in the project: wrap it there.",
             "from-function":
               "the value comes from a plain function of yours (`getColumns(prefix)`), called here or in a hook: wrap the call.",
             derived:
@@ -54,10 +57,13 @@ export const RULES = {
   "provider-value-changes-every-render": {
     kind: "file",
     meta: {
-      description: "A context Provider is not given a value created anew on every render.",
+      description:
+        "A Provider value created on every render re-renders every component that reads the context, even when nothing in the value changed.",
+      summary: "a context Provider given a new object or function on every render",
       defaultSeverity: "warning",
       tier: "core",
       group: "render",
+      needsTypes: { library: "React", modules: ["react"] },
       options: {
         ignore: {
           kind: "strings",
@@ -72,10 +78,12 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "A value computed from props or state is computed while rendering, not copied into state by an effect.",
+        "Copying a computed value into state in an effect adds a render that shows the old value first; computing it while rendering shows the new value at once.",
+      summary: "an effect that only copies a value computed from props or state into state",
       defaultSeverity: "warning",
       tier: "core",
       group: "effects",
+      needsTypes: { library: "React", modules: ["react"] },
       options: {
         ignore: {
           kind: "strings",
@@ -89,10 +97,12 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "A state is not a copy of a prop that an effect keeps in step: one value, one owner.",
+        "A state that copies a prop, kept in sync by an effect, differs from the prop for one render after each change and can overwrite what the user typed.",
+      summary: "a state copied from a prop and kept in sync by an effect",
       defaultSeverity: "warning",
       tier: "core",
       group: "state",
+      needsTypes: { library: "React", modules: ["react"] },
       options: {
         ignore: {
           kind: "strings",
@@ -106,20 +116,25 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "An effect does not set, every time it runs, a state it depends on to a new value: that is a render loop.",
+        "An effect that sets one of its own dependencies to a new value each time it runs triggers itself again, so the component renders without end.",
+      summary: "an effect that sets, every time it runs, a state it depends on: a render loop",
       defaultSeverity: "error",
       tier: "core",
       group: "effects",
+      needsTypes: { library: "React", modules: ["react"] },
     },
   },
   "effect-missing-cleanup": {
     kind: "file",
     meta: {
       description:
-        "An effect that starts a listener, timer, subscription, observer or connection returns a cleanup that stops it.",
+        "A listener, timer or subscription that an effect starts and never stops keeps running after unmount, and each run of the effect adds another one.",
+      summary:
+        "an effect that starts a listener, timer, subscription or connection and never stops it",
       defaultSeverity: "warning",
       tier: "core",
       group: "effects",
+      needsTypes: { library: "React", modules: ["react"] },
       options: {
         observers: {
           kind: "strings",
@@ -162,18 +177,20 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "An effect that loads data ignores a response that arrives after its inputs have changed.",
-      defaultSeverity: "warning",
-      tier: "addon",
-      addon: "effect-race",
+        "Without an abort in the cleanup, the response to an old request can arrive after a newer one and replace the newer data on screen.",
+      summary:
+        "an effect that calls a loader taking an `AbortSignal` and does not abort it in its cleanup",
+      defaultSeverity: "error",
+      tier: "core",
       group: "effects",
-      heuristic: true,
+      widenedBy: ["effect-race"],
+      needsTypes: { library: "React", modules: ["react"] },
       options: {
         notRequests: {
           kind: "strings",
           default: [],
           description:
-            "Awaited calls that are not requests, so a late answer cannot happen (sleep, delay, wait*; globs on the name as called).",
+            "Awaited calls that are not requests, so a late answer cannot happen (sleep, delay, wait*; globs on the name as called). Read by the `react/effect-race` add-on.",
         },
         stableHooks: {
           kind: "strings",
@@ -189,10 +206,12 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "A timer a component keeps in a ref is cleared when the component unmounts, so it cannot run after the component is gone.",
+        "A timer kept in a ref and not cleared on unmount still runs after the component is gone, and can navigate or call out from a page the user left.",
+      summary: "a timer kept in a ref, never cleared on unmount, that navigates or calls out later",
       defaultSeverity: "warning",
       tier: "core",
       group: "effects",
+      needsTypes: { library: "React", modules: ["react"] },
       yieldsTo: ["effect-missing-cleanup"],
     },
   },
@@ -200,10 +219,13 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "A state setter called from a timer, a listener or a callback that outlives its render passes an updater function, not a value computed from the state.",
+        "A timer or listener created in an earlier render reads the state of that render; setting state from it overwrites newer values, which an updater avoids.",
+      summary:
+        "a timer, listener or callback that sets state from a value captured in an old render",
       defaultSeverity: "warning",
       tier: "core",
       group: "state",
+      needsTypes: { library: "React", modules: ["react"] },
       options: {
         listenerMethods: {
           kind: "strings",
@@ -218,10 +240,12 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "A list that is filtered, sorted, reversed, spliced or added to at the front is not keyed by the position of its rows.",
+        "With `key={index}` on a list that is filtered or reordered, React keeps each row's state by position, so the state moves to a different item.",
+      summary: "`key={index}` on a list that is filtered, sorted or added to at the front",
       defaultSeverity: "warning",
       tier: "core",
       group: "render",
+      needsTypes: { library: "React", modules: ["react"] },
       heuristic: true,
       options: {
         textOnlyRows: {
@@ -234,40 +258,6 @@ export const RULES = {
           kind: "strings",
           default: [],
           description: "Lists (names or globs like *Log) keyed by position on purpose.",
-        },
-      },
-    },
-  },
-  "flags-allow-impossible-combos": {
-    kind: "file",
-    meta: {
-      description:
-        "Boolean or nullable useState values that are read or set together become one state, so combinations that make no sense cannot happen.",
-      defaultSeverity: "warning",
-      tier: "addon",
-      addon: "flag-combos",
-      group: "state",
-      heuristic: true,
-      options: {
-        minVariables: {
-          kind: "number",
-          default: 2,
-          min: 2,
-          integer: true,
-          description:
-            "How many variables used together make a finding: 3 reports only larger piles of flags.",
-        },
-        setTogether: {
-          kind: "boolean",
-          default: true,
-          description:
-            "Count variables set in one callback as used together; false counts only those read in one condition.",
-        },
-        ignore: {
-          kind: "strings",
-          default: [],
-          description:
-            "State variable names (globs like is*Open) that are independent flags: never counted.",
         },
       },
     },

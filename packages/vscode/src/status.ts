@@ -13,7 +13,7 @@ export const WAITING_VIEW: StatusView = {
 
 /** The config turns no rule on: say so, so a clean status bar is never mistaken for a clean project. */
 export const NO_RULES_VIEW: StatusView = {
-  text: "stateward: no rules on",
+  text: "Stateward: no rules on",
   tooltip:
     'Stateward: no rules are on. Add `preset: "recommended"`, a group or a rule to stateward.config. Click for actions.',
 };

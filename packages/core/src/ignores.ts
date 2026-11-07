@@ -287,11 +287,6 @@ export function fileDirectives(
   return { directives, stored: true };
 }
 
-/** The ignore comments of one file, read now (the fast pass has no cache to keep them in). */
-export function readFileDirectives(unit: ProjectUnit, file: string): readonly IgnoreDirective[] {
-  return readDirectives(unit, file);
-}
-
 // ---- applying them -----------------------------------------------------------------------------
 
 /** The ids a comment may name, and the ones whose rule ran, for "nothing to ignore" to be a fair judgement. */
@@ -388,7 +383,7 @@ function judge(
         file,
         here,
         "warning",
-        "this ignore does not name a rule",
+        "ignore comment does not name a rule",
         `write the rule, then why: \`// ${form} <rule>: <why this case is fine>\``,
         [],
       ),
@@ -430,14 +425,14 @@ function judge(
           fits(
             `\`${rule.id}\` is not a stateward rule`,
             MAX_HEADLINE,
-            "this ignore names a rule that does not exist",
+            "ignore comment names a rule that does not exist",
           ),
           fits(
             guess === undefined
-              ? "write a rule id as a finding shows it, such as `records/lookup-misses-key`; this ignore does nothing until then"
-              : `did you mean \`${guess}\`? this ignore does nothing until the id is right`,
+              ? "write a rule id as a finding shows it, such as `records/lookup-misses-key`; until then the comment ignores nothing"
+              : `write \`${guess}\`, the rule with the nearest name; until then the comment ignores nothing`,
             MAX_HINT,
-            "check the rule id; this ignore does nothing until it is right",
+            "check the rule id; until it is right the comment ignores nothing",
           ),
           guess === undefined
             ? []
@@ -456,22 +451,22 @@ function judge(
   if (unused.length > 0 && scope.options.reportUnused !== "off") {
     const everything = unused.length === directive.rules.length;
     const keep = directive.rules.map((rule) => rule.id).filter((id) => !unused.includes(id));
-    const where = directive.file ? "in this file" : "here";
+    const where = directive.file ? "in the file" : "in the code it covers";
     found.push(
       commentFinding(
         file,
         here,
         scope.options.reportUnused,
         fits(
-          `this ignore is not needed: ${names(unused)} finds nothing ${where}`,
+          `ignore comment is not needed: ${names(unused)} finds nothing ${where}`,
           MAX_HEADLINE,
-          `this ignore is not needed: ${String(unused.length)} of its rules find nothing ${where}`,
+          `ignore comment is not needed: ${String(unused.length)} of its rules find nothing ${where}`,
         ),
         "remove it (quick fix); the code it covered is fixed, or has moved",
         [
           everything
             ? {
-                title: "Remove this ignore",
+                title: "Remove the ignore comment",
                 safe: true,
                 edits: [
                   {
@@ -481,7 +476,7 @@ function judge(
                 ],
               }
             : {
-                title: `Remove ${names(unused)} from this ignore`,
+                title: `Remove ${names(unused)} from the ignore comment`,
                 safe: true,
                 edits: [{ location: { file, ...here }, newText: rebuilt(directive, keep) }],
               },
@@ -496,7 +491,7 @@ function judge(
         file,
         here,
         "warning",
-        "this ignore does not say why the case is fine",
+        "ignore comment does not say why the case is fine",
         fits(
           `add the reason after a colon: \`// ${form} ${first}: <why this case is fine>\``,
           MAX_HINT,
@@ -581,7 +576,7 @@ Put a comment on the line above a finding that is intended, with the rule and th
 
 Several rules go in one comment, separated by commas. For a whole file, put
 \`// stateward-ignore-file <rule>: <reason>\` above its first statement. Comment lines between the
-ignore and the code are fine. In VS Code, the quick fix "Ignore this case here" writes the comment.
+ignore and the code are fine. In VS Code, the quick fix "Add an ignore comment" writes it.
 
 ## What it catches
 
@@ -601,7 +596,7 @@ It is always on. \`stateward check --no-ignores\` shows the findings that commen
 summary counts them ("2 ignored in the code"). Fix a comment, or remove it, to clear its finding.
 `;
 
-export const IGNORE_FIX_TITLE = "Ignore this case here";
+export const IGNORE_FIX_TITLE = "Add an ignore comment";
 
 /**
  * "Ignore this case here": `// stateward-ignore <rule>: ` on the line above the finding, indented

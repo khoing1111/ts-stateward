@@ -7,37 +7,6 @@ import { brief, checkWith, fixture } from "./helpers.js";
  * every option is today's behaviour, which the rule's own tests cover.
  */
 
-describe("errors/catch-without-intent options", () => {
-  const dir = fixture("options/no-swallow");
-  const logs = (options: Record<string, readonly string[]>): number =>
-    brief(checkWith(dir, "catch-without-intent", ["warning", options])).filter((line) =>
-      line.endsWith(": this catch logs the error and carries on as if nothing failed"),
-    ).length;
-
-  it("recognises console by default and nothing of the team's own", () => {
-    expect(logs({})).toBe(1);
-  });
-
-  it("takes the team's own log functions, loggers and log methods", () => {
-    expect(logs({ logFunctions: ["log*"] })).toBe(2);
-    expect(logs({ loggers: ["console", "*Logger"] })).toBe(2);
-    expect(logs({ logMethods: ["record"] })).toBe(2);
-    expect(logs({ loggers: [], logMethods: [] })).toBe(0);
-  });
-
-  it("counts a project function as reporting or ignoring only when it is declared, Sentry without it", () => {
-    const edge = fixture("catch-without-intent/edge");
-    const count = (options: Record<string, readonly string[]>): number =>
-      checkWith(edge, "catch-without-intent", ["warning", options]).length;
-    expect(count({})).toBe(3);
-    expect(count({ edgeHelpers: ["reportAndShow"] })).toBe(2);
-    expect(count({ edgeHelpers: ["reportAndShow", "Sentry.*"] })).toBe(2);
-    expect(count({ edgeHelpers: ["reportAndShow", "Sentry.*"], swallowHelpers: ["ignore*"] })).toBe(
-      1,
-    );
-  });
-});
-
 /** How many findings of the rule mention `text` under the options given. */
 function count(
   name: string,
@@ -69,7 +38,7 @@ describe("errors/catch-hides-unexpected option `restUsesError`", () => {
     expect(
       brief(checkWith(fixture(dir), "catch-hides-unexpected", ["error", { restUsesError: true }])),
     ).toEqual([
-      "error handled.ts: errors other than `NotFoundError` are handled here without ever using `e`",
+      "error handled.ts: `catch` handles errors other than `NotFoundError` without looking at `e`",
     ]);
   });
 });
@@ -98,8 +67,8 @@ describe("errors/throws-doc-mismatch options", () => {
       checkWith(dir, "throws-doc-mismatch", ["error", { severities: { extra: "warning" } }]),
     );
     expect(lines.filter((line) => line.startsWith("warning"))).toEqual([
-      "warning docs.ts: `@throws` lists `ValidationError`, which `listsTooMuch` cannot throw",
-      "warning docs.ts: `@throws` lists `ValidationError`, which `viaThen` cannot throw",
+      "warning docs.ts: `@throws` of `listsTooMuch` lists `ValidationError`, which it cannot throw",
+      "warning docs.ts: `@throws` of `viaThen` lists `ValidationError`, which it cannot throw",
     ]);
     expect(lines.filter((line) => line.startsWith("error"))).toHaveLength(4);
   });
@@ -157,14 +126,9 @@ describe("errors/render-throw-without-boundary: `skipContextGuards` and `skipInp
 describe("errors/catch-misses-error option `ignoreClasses`, on an error boundary's fallback", () => {
   it("never asks for a branch for the classes listed", () => {
     const dir = "react-boundaries/flagged";
-    expect(count(dir, "catch-misses-error", {}, "this boundary can catch")).toBe(1);
+    expect(count(dir, "catch-misses-error", {}, "its boundary can catch")).toBe(1);
     expect(
-      count(
-        dir,
-        "catch-misses-error",
-        { ignoreClasses: ["ParseError"] },
-        "this boundary can catch",
-      ),
+      count(dir, "catch-misses-error", { ignoreClasses: ["ParseError"] }, "its boundary can catch"),
     ).toBe(0);
   });
 });

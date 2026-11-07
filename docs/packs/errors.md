@@ -2,106 +2,259 @@
 
 # errors
 
-Errors are handled where they can happen: nothing swallowed, nothing lost in finally, no Result dropped.
+Errors are handled where they can happen: none ignored, none replaced in `finally`, no `Result` dropped.
+
+## Turn it on
+
+Install `@stateward/plugin-errors` and add `errors()` to `plugins` in `stateward.config.ts`, with a `preset` (`npx stateward init` does both):
+
+```ts
+plugins: [errors()], preset: "recommended", // or "strict"
+```
+
+Each rule's page has its options and what it does not catch. One rule or a whole group is set under `rules` or `groups`: `rules: { "errors/<rule>": "warning" }`.
 
 ## Rules
 
-Rules sit under their group. Set a whole group in the config, `groups: { "errors/callers": "warning" }`, or one rule under `rules`; a rule's own entry wins.
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [must-handle-error](../rules/errors/must-handle-error.md) | a call that can throw an error marked `@mustHandle`, with no code that handles or passes it on | An error marked `@mustHandle` needs a decision at each call, such as a message to the user; a call that neither catches it nor passes it on lets it reach the top. | Core | error | error |
+| [result-ignored](../rules/errors/result-ignored.md) | a `Result` dropped as a statement, after `void` or after `await` | A `Result` dropped as a statement discards its error, so a failed call looks the same as a successful one. | Core | error | error |
+| [result-unchecked](../rules/errors/result-unchecked.md) | a call that fails in its value (an RTK Query trigger, a Result) used as if it had worked (guess) | A call that returns its failure instead of throwing never reaches the `catch`; without a check, the code after it runs as if the call worked. | Core | warning | warning |
+| [throws-doc-mismatch](../rules/errors/throws-doc-mismatch.md) | a `@throws` tag that lists an error the function cannot throw, or misses one it can | Callers decide what to catch from `@throws`: a class it omits reaches them unhandled, and a class listed in excess asks them to handle a case that cannot happen. | Core | error | error |
+| [catch-hides-unexpected](../rules/errors/catch-hides-unexpected.md) | a `catch` that handles some error classes with `instanceof` and ignores the rest | A `catch` that tests some error classes and has no last branch ignores every other error, bugs included; rethrowing the rest keeps them visible. | Core | error | error |
+| [catch-misses-error](../rules/errors/catch-misses-error.md) | a `catch` that branches on error classes but misses one its `try` can throw | An error class the `try` can throw and the `catch` does not test goes to the generic branch, or is ignored; a branch for it, or a rethrow, handles it explicitly. | Core | error | error |
+| [finally-can-throw](../rules/errors/finally-can-throw.md) | a `finally` that calls something that can throw and replace the original error | An error thrown in `finally` replaces the error that was already thrown, so the report names the cleanup instead of the original cause. | Core | error | error |
+| [narrow-try](../rules/errors/narrow-try.md) | calls to your own code inside a `try` after the call it is for, so their bugs look like its failure | A bug in code inside a `try` meant for another call is caught and reported as that call's failure; moving the code after the `try` keeps the two apart. | Add-on `narrow-try` | warning | warning |
+| [render-throw-without-boundary](../rules/errors/render-throw-without-boundary.md) | a component that can throw a known error while rendering, with no error boundary above it | An error thrown while rendering, with no error boundary above the component, unmounts the whole React tree and leaves a blank page. | Core | warning | warning |
 
-### callers
+## [must-handle-error](../rules/errors/must-handle-error.md)
 
-| Rule | Kind | recommended | strict | What it checks |
-| --- | --- | --- | --- | --- |
-| [must-handle-error](../rules/errors/must-handle-error.md) | Core | error | error | An error class marked @mustHandle is named in a catch or passed on with @throws by every call that can throw it. |
-| [result-ignored](../rules/errors/result-ignored.md) | Core | error | error | The Result of a call is checked or passed on, not dropped as a statement, after void or after await. |
-| [result-unchecked](../rules/errors/result-unchecked.md) | Core | warning | warning | A call that reports failure in its value, not by throwing, is checked before the code goes on as if it worked. (heuristic) |
-| [throws-doc-mismatch](../rules/errors/throws-doc-mismatch.md) | Core | error | error | A function's @throws tag lists exactly the error classes it can throw, as far as stateward can see. |
+An error marked `@mustHandle` needs a decision at each call, such as a message to the user; a call that neither catches it nor passes it on lets it reach the top.
 
-### catch
+```ts
+/** @mustHandle Tell the user the card was declined and let them pick another card. */
+export class PaymentDeclinedError extends Error {}
 
-| Rule | Kind | recommended | strict | What it checks |
-| --- | --- | --- | --- | --- |
-| [catch-hides-unexpected](../rules/errors/catch-hides-unexpected.md) | Core | error | error | A catch that handles some errors with instanceof also rethrows or handles all the others. |
-| [catch-misses-error](../rules/errors/catch-misses-error.md) | Core | error | error | A catch that branches with instanceof handles every error class its try can throw, or rethrows the rest; so does an error boundary's fallback. |
-| [finally-can-throw](../rules/errors/finally-can-throw.md) | Core | error | error | A finally block does not call something that throws, so the error that led to it is not lost. |
-| [catch-without-intent](../rules/errors/catch-without-intent.md) | Add-on `catch-intent` | warning | warning | Experimental: on real projects it is mostly wrong; it may change or be removed. A catch that handles every error says how: it narrows, reports, or falls back; one that only logs, or calls something stateward cannot judge, and carries on is reported. (heuristic) |
-| [narrow-try](../rules/errors/narrow-try.md) | Add-on `narrow-try` | warning | warning | Calls to your own code placed in a `try` after the call it is for: move them after the `try`. |
+function pay(amount: number): string {
+  if (amount > 100) throw new PaymentDeclinedError("insufficient funds");
+  return "receipt-1";
+}
 
-### render
+export function reorder(amount: number): string {
+  return pay(amount);
+}
+```
 
-| Rule | Kind | recommended | strict | What it checks |
-| --- | --- | --- | --- | --- |
-| [render-throw-without-boundary](../rules/errors/render-throw-without-boundary.md) | Core | warning | warning | A component that can throw a known error while rendering has an error boundary above it. |
+```text
+error[errors/must-handle-error]: `pay(…)` can throw `PaymentDeclinedError`, which must be handled
+```
 
-## Options
+Fix: name the class in a `catch` and do what its sentence says.
 
-Set in the config as `rules: { "<rule>": [severity, { option: value }] }`.
+Core rule: error under `recommended` and `strict`. Group: `errors/callers`.
 
-### catch-hides-unexpected
+## [result-ignored](../rules/errors/result-ignored.md)
 
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `restUsesError` | boolean | `false` | The branch for the other errors must use the error (rethrow it, wrap it, report it); a generic message alone does not count. |
+A `Result` dropped as a statement discards its error, so a failed call looks the same as a successful one.
 
-### catch-misses-error
+```ts
+type Result<T> = { ok: true; value: T } | { ok: false; error: Error };
 
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `ignoreClasses` | list of strings | `[]` | Error classes a catch never needs a branch for, as its instanceof test names them (SyntaxError, *AbortError). |
+declare function saveUser(name: string): Promise<Result<void>>;
 
-### catch-without-intent
+export async function rename(name: string): Promise<void> {
+  await saveUser(name);
+}
+```
 
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `loggers` | list of strings | `["console","logger","log"]` | Objects whose every method only logs (globs like *Logger): a catch that only calls them swallows the error. |
-| `logMethods` | list of strings | `["error","warn","info","debug"]` | Method names that only log, on any object (`Sentry.captureException` is not one). |
-| `logFunctions` | list of strings | `[]` | Plain functions of your own that only log, like logError (globs allowed). |
-| `edgeHelpers` | list of strings | `[]` | Your functions that report an error where it ends (to a service, to the user): a catch that calls one is handled, like reportAndShow (globs allowed). Sentry, Bugsnag and Datadog are known without it. |
-| `swallowHelpers` | list of strings | `[]` | Functions that mark an error as ignored on purpose, like ignoreError (globs allowed): a catch that calls one is not reported. |
+```text
+error[errors/result-ignored]: the `Result` of `saveUser(…)` is dropped: its error is never handled
+```
 
-### finally-can-throw
+Fix: check the result, or return it to your caller.
 
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of call, where you trust one kind less. Kinds: `throw`: a `throw` written in the finally: it throws whenever it runs; `builtin`: a built-in such as `JSON.parse` or `new URL`: it throws only on input it cannot handle; `own-function`: a function in the same file with a `throw` in it: it throws on some paths. |
+Core rule: error under `recommended` and `strict`. Group: `errors/callers`.
 
-### render-throw-without-boundary
+## [result-unchecked](../rules/errors/result-unchecked.md)
 
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `skipContextGuards` | boolean | `true` | Leave out the usual check in a context hook: `if (!ctx) throw new Error("useAuth must be used within AuthProvider")`. |
-| `skipInputGuards` | boolean | `true` | Leave out a throw when a prop or a parameter whose type rules it out, or a context hook's value, is missing (a mistake of the caller). |
-| `rootBoundaryCounts` | boolean | `false` | Count the error boundary around the whole app as handling the error. Off by default: the whole app is then replaced by its fallback, so the rule asks for a boundary nearer the page. |
-| `boundaries` | object of names to lists of strings | `{"react-error-boundary":["ErrorBoundary"]}` | Error boundary components from packages, by package: add Sentry's with `{ "@sentry/react": ["ErrorBoundary"] }` (keep react-error-boundary's to keep it). |
+A call that returns its failure instead of throwing never reaches the `catch`; without a check, the code after it runs as if the call worked.
 
-### result-ignored
+```ts
+type Result<T> = { ok: true; value: T } | { ok: false; error: Error };
 
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `allowVoid` | boolean | `false` | Take `void save()` as dropping the Result on purpose, and stay quiet. |
-| `resultTypes` | list of strings | `[]` | Your names for a Result type whose shape stateward does not recognise (`Either`, `Outcome*`; globs allowed). |
-| `ignore` | list of strings | `[]` | Functions whose Result may be dropped, by the name they are called with (`logEvent`, `*.track`; globs allowed). |
+declare function saveSettings(values: string): Promise<Result<void>>;
+declare function toast(text: string): void;
 
-### throws-doc-mismatch
+export async function submit(values: string): Promise<void> {
+  const result = await saveSettings(values);
+  if (!result.ok) toast("Could not save");
+  toast("Saved");
+}
+```
 
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of mismatch. Kinds: `missing`: the function can throw a class its `@throws` does not list; `extra`: the `@throws` lists a class the function cannot throw (stale, not dangerous). |
-| `ignoreClasses` | list of strings | `[]` | Error classes a `@throws` never needs to list (TypeError, *AbortError), as a catch names them. |
+```text
+warning[errors/result-unchecked]: code after the `if` runs even when `saveSettings(…)` failed
+```
+
+Fix: when it failed, stop there: `return` (or `throw`) in the check.
+
+Core rule: warning under `recommended` and `strict`. It judges from patterns in the code, not only from types, so it can be wrong: it is never an error unless you make it one. Group: `errors/callers`.
+
+## [throws-doc-mismatch](../rules/errors/throws-doc-mismatch.md)
+
+Callers decide what to catch from `@throws`: a class it omits reaches them unhandled, and a class listed in excess asks them to handle a case that cannot happen.
+
+```ts
+export class NotFoundError extends Error {}
+
+/** @throws {NotFoundError} */
+export function loadUser(text: string): { name: string } {
+  if (text === "") throw new NotFoundError("no such user");
+  return JSON.parse(text) as { name: string };
+}
+```
+
+```text
+error[errors/throws-doc-mismatch]: `@throws` of `loadUser` does not list `SyntaxError`
+```
+
+Fix: update the tag to what the function can throw; the message gives the one to write.
+
+Core rule: error under `recommended` and `strict`. Group: `errors/callers`.
+
+## [catch-hides-unexpected](../rules/errors/catch-hides-unexpected.md)
+
+A `catch` that tests some error classes and has no last branch ignores every other error, bugs included; rethrowing the rest keeps them visible.
+
+```ts
+// …
+export async function submit(order: string, show: (text: string) => void): Promise<void> {
+  try {
+    await save(order);
+  } catch (e) {
+    if (e instanceof NotFoundError) {
+      show("This order no longer exists.");
+    } else if (e instanceof AuthError) {
+      show("Please sign in again.");
+    }
+  }
+}
+```
+
+```text
+error[errors/catch-hides-unexpected]: `catch` ignores errors other than `NotFoundError` and `AuthError`
+```
+
+Fix: end the chain with a branch for every other error, which rethrows it or handles it.
+
+Core rule: error under `recommended` and `strict`. Group: `errors/catch`.
+
+## [catch-misses-error](../rules/errors/catch-misses-error.md)
+
+An error class the `try` can throw and the `catch` does not test goes to the generic branch, or is ignored; a branch for it, or a rethrow, handles it explicitly.
+
+```ts
+// …
+export function post(text: string, remaining: number, show: (text: string) => void): void {
+  try {
+    send(text, remaining);
+  } catch (e) {
+    if (e instanceof AuthError) {
+      show("Please sign in again.");
+    } else {
+      show("Something went wrong.");
+    }
+  }
+}
+```
+
+```text
+error[errors/catch-misses-error]: `catch` does not handle `RateLimitError` from `send(…)`
+```
+
+Fix: add a branch for each class the message names, and rethrow what you do not handle.
+
+Core rule: error under `recommended` and `strict`. Group: `errors/catch`.
+
+## [finally-can-throw](../rules/errors/finally-can-throw.md)
+
+An error thrown in `finally` replaces the error that was already thrown, so the report names the cleanup instead of the original cause.
+
+```ts
+declare function upload(file: string): Promise<void>;
+declare function restore(state: unknown): void;
+
+export async function send(file: string, saved: string): Promise<void> {
+  try {
+    await upload(file);
+  } finally {
+    restore(JSON.parse(saved));
+  }
+}
+```
+
+```text
+error[errors/finally-can-throw]: a throw in `finally` replaces the original error: `JSON.parse(…)` can throw
+```
+
+Fix: give the cleanup its own `try` / `catch`, or move it out of the `finally`.
+
+Core rule: error under `recommended` and `strict`. Group: `errors/catch`.
+
+## [narrow-try](../rules/errors/narrow-try.md)
+
+A bug in code inside a `try` meant for another call is caught and reported as that call's failure; moving the code after the `try` keeps the two apart.
+
+```ts
+// …
+export async function submit(plan: string, close: () => void): Promise<void> {
+  try {
+    await savePlan(plan);
+    close();
+  } catch (e) {
+    showError(e);
+    return;
+  }
+}
+```
+
+```text
+warning[errors/narrow-try]: the `try` for `savePlan(…)` also catches errors from `close()`
+```
+
+Fix: keep only the call the `try` is for inside it, and move the rest after it.
+
+Add-on rule, off until you list `errors/narrow-try` in `addons`; then warning under `recommended` and `strict`. Group: `errors/catch`.
+
+## [render-throw-without-boundary](../rules/errors/render-throw-without-boundary.md)
+
+An error thrown while rendering, with no error boundary above the component, unmounts the whole React tree and leaves a blank page.
+
+```tsx
+// …
+function App() {
+  return (
+    <main>
+      <nav>Menu</nav>
+      <UserPage id={location.hash.slice(1)} />
+    </main>
+  );
+}
+
+createRoot(document.body).render(<App />);
+```
+
+```text
+warning[errors/render-throw-without-boundary]: `<App>` can throw `NotFoundError` while rendering, with no error boundary above it
+```
+
+Fix: put an error boundary around the part that can fail, so the rest of the app stays.
+
+Core rule: warning under `recommended` and `strict`. Group: `errors/render`.
 
 ## Add-ons
 
-- `errors/catch-intent`: `catch-without-intent`
+List an add-on in `addons` to turn on its rules: `addons: ["errors/<add-on>"]`.
+
 - `errors/narrow-try`: `narrow-try`
-
-## Settings
-
-Presets and add-ons are set in the config, not on the plugin:
-
-```ts
-export default defineConfig({
-  plugins: [errors()],
-  preset: "strict",
-  // addons: ["errors/<addon>"],
-});
-```

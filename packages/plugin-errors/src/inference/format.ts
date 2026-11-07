@@ -31,16 +31,16 @@ function sourceText(source: Source): string {
   return `${source.text}: ${source.reason}`;
 }
 
-/** `others stateward cannot see (from a: why; b: why; and 3 more)`. */
+/** `others not known (from a: why; b: why; and 3 more)`. */
 export function unknownText(sources: readonly Source[], more: boolean): string {
   const listed = sources.slice(0, MAX_LISTED_SOURCES).map(sourceText);
   const rest = sources.length - listed.length;
   const tail = rest > 0 || more ? [`and ${String(rest)}${more ? "+" : ""} more`] : [];
-  return `others stateward cannot see (from ${[...listed, ...tail].join("; ")})`;
+  return `others not known (from ${[...listed, ...tail].join("; ")})`;
 }
 
 /**
- * `ParseError | ZodError (zod 3.23.8: declared) | others stateward cannot see (from …)`, or "" for an empty set: a class
+ * `ParseError | ZodError (zod 3.23.8: declared) | others not known (from …)`, or "" for an empty set: a class
  * known from a package's facts names where they come from.
  */
 export function thrownText(thrown: Thrown, classes: ReadonlyMap<string, ClassFact>): string {
@@ -72,7 +72,7 @@ export function rejectsShown(result: Result): Thrown {
 
 /**
  * The hover's lines: `throws: …` for what a call throws, `rejects: …` for what its promise
- * rejects with, `throws nothing stateward can see` when both are empty.
+ * rejects with, `throws nothing known` when both are empty.
  */
 export function resultLines(result: Result, classes: ReadonlyMap<string, ClassFact>): string[] {
   const throws = thrownText(result.throws, classes);
@@ -81,5 +81,5 @@ export function resultLines(result: Result, classes: ReadonlyMap<string, ClassFa
     ...(throws === "" ? [] : [`throws: ${throws}`]),
     ...(rejects === "" ? [] : [`rejects: ${rejects}`]),
   ];
-  return lines.length === 0 ? ["throws nothing stateward can see"] : lines;
+  return lines.length === 0 ? ["throws nothing known"] : lines;
 }

@@ -1,11 +1,8 @@
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Finding, TextEdit } from "@stateward/core";
 import { checkOnly, fixture, says, shown, type Shown } from "./helpers.js";
+import { typeErrorsOfText as typeErrors } from "@stateward/core/testing";
 
 const RULE = "if-chain-misses-case";
 
@@ -20,9 +17,13 @@ function inFile(name: string): Finding[] {
   return flagged().filter((finding) => finding.location.file.endsWith(name));
 }
 
-function lacks(count: string, subject: string, labels: string): string {
-  const noun = count === "1" ? "case" : "cases";
-  return `this chain does not handle ${count} ${noun} of \`${subject}\`: ${labels}`;
+/** The labels as a headline lists them: the last joined by "and", unless the rest are counted. */
+function listed(labels: string): string {
+  return labels.includes(" more") ? labels : labels.replace(/, (?=[^,]*$)/, " and ");
+}
+
+function lacks(_count: string, subject: string, labels: string): string {
+  return `\`if\` chain does not handle ${listed(labels)} of \`${subject}\``;
 }
 
 /** How the hint ends a chain: the file's own `never` helper, else `satisfies never`. */
@@ -36,8 +37,8 @@ function addBranches(who: "it" | "them", target: string, helper?: string): strin
 }
 
 function hides(count: string, subject: string, labels: string): string {
-  const noun = count === "1" ? "case" : "cases";
-  return `this \`else\` hides ${count} ${noun} of \`${subject}\`: ${labels}`;
+  const [verb, them] = count === "1" ? ["is", "it"] : ["are", "them"];
+  return `${listed(labels)} of \`${subject}\` ${verb} not tested; \`else\` handles ${them}`;
 }
 
 /**
@@ -51,13 +52,13 @@ function addFor(count: number, target: string, rest?: string, many = false): str
   const same =
     rest === undefined
       ? count === 1
-        ? "if the `else` is right for it, say so above the `else`"
-        : `if these ${n} cases all mean the same, say so above the \`else\``
+        ? "say why above the `else` instead, if that is where it belongs"
+        : `say why above the \`else\` if the ${n} cases all mean the same`
       : count === 1
-        ? "if the `else` is right for it, say so"
-        : `if these ${n} cases all mean the same, say which`;
+        ? "name it in the `else` instead, if that is where it belongs"
+        : `name the ${n} cases in the \`else\` if they all mean the same`;
   return [
-    many ? `${same}, or ${list}:` : `${list}, or ${same}:`,
+    many ? `${same}; otherwise ${list}:` : `${list}; or ${same}:`,
     rest === undefined
       ? "    // stateward-ignore unions/if-chain-misses-case: <why>"
       : `    else { ${rest} }`,
@@ -65,11 +66,11 @@ function addFor(count: number, target: string, rest?: string, many = false): str
 }
 
 function later(subject: string): string {
-  return `this \`else\` will hide any case added to \`${subject}\` later`;
+  return `\`else\` is unreachable: every case of \`${subject}\` is tested`;
 }
 
 function prove(target: string): string {
-  return `let TypeScript check it: put \`${target} satisfies never;\` first in the \`else\``;
+  return `put \`${target} satisfies never;\` first in the \`else\`, so a case added later fails to compile`;
 }
 
 /** Applies the edits of a fix to the text, last first so earlier offsets stay valid. */
@@ -193,7 +194,7 @@ describe(`unions/${RULE}: an else that hides cases`, () => {
     expect(first).toMatchObject({
       kind: "problem",
       fixes: [
-        { title: "List the 2 hidden cases (same behaviour)" },
+        { title: "List the 2 missing cases (same behaviour)" },
         { title: 'Add `status.kind satisfies "failed" | "retry";` to the else', safe: false },
       ],
     });
@@ -283,7 +284,7 @@ describe(`unions/${RULE}: headlines stay short`, () => {
     expect(shown(inFile("long-names.ts"))).toEqual([
       says(
         "long-names.ts",
-        'this chain does not handle 2 cases of `thisIsAVeryLongVariableNameForTheUploadStatusObject.stage`: "initialisingTheConnection", "uploadingTheFirstChunk"',
+        '`if` chain does not handle "initialisingTheConnection" and "uploadingTheFirstChunk" of `thisIsAVeryLongVariableNameForTheUploadStatusObject.stage`',
         "add `else if` branches for them, then end with `else { thisIsAVeryLongVariableNameForTheUploadStatusObject satisfies never; }`",
       ),
       says(
@@ -298,7 +299,7 @@ describe(`unions/${RULE}: headlines stay short`, () => {
       ),
       says(
         "long-names.ts",
-        "this chain does not handle 2 cases of `selectedStorageType`: DATABASE, STORAGE_TYPE_UNSPECIFIED",
+        "`if` chain does not handle DATABASE and STORAGE_TYPE_UNSPECIFIED of `selectedStorageType`",
         "add `else if` branches for them, then end with `else { selectedStorageType satisfies never; }`",
       ),
     ]);
@@ -313,32 +314,6 @@ describe(`unions/${RULE}: headlines stay short`, () => {
     }
   });
 });
-
-/** The fixed text must compile: checked with the tsc binary, not the checker API. */
-function typeErrors(text: string): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "stateward-fixed-"));
-  try {
-    writeFileSync(path.join(dir, "a.ts"), text);
-    writeFileSync(
-      path.join(dir, "tsconfig.json"),
-      JSON.stringify({
-        compilerOptions: {
-          strict: true,
-          module: "NodeNext",
-          moduleResolution: "NodeNext",
-          noEmit: true,
-          types: [],
-        },
-        files: ["a.ts"],
-      }),
-    );
-    const tsc = fileURLToPath(import.meta.resolve("typescript/bin/tsc"));
-    const result = spawnSync(process.execPath, [tsc, "-p", dir], { encoding: "utf8" });
-    return result.status === 0 ? "" : result.stdout + result.stderr;
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
 
 describe(`unions/${RULE}: the quick fix compiles`, { timeout: 60_000 }, () => {
   it("compiles with every fix of complete.ts applied at once", () => {
@@ -450,7 +425,7 @@ describe(`unions/${RULE}: a type that does not name the cases that fall through`
     const finding = inFile("rest-mismatch.ts")[0];
     expect(finding).toMatchObject({
       fixes: [
-        { title: "List the 2 hidden cases (same behaviour)" },
+        { title: "List the 2 missing cases (same behaviour)" },
         { title: 'Add `mode satisfies "x" | "y";` to the else', safe: false },
       ],
     });
@@ -511,7 +486,7 @@ describe(`unions/${RULE}: the quick fix that lists the hidden cases`, { timeout:
     expect(finding?.kind === "problem" ? finding.fixes[0]?.safe : "no finding").toBeUndefined();
     expect(findingIn("discriminant")).toMatchObject({
       fixes: [
-        { title: "List the 2 hidden cases (same behaviour)" },
+        { title: "List the 2 missing cases (same behaviour)" },
         { title: 'Add `upload.kind satisfies "failed" | "retry";` to the else', safe: false },
       ],
     });
@@ -531,7 +506,7 @@ describe(`unions/${RULE}: the quick fix that lists the hidden cases`, { timeout:
     expect(fixedFunction("enums")[5]).toBe("  } else if (level === Level.High) {");
     expect(findingIn("enums")).toMatchObject({
       fixes: [
-        { title: "List the hidden case (same behaviour)" },
+        { title: "List the missing case (same behaviour)" },
         { title: "Add `level satisfies Level.High;` to the else", safe: false },
       ],
     });

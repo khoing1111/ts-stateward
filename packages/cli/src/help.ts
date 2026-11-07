@@ -146,6 +146,13 @@ export const COMMAND_HELP = {
     options: [FORMAT, CONFIG, CWD],
     example: ["stateward deps", "see which library calls are still unknown"],
   },
+  guarantees: {
+    usage: "guarantees [--format pretty|json] [--config <file>] [--cwd <dir>]",
+    summary:
+      "List the guarantees your code states (a `RequiredContext`, an `Owned` value), where each is declared, whether stateward proves it, and the readers or writers it covers; a marker nothing uses is listed as unused. Exit code: 0 when every guarantee is proven, unused or not checked, 1 when one is not proven, 2 when stateward could not run.",
+    options: [FORMAT, CONFIG, CWD],
+    example: ["stateward guarantees", "review every promise and its proof"],
+  },
   cache: {
     usage: "cache stats|clean [--cwd <dir>]",
     summary:

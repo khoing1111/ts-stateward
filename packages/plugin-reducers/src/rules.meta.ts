@@ -7,7 +7,8 @@ export const RULES = {
     kind: "project",
     meta: {
       description:
-        "A state a reducer reaches but never leaves is marked final, so a missing way out does not go unnoticed.",
+        "A reducer state with no way out keeps the user there for good, such as a failed payment with no retry; marking it final records that this is intended.",
+      summary: "a reducer state that nothing leaves and that is not marked final",
       defaultSeverity: "warning",
       tier: "core",
       group: "graph",
@@ -36,7 +37,9 @@ export const RULES = {
     kind: "project",
     meta: {
       description:
-        "A place in or around a reducer that stateward cannot read, so its other reducer checks cannot cover it.",
+        "The reducer checks skip a place whose states cannot be read; a type that names its states brings it back under those checks.",
+      summary:
+        "a reducer, or a `return` in one, whose states cannot be read, so the reducer checks skip it",
       defaultSeverity: "info",
       tier: "coverage",
       group: "graph",
@@ -62,7 +65,9 @@ export const RULES = {
   "state-unreachable": {
     kind: "project",
     meta: {
-      description: "A state of a reducer that no event can lead to.",
+      description:
+        "A reducer state that no event leads to is code that can never run, often a step that was planned and not written.",
+      summary: "a state of a reducer's union that no event can lead to",
       defaultSeverity: "error",
       tier: "core",
       group: "graph",

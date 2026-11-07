@@ -41,57 +41,57 @@ describe(`errors/${RULE}: a catch that leaves a known error unhandled`, () => {
     expect(shown(flagged())).toEqual([
       says(
         "catches.ts",
-        "this catch does not handle `RateLimitError`, which `send(…)` can throw",
+        "`catch` does not handle `RateLimitError` from `send(…)`",
         IF_HINT("it", "e", "RateLimitError"),
       ),
       says(
         "catches.ts",
-        "this catch does not handle `SyntaxError`, which `parse(…)` can throw",
+        "`catch` does not handle `SyntaxError` from `parse(…)`",
         NO_ELSE_HINT("it", "error", "SyntaxError"),
       ),
       says(
         "catches.ts",
-        "this catch does not handle `ConflictError`, `QuotaError` and `RateLimitError`, which `store(…)` can throw",
+        "`catch` does not handle `ConflictError`, `QuotaError` and `RateLimitError` from `store(…)`",
         SWITCH_HINT,
       ),
       says(
         "catches.ts",
-        "this catch does not handle `AuthError`, `ConflictError`, `QuotaError` and 2 more, which its `try` block can throw",
+        "`catch` does not handle `AuthError`, `ConflictError`, `QuotaError` and 2 more thrown in its `try` block",
         IF_HINT("each", "e", "AuthError"),
       ),
       says(
         "catches.ts",
-        "this catch does not handle `ParseError` and `RateLimitError`, which its `try` block can throw",
+        "`catch` does not handle `ParseError` and `RateLimitError` thrown in its `try` block",
         IF_HINT("each", "e", "ParseError"),
       ),
       says(
         "catches.ts",
-        "this catch does not handle `SyntaxError`, which `parse(…)` can throw",
+        "`catch` does not handle `SyntaxError` from `parse(…)`",
         IF_HINT("it", "e", "SyntaxError"),
       ),
       says(
         "catches.ts",
-        "this catch does not handle `SyntaxError`, which `parse(…)` can throw",
+        "`catch` does not handle `SyntaxError` from `parse(…)`",
         IF_HINT("it", "e", "SyntaxError"),
       ),
       says(
         "catches.ts",
-        "this catch does not handle `TypeError` and `RateLimitError`, which `send(…)` can throw",
+        "`catch` does not handle `TypeError` and `RateLimitError` from `send(…)`",
         NO_ELSE_HINT("each", "e", "TypeError"),
       ),
       says(
         "declared.ts",
-        "this catch does not handle `SecondError`, which `load(…)` can throw",
+        "`catch` does not handle `SecondError` from `load(…)`",
         IF_HINT("it", "e", "SecondError"),
       ),
       says(
         "declared.ts",
-        "this catch does not handle `SecondError`, which `open(…)` can throw",
+        "`catch` does not handle `SecondError` from `open(…)`",
         IF_HINT("it", "e", "SecondError"),
       ),
       says(
         "declared.ts",
-        "this catch does not handle `SecondError`, which `local(…)` can throw",
+        "`catch` does not handle `SecondError` from `local(…)`",
         IF_HINT("it", "e", "SecondError"),
       ),
     ]);
@@ -100,9 +100,9 @@ describe(`errors/${RULE}: a catch that leaves a known error unhandled`, () => {
   it("reads `@throws` on a function declared without a body: in a project .d.ts, with overloads, or `declare` in a .ts", () => {
     const found = shown(flagged()).filter((one) => one.file === "declared.ts");
     expect(found.map((one) => one.message)).toEqual([
-      "this catch does not handle `SecondError`, which `load(…)` can throw",
-      "this catch does not handle `SecondError`, which `open(…)` can throw",
-      "this catch does not handle `SecondError`, which `local(…)` can throw",
+      "`catch` does not handle `SecondError` from `load(…)`",
+      "`catch` does not handle `SecondError` from `open(…)`",
+      "`catch` does not handle `SecondError` from `local(…)`",
     ]);
   });
 

@@ -40,7 +40,7 @@ export const REASON = {
   dynamic: "dynamic call",
   thrownValue: "a thrown value of unknown class",
   madeError: "an error made by a call",
-  promise: "a promise stateward cannot follow",
+  promise: "a promise that is not followed",
   heldPromise: "promise held in a variable",
 } as const;
 
@@ -457,7 +457,7 @@ export function summarizeThrows(ctx: FileContext, packages?: PackageResolver): T
         entry.id === null
           ? {
               k: "unknown",
-              reason: "`@throws` names no class stateward can find",
+              reason: "`@throws` names a class that is not found",
               text: entry.name,
               at: span,
             }

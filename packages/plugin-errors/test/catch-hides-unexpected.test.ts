@@ -1,11 +1,8 @@
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Finding, TextEdit } from "@stateward/core";
 import { checkOnly, fixture, says, shown } from "./helpers.js";
+import { typeErrorsOfText as typeErrors } from "@stateward/core/testing";
 
 const RULE = "catch-hides-unexpected";
 const FILE = fixture(`${RULE}/flagged/chains.ts`);
@@ -15,15 +12,15 @@ function flagged(): readonly Finding[] {
 }
 
 function swallowed(classes: string): string {
-  return `errors other than ${classes} are silently swallowed here`;
+  return `\`catch\` ignores errors other than ${classes}`;
 }
 
 function chainHint(variable: string): string {
-  return `end the chain with a branch for the rest:\n    } else {\n      throw ${variable};\n    }`;
+  return `end the chain with a branch that rethrows the rest, so they reach the caller:\n    } else {\n      throw ${variable};\n    }`;
 }
 
 function switchHint(variable: string): string {
-  return `end the switch with a case for the rest:\n    default:\n      throw ${variable};`;
+  return `end the switch with a case that rethrows the rest, so they reach the caller:\n    default:\n      throw ${variable};`;
 }
 
 /** Applies the edits to the text, last first so earlier offsets stay valid. */
@@ -182,32 +179,6 @@ describe(`errors/${RULE}: the quick fix`, () => {
     expect(found[5]).toMatchObject({ kind: "problem", fixes: [] });
   });
 });
-
-/** The fixed text must compile: checked with the tsc binary, not the checker API. */
-function typeErrors(text: string): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "stateward-fixed-"));
-  try {
-    writeFileSync(path.join(dir, "a.ts"), text);
-    writeFileSync(
-      path.join(dir, "tsconfig.json"),
-      JSON.stringify({
-        compilerOptions: {
-          strict: true,
-          module: "NodeNext",
-          moduleResolution: "NodeNext",
-          noEmit: true,
-          types: [],
-        },
-        files: ["a.ts"],
-      }),
-    );
-    const tsc = fileURLToPath(import.meta.resolve("typescript/bin/tsc"));
-    const result = spawnSync(process.execPath, [tsc, "-p", dir], { encoding: "utf8" });
-    return result.status === 0 ? "" : result.stdout + result.stderr;
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
 
 describe(`errors/${RULE}: the quick fix compiles`, { timeout: 60_000 }, () => {
   it("compiles with every fix applied at once", () => {

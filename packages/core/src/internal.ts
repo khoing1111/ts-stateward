@@ -39,7 +39,7 @@ export {
   writeBaseline,
 } from "./baseline.js";
 export type { Baseline, BaselineEntry, BaselineView, FingerprintContext } from "./baseline.js";
-export { advance, buildPlan, describeTurnOn } from "./plan.js";
+export { advance, buildPlan, describeNotChecked, describeTurnOn, isClean } from "./plan.js";
 export type { Advance, Plan, PlanRow } from "./plan.js";
 export {
   findConfigFile,
@@ -49,7 +49,9 @@ export {
   reloadsLocalImports,
 } from "./config-file.js";
 export {
+  LOOSE_NULLS_FIX,
   MAX_FINDINGS_PER_RULE_PER_FILE,
+  STRICT_NULLS_REMEDY,
   activeRuleIds,
   compareFindings,
   explain,
@@ -57,6 +59,8 @@ export {
 } from "./engine.js";
 export type { CheckProgress } from "./engine.js";
 export { SLICE_MS } from "./checker.js";
+export { describeStatus, guaranteeAt, proveGuarantees } from "./guarantees.js";
+export type { GuaranteeProof, GuaranteeStatus } from "./guarantees.js";
 export type { LongestStep, SliceOptions, SlicedCheck } from "./checker.js";
 export { IGNORE_FIX_TITLE, IGNORE_RULE_ID, ignoreFix } from "./ignores.js";
 export { CACHE_FORMAT, emptyCache, parseSnapshot, toSnapshot } from "./cache.js";
@@ -85,9 +89,11 @@ export { createTimingRecorder } from "./timing.js";
 export { cacheEntries, dropLeastRecentlyUsed, limitBytes, markUsed } from "./disk-limits.js";
 export {
   CACHE_SUBDIR,
+  PROJECT_CACHE_DIR,
   RESULTS_CACHE_DEFAULT_MB,
   cleanResultsCache,
   defaultCacheDir,
+  userCacheDir,
   openDiskCache,
   resultsCacheLimit,
   resultsCacheStats,

@@ -2,94 +2,134 @@
 
 # ownership/state-written-outside-owner
 
-Shared module-level state is changed only by the module that declares it; others call its functions.
+When several modules change the same module-level state, each change must be read to know its value; one owning module with functions keeps that in one place.
 
-- Group: ownership/owners
-- Tier: core (on in every preset)
-- Add-on: none
-- Heuristic: no
-- Severity under `recommended`: error
-- Severity under `strict`: error
-
-## Why
-
-When any file can change a shared object, no file can say what it holds. If `src/theme.ts` sets `settings.theme = "dark"` directly, the function in `src/settings.ts` that saves the choice and tells the UI never runs, and the screen and the saved settings disagree. With one writer, every change goes through code that keeps the object right.
-
-## When to use it
-
-Use it in any app with module-level stores, registries or config objects. It is on as an error in every preset. When a few files share one state on purpose (a store and its slices), list them under `owners` (below) rather than turning the rule off.
-
-## What it catches
-
-Another file changing an exported object, array, `Map`, `Set`, class instance or `let`, through its import or a re-export:
-
-- assigning to it or to a property (`settings.theme = "dark"`, `counters.total += 1`, `delete cache.user`);
-- calling a method that changes it (`items.push(x)`, `registry.set(key, value)`, `Object.assign(settings, …)`);
-- passing it to one of your own functions, declared in another file, that changes its argument. A function that only reads it is fine.
-
-### Bad
+`settings.ts` declares the state:
 
 ```ts
-// src/settings.ts
 export const settings = { theme: "light", fontSize: 14 };
 
-// src/theme.ts
-import { settings } from "./settings.js";
-settings.theme = "dark"; // `settings` belongs to src/settings.ts
-```
-
-### Good
-
-```ts
-// src/settings.ts
-export const settings = { theme: "light", fontSize: 14 };
 export function setTheme(theme: "light" | "dark"): void {
   settings.theme = theme;
+  localStorage.setItem("theme", theme);
 }
-
-// src/theme.ts
-import { setTheme } from "./settings.js";
-setTheme("dark");
 ```
 
-### Fix
+`toolbar.ts` changes it directly:
 
-Add a function to the declaring file that makes the change, and call it instead. There is no quick fix: what that function should be is your design.
+```ts
+import { settings } from "./settings.js";
+
+export function onDarkMode(): void {
+  settings.theme = "dark";
+}
+```
+
+A value can also state its owner in its type: `Owned<T>`, from `guarantees.ts`, the file the quick fix writes once in your project. stateward then stops guessing for that value and proves it: every change from another module is an error, also through an alias, a re-export, a cast or a function it is handed to, and a place stateward cannot follow is an error too, with why:
+
+```ts
+export type Owned<T> = T & { readonly __guarantee?: "owned" };
+```
+
+```ts
+import type { Owned } from "./guarantees.js";
+
+export const session: Owned<{ user: string | null }> = { user: null };
+
+export function signOut(): void {
+  session.user = null;
+}
+```
+
+```ts
+import { session } from "./session.js";
+
+export function onExpired(): void {
+  const current = session;
+  current.user = null;
+}
+```
+
+`stateward check` prints:
+
+```text
+error[ownership/state-written-outside-owner]: `session` is changed outside its owner, `session.ts`
+ --> header.ts:5:3
+  |
+5 |   current.user = null;
+  |   ^^^^^^^^^^^^
+  = fix: call `signOut` from `session.ts` instead: it owns the value
+  = note: header.ts:4: `current` is `session`
+  = note: session.ts:3: `session` is declared owned: only `session.ts` may change it
+  = docs: stateward explain ownership/state-written-outside-owner
+
+error[ownership/state-written-outside-owner]: `settings` is changed outside its module, `settings.ts`
+ --> toolbar.ts:4:3
+  |
+4 |   settings.theme = "dark";
+  |   ^^^^^^^^^^^^^^
+  = fix: add a function in `settings.ts` that makes the change (e.g. `setTheme("dark")`), and call it instead
+  = note: settings.ts:1: `settings` is declared in `settings.ts`, which owns it
+  = docs: stateward explain ownership/state-written-outside-owner
+```
+
+In `toolbar.ts`, call the function the declaring file offers for the change:
+
+```ts
+import { setTheme } from "./settings.js";
+
+export function onDarkMode(): void {
+  setTheme("dark");
+}
+```
+
+And in `header.ts`, the function `session.ts` offers:
+
+```ts
+import { signOut } from "./session.js";
+
+export function onExpired(): void {
+  signOut();
+}
+```
+
+When there is no such function yet, add one to the declaring file: what it should be is your design, so no quick fix writes it. For a stated value, the message names the owner's functions that already make the change (`signOut` in `session.ts`).
+
+If only the declaring file should ever change the value, state it: the quick fix **Declare settings owned by settings.ts** writes `Owned` in `guarantees.ts` (the nearest `src` folder; the file is created the first time) and marks the declaration, `export const settings: Owned<{ theme: string; fontSize: number; }> = …`. It is offered only when it compiles, and `check --fix` never applies it: stating a guarantee is your call.
+
+## Why it matters
+
+When any file can change a shared object, no file can say what it holds. Here `toolbar.ts` sets the theme without saving it, so the next reload forgets the choice, and the screen and the saved settings disagree. With one writer, every change goes through code that keeps the object right.
 
 ## What it does not catch
 
-It stays quiet about:
+It reports another file changing an exported object, array, `Map`, `Set`, class instance or `let`, through its import or a re-export: assigning to it or to a property (`settings.theme = "dark"`, `counters.total += 1`, `delete cache.user`), calling a method that changes it (`items.push(x)`, `registry.set(key, value)`, `Object.assign(settings, …)`), or passing it to one of your own functions, in another file, that changes its argument (a function that only reads it is fine). It stays quiet about:
 
 - changes inside the declaring file, and changes to a copy (`{ ...settings }`) or a local;
 - calls to methods of your own classes: the class decides what its methods may change;
 - test files (`*.test.*`, `*.spec.*`, `__tests__/`) and state declared in them;
-- changes through a value typed `any`;
-- state from a package in `node_modules`;
+- changes through a value typed `any`, and state from a package in `node_modules`;
 - a collection typed through an alias (`type Items = string[]`): its methods are not recognised;
 - state passed to a function outside your code, which stateward cannot follow.
 
+For a value stated `Owned` it follows more, and what it cannot follow is reported as an error: a local alias (`const s = settings`), a destructured part, an element (`for (const job of jobs)`, `jobs.forEach((job) => …)`), a function that returns it, a static field of a class, a cast (`as`, also through `unknown`), `Object.assign`, `Object.freeze` and `Reflect`, a method of your own class that changes `this`, and the owner handing it to another module's function that changes it. It reports, with the reason, a method or function from a package that is given the value (unless its parameter is `Readonly`), a callee it cannot tell (`handlers.get(name)?.(settings)`), a value typed `any`, and a value typed `Owned` whose declaration it cannot tell (a parameter). It does not follow a value stored into another object or array whose type drops `Owned`, nor `new X(settings)`; copies (`{ ...settings }`, `structuredClone`) are new values. Test files are left out, as for other state.
+
 ## Turn it on or off
 
-In `stateward.config.ts`:
-
-```ts
-rules: { "ownership/state-written-outside-owner": "off" } // or "warning"
-groups: { "boundaries/ownership": "off" } // the whole group
-rules: { "ownership/state-written-outside-owner": ["error", { ignore: ["pluginRegistry"] }] } // state any file may change
-```
-
-To let other files change a file's state, map the declaring file to the files allowed to write it (paths from the project folder; `*` matches within a folder, `**` across folders):
+When a few files share one state on purpose (a store and its slices), list them under `owners` rather than turning the rule off (for a value stated `Owned` too: the files listed count as its owner): map the declaring file to the files allowed to write it (paths from the project folder; `*` matches within a folder, `**` across folders).
 
 ```ts
 rules: { "ownership/state-written-outside-owner": ["error", { owners: { "src/store.ts": ["src/slices/**"] } }] }
+rules: { "ownership/state-written-outside-owner": ["error", { ignore: ["pluginRegistry"] }] } // state any file may change
+rules: { "ownership/state-written-outside-owner": "off" }
 ```
 
-### Options
-
-Set as `rules: { "ownership/state-written-outside-owner": ["error", { … }] }`.
+Options, set as `rules: { "ownership/state-written-outside-owner": ["error", { … }] }`:
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `owners` | object of names to lists of strings | `{}` | Files that may also change the state a file declares: a declaring file glob and the globs of the files allowed to write it (paths relative to the project). |
-| `ignore` | list of strings | `[]` | Names of shared state (globs like *Registry) that any file may change, such as a registry built up by plugins. |
-| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per way the state is changed. Kinds: `direct`: the other file changes it itself: an assignment, `delete` or a changing method call; `through-call`: the other file passes it to a function of yours, declared elsewhere, that changes its argument. |
+| `ignore` | list of strings | `[]` | Names of shared state (globs like *Registry) that any file may change, such as a registry built up by plugins. A value stated `Owned` is never left out. |
+| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per way the state is changed. A value stated `Owned` is reported at the rule's severity, whatever these say. Kinds: `direct`: the other file changes it itself: an assignment, `delete` or a changing method call; `through-call`: the other file passes it to a function of yours, declared elsewhere, that changes its argument. |
+
+Core rule: error under `recommended` and `strict`. Group: `ownership/owners`.

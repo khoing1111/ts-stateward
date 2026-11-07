@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import ts from "typescript";
@@ -258,6 +258,55 @@ describe("the result cache across runs: a recorded program", () => {
   });
 });
 
+describe("the result cache across runs: an editor's open files", () => {
+  let copy = "";
+  afterEach(() => {
+    rmSync(copy, { recursive: true, force: true });
+  });
+
+  /** The cache as a new process reads it from disk. */
+  const restored = (cache: ResultCache): ResultCache =>
+    parseSnapshot(JSON.parse(JSON.stringify(toSnapshot(cache))));
+
+  it("answers an open, unchanged file's fast pass from the cache without running a rule, and an edited one fresh", () => {
+    copy = mkdtempSync(path.join(tmpdir(), "stateward-open-"));
+    cpSync(dir, copy, { recursive: true });
+    const c = path.join(copy, "c.ts");
+    const a = path.join(copy, "a.ts");
+    // The editor's open document holds the text on disk.
+    const open = new Map([[c, readFileSync(c, "utf8")]]);
+    const cache = emptyCache();
+    checkerOf({ literals: literalProbe([]) }, cache, copy).check(open);
+    // Built on the open document's text, the program is recorded all the same.
+    expect(cache.programs.size).toBe(1);
+
+    /** A checker with no cache: what a cold start finds. */
+    const cold = () => checkerOf({ literals: literalProbe([]) }, undefined, copy);
+    const ran: string[] = [];
+    const warm = restored(cache);
+    const editor = checkerOf({ literals: literalProbe(ran) }, warm, copy);
+    const fast = editor.checkFiles([c], open, [c]);
+    expect(ran).toEqual([]);
+    expect(fast.findings).toEqual(cold().checkFiles([c], open).findings);
+    expect(messages(fast)).toEqual(['c.ts: "green","red"']);
+    // The full pass after it reuses everything: the recorded program is replayed with the open
+    // text, so nothing is built or recorded again (the cache has nothing new to save).
+    const full = editor.check(open);
+    expect(ran).toEqual([]);
+    const coldFull = cold().check(open);
+    expect([full.findings, full.hidden]).toEqual([coldFull.findings, coldFull.hidden]);
+    expect(warm.changed).toBe(false);
+
+    // A file it imports through b.ts is edited in another document: c.ts, unedited, runs again.
+    const edited = new Map([...open, [a, 'export type Color = "red" | "green" | "blue";\n']]);
+    const again = checkerOf({ literals: literalProbe(ran) }, restored(cache), copy);
+    const fresh = again.checkFiles([c, a], edited, [c]);
+    expect(ran.sort()).toEqual(["a.ts", "c.ts"]);
+    expect(fresh.findings).toEqual(cold().checkFiles([c, a], edited).findings);
+    expect(messages(fresh)).toEqual(['c.ts: "blue","green","red"']);
+  });
+});
+
 describe("the result cache across runs: the package a declaration belongs to", () => {
   let project = "";
   afterEach(() => {
@@ -368,8 +417,8 @@ describe("a file with a syntax error", () => {
     expect(found).toMatchObject({
       kind: "unknown",
       ruleId: "stateward/syntax",
-      message: "`bad.ts` has a syntax error, so findings in it may be missing or wrong",
-      hint: "Expression expected. at line 1:20; fix it and check again",
+      message: "not checked: `bad.ts`: it has a syntax error",
+      hint: "fix the syntax error at line 1:20 (Expression expected.), then check again",
     });
     expect(found?.location.start).toBe(19);
 
@@ -405,9 +454,8 @@ describe("a file whose imports do not resolve", () => {
     expect(first.findings[0]).toMatchObject({
       kind: "unknown",
       ruleId: "stateward/imports",
-      message:
-        "`bad.ts` imports `@tldraw/editor`, which does not resolve, so findings using it may be wrong",
-      hint: "install the project's packages (or build its workspace packages) and check again; 1 more unresolved in this file",
+      message: "not checked: code using `@tldraw/editor`: the package is not installed",
+      hint: "install the project's packages (or build its workspace packages) and check again; 1 more unresolved in the file",
     });
     expect(first.findings[0]?.location.start).toBe(18);
     const restored = parseSnapshot(JSON.parse(JSON.stringify(toSnapshot(cache))));
@@ -447,19 +495,17 @@ describe("the wording of an imports unknown", () => {
     const [found] = findingsOf({
       "chart.ts": 'import c from "legacy-chart";\nexport const x = c;\n',
     });
-    expect(found?.message).toBe(
-      "`chart.ts` imports `legacy-chart`, which has no types, so findings using it may be wrong",
-    );
+    expect(found?.message).toBe("not checked: code using `legacy-chart`: it has no types");
     expect(found?.hint).toBe("install its types (`@types/legacy-chart`) or declare the module");
   });
 
-  it("keeps the headline within 100 characters: path dropped first, specifier shortened last", () => {
+  it("keeps the headline within 100 characters: the file is left to the location, the specifier shortened", () => {
     const dir = "a-very-long-folder-name/another-very-long-folder-name/and-one-more-folder";
     const [noPath] = findingsOf({
       [`${dir}/x.ts`]: 'import { a } from "@tldraw/editor";\nexport const x = a;\n',
     });
     expect(noPath?.message).toBe(
-      "imports `@tldraw/editor`, which does not resolve, so findings using it may be wrong",
+      "not checked: code using `@tldraw/editor`: the package is not installed",
     );
     const specifier = `@scope/${"very-long-package-name-".repeat(5)}end`;
     const [shortened] = findingsOf({
@@ -467,8 +513,6 @@ describe("the wording of an imports unknown", () => {
     });
     expect(shortened?.message.length).toBeLessThanOrEqual(100);
     expect(shortened?.message).toContain("…");
-    expect(
-      shortened?.message.endsWith("does not resolve, so findings using it here may be wrong"),
-    ).toBe(true);
+    expect(shortened?.message.endsWith(": the package is not installed")).toBe(true);
   });
 });

@@ -17,6 +17,8 @@ const SUMMARY_LISTS = [
   "unknowns",
   "routes",
   "externalContexts",
+  "guards",
+  "declared",
 ] as const;
 
 /** The engine hands summaries over as JSON; ours have these lists, whatever else they hold. */
@@ -26,7 +28,12 @@ function isSummary(value: Json): value is Summary {
   return SUMMARY_LISTS.every((key) => Array.isArray(fields.get(key)));
 }
 
-type Analysis = { graph: Graph; needs: ReadonlyMap<string, ContextSet> };
+export type Analysis = {
+  graph: Graph;
+  needs: ReadonlyMap<string, ContextSet>;
+  /** The summaries, read as ours. */
+  summaries: ReadonlyMap<string, Summary>;
+};
 
 /**
  * One analysis for each full check: the engine hands out the same `Map` until the next check, so
@@ -34,7 +41,7 @@ type Analysis = { graph: Graph; needs: ReadonlyMap<string, ContextSet> };
  */
 const analyses = new WeakMap<ReadonlyMap<string, Json>, Analysis>();
 
-function analysisOf(summaries: ReadonlyMap<string, Json>): Analysis {
+export function analysisOf(summaries: ReadonlyMap<string, Json>): Analysis {
   const known = analyses.get(summaries);
   if (known !== undefined) return known;
   const typed = new Map<string, Summary>();
@@ -42,7 +49,7 @@ function analysisOf(summaries: ReadonlyMap<string, Json>): Analysis {
     if (isSummary(summary)) typed.set(file, summary);
   }
   const graph = buildGraph(typed);
-  const made = { graph, needs: computeNeeds(graph) };
+  const made = { graph, needs: computeNeeds(graph), summaries: typed };
   analyses.set(summaries, made);
   return made;
 }
@@ -81,7 +88,9 @@ function needsLine(analysis: Analysis, component: ComponentSummary): string[] {
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return names.map(({ id, name }) => {
     const first = routeTo(graph, needs, component, id)?.steps[0];
-    return first === undefined ? `\`${name}\` (read here)` : `\`${name}\` (via \`${first.via}\`)`;
+    return first === undefined
+      ? `\`${name}\` (read in the component)`
+      : `\`${name}\` (via \`${first.via}\`)`;
   });
 }
 

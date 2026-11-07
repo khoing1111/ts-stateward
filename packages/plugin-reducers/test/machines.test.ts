@@ -43,7 +43,7 @@ const checkoutExpected: Shown[] = [
     hint: 'add the event that leads to "review", or remove it from `CheckoutState`',
     notes: [
       'CheckoutPage.tsx: initialCheckout: starts at "cart"',
-      'types.ts: "review": "review" is declared here',
+      'types.ts: "review": "review" is declared',
     ],
     fixes: [],
   },
@@ -69,7 +69,7 @@ const uploadExpected: Shown[] = [
     hint: 'add the event that leads to "discarded", or remove it from `UploadState`',
     notes: [
       'upload.ts: @initial "idle": starts at "idle"',
-      'upload.ts: "discarded": "discarded" is declared here',
+      'upload.ts: "discarded": "discarded" is declared',
     ],
     fixes: [],
   },
@@ -82,7 +82,7 @@ const uploadExpected: Shown[] = [
     hint: 'add the event that leads to "draft", or remove it from `UploadState`',
     notes: [
       'upload.ts: @initial "idle": starts at "idle"',
-      'upload.ts: "draft": "draft" is declared here',
+      'upload.ts: "draft": "draft" is declared',
     ],
     fixes: [],
   },
@@ -96,7 +96,7 @@ const uploadExpected: Shown[] = [
     notes: [
       'upload.ts: @initial "idle": starts at "idle"',
       'upload.ts: { phase: "scheduled", file: state.file }: returns "scheduled" only from "draft"',
-      'upload.ts: "scheduled": "scheduled" is declared here',
+      'upload.ts: "scheduled": "scheduled" is declared',
     ],
     fixes: [],
   },
@@ -107,7 +107,7 @@ const uploadExpected: Shown[] = [
     at: '{ phase: "idle" }',
     message: '"done" is marked final, but `uploadReducer` leaves it on `restart`',
     hint: 'remove "done" from `@final`, or stop handling `restart` in "done"',
-    notes: ['upload.ts: @final "done" | "discarded" | "payed": "done" is marked final here'],
+    notes: ['upload.ts: @final "done" | "discarded" | "payed": "done" is marked final'],
     fixes: [],
   },
 ];
@@ -118,7 +118,7 @@ const unreadableExpected: Shown[] = [
     severity: "info",
     file: "fetch.ts",
     at: "restored",
-    message: "stateward cannot tell which state the constant `restored` is in",
+    message: "constant `restored` can be any state of `FetchState`",
     hint: 'type it with the state it starts in, e.g. `const restored: Extract<FetchState, { status: "done" }> = …`',
     notes: ["fetch.ts: fetchReducer: in `fetchReducer`"],
     fixes: [],
@@ -138,7 +138,7 @@ const unreadableExpected: Shown[] = [
     severity: "info",
     file: "job.ts",
     at: "applyEvent(state, event)",
-    message: "stateward cannot tell which states `applyEvent(state, event)` returns",
+    message: "`applyEvent(state, event)` can return any state of `JobState`",
     hint: 'declare its return type as the states it returns, e.g. `Extract<JobState, { status: "done" }>`',
     notes: ["job.ts: jobReducer: in `jobReducer`"],
     fixes: [],
@@ -148,7 +148,8 @@ const unreadableExpected: Shown[] = [
     severity: "unknown",
     file: "loose.ts",
     at: "external",
-    message: "stateward cannot tell which state `external` returns",
+    message:
+      "not checked: which state `external` returns: its type is not one state of `LooseState`",
     hint: "give it a type that is one of the states of `LooseState`, such as `Extract<LooseState, …>`",
     notes: [],
     fixes: [],
@@ -158,7 +159,7 @@ const unreadableExpected: Shown[] = [
     severity: "info",
     file: "prose.ts",
     at: "@final the order is done",
-    message: '`@final` on `OrderState` should list states in quotes: `@final "done"`',
+    message: "`@final` on `OrderState` lists states without quotes",
     hint: 'quote each state, e.g. `@final "done" | "open"`',
     notes: [],
     fixes: [],
@@ -181,9 +182,9 @@ const unreadableExpected: Shown[] = [
     severity: "info",
     file: "queue.ts",
     at: "queueReducer",
-    message: "stateward cannot tell where `queueReducer` starts",
+    message: "`queueReducer` can start in any state: no start is known",
     hint: "add `/** @initial empty */` to `queueReducer`",
-    notes: ["queue.ts: queueReducer: handed on here"],
+    notes: ["queue.ts: queueReducer: handed on"],
     fixes: [],
   },
   {
@@ -191,9 +192,9 @@ const unreadableExpected: Shown[] = [
     severity: "info",
     file: "search.ts",
     at: "searchReducer",
-    message: "`searchReducer` is also used outside `useReducer`, so it may start anywhere",
+    message: "`searchReducer` can start in any state: it is also used outside `useReducer`",
     hint: "list its starts with `@initial`, or call it only through `useReducer`",
-    notes: ["search.ts: searchReducer: called here", "search.ts: searchReducer: called here"],
+    notes: ["search.ts: searchReducer: called", "search.ts: searchReducer: called"],
     fixes: [],
   },
   {
@@ -201,9 +202,9 @@ const unreadableExpected: Shown[] = [
     severity: "info",
     file: "session.ts",
     at: "saved",
-    message: "`sessionReducer` can start in any state: this start is not a known state",
+    message: "`sessionReducer` can start in any state: the state it starts from is not known",
     hint: "start from a constant state, or list where it starts with `@initial` on the reducer",
-    notes: ["session.ts: sessionReducer: `sessionReducer` is declared here"],
+    notes: ["session.ts: sessionReducer: `sessionReducer` is declared"],
     fixes: [],
   },
 ];
@@ -268,7 +269,7 @@ describe("reducers: a reducer that starts from its `state = initialState` defaul
         hint: 'add the event that leads to "retrying", or remove it from `UploadState`',
         notes: [
           'reducer.ts: initialUpload: starts at "idle"',
-          'reducer.ts: "retrying": "retrying" is declared here',
+          'reducer.ts: "retrying": "retrying" is declared',
         ],
         fixes: [],
       },
@@ -304,7 +305,7 @@ describe("reducers/reducer-not-readable and the unknown of state-unreachable", (
     expect(shown(ENTRY, check(ENTRY)).map((finding) => [finding.rule, finding.message])).toEqual([
       [
         "reducers/reducer-not-readable",
-        "`parcelReducer` is exported from the package, so it may start anywhere",
+        "`parcelReducer` can start in any state: it is exported from the package",
       ],
     ]);
   });
@@ -350,7 +351,7 @@ describe("reducers/state-cannot-leave: final states in a `FINAL_STATES` const", 
         at: 'event.type === "reopen" ? { status: "open" } : state',
         message: '"closed" is marked final, but `ticketReducer` leaves it',
         hint: 'remove "closed" from `TICKET_FINAL_STATUSES`, or stop leaving it',
-        notes: ['ticket.ts: TICKET_FINAL_STATUSES: "closed" is marked final here'],
+        notes: ['ticket.ts: TICKET_FINAL_STATUSES: "closed" is marked final'],
         fixes: [],
       },
     ]);

@@ -308,8 +308,8 @@ export function isPlainReference(expression: ts.Expression): boolean {
 /** The quick fix that lists hidden cases keeps what the code does for every value of the type. */
 export function listTitle(count: number): string {
   return count === 1
-    ? "List the hidden case (same behaviour)"
-    : `List the ${String(count)} hidden cases (same behaviour)`;
+    ? "List the missing case (same behaviour)"
+    : `List the ${String(count)} missing cases (same behaviour)`;
 }
 
 /** The `break`, `return`, `throw` or `continue` that ends a branch for sure, if it ends with one. */

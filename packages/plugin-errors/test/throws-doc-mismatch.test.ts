@@ -14,42 +14,42 @@ describe(`errors/${RULE}: a @throws tag that does not match the body`, () => {
     expect(shown(flagged())).toEqual([
       says(
         "docs.ts",
-        "`loadUser` can throw `SyntaxError`, which its `@throws` does not list",
+        "`@throws` of `loadUser` does not list `SyntaxError`",
         "add it to the tag: `@throws {SyntaxError}`",
       ),
       says(
         "docs.ts",
-        "`@throws` lists `ValidationError`, which `listsTooMuch` cannot throw",
+        "`@throws` of `listsTooMuch` lists `ValidationError`, which it cannot throw",
         "remove `ValidationError` from the tag, or throw it where it can happen",
       ),
       says(
         "docs.ts",
-        "`saysNever` can throw `ParseError`, which its `@throws` does not list",
+        "`@throws` of `saysNever` does not list `ParseError`",
         "add it to the tag: `@throws {ParseError}`",
       ),
       says(
         "docs.ts",
-        "`fetchUser` can throw `TypeError`, which its `@throws` does not list",
+        "`@throws` of `fetchUser` does not list `TypeError`",
         "add it to the tag: `@throws {TypeError}`",
       ),
       says(
         "docs.ts",
-        "stateward cannot tell whether `unclear` throws `ParseError` (via `run`: callback of unknown origin)",
-        "if `unclear` cannot throw it, remove `ParseError` from the tag; else add `@throws` where it comes from",
+        "not checked: whether `unclear` throws `ParseError`: what `run` throws is not known (callback of unknown origin)",
+        "remove `ParseError` from the tag if `unclear` cannot throw it; otherwise add `@throws` where it comes from",
       ),
       says(
         "docs.ts",
-        "stateward cannot find the class `Missing` this `@throws` names",
+        "not checked: `@throws` names `Missing`: no class of that name is in scope",
         "name an error class that is in scope in this file, or import it",
       ),
       says(
         "docs.ts",
-        "`@throws` lists `ValidationError`, which `viaThen` cannot throw",
+        "`@throws` of `viaThen` lists `ValidationError`, which it cannot throw",
         "remove `ValidationError` from the tag, or throw it where it can happen",
       ),
       says(
         "docs.ts",
-        "`viaThen` can throw `NotFoundError`, which its `@throws` does not list",
+        "`@throws` of `viaThen` does not list `NotFoundError`",
         "add it to the tag: `@throws {NotFoundError}`",
       ),
     ]);

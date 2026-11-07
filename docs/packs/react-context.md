@@ -4,53 +4,77 @@
 
 A component that needs a context is always rendered under its Provider.
 
+## Turn it on
+
+Install `@stateward/plugin-react-context` and add `reactContext()` to `plugins` in `stateward.config.ts`, with a `preset` (`npx stateward init` does both):
+
+```ts
+plugins: [reactContext()], preset: "recommended", // or "strict"
+```
+
+Each rule's page has its options and what it does not catch. One rule or a whole group is set under `rules` or `groups`: `rules: { "react-context/<rule>": "warning" }`.
+
 ## Rules
 
-Rules sit under their group. Set a whole group in the config, `groups: { "react-context/defaults": "warning" }`, or one rule under `rules`; a rule's own entry wins.
+| Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
+| --- | --- | --- | --- | --- | --- |
+| [fake-default-value](../rules/react-context/fake-default-value.md) | a context created with a fake default like `{} as Theme` or `null!` | A default like `{} as Theme` is used when the Provider is missing, so the code reads an empty object typed as a full one and fails later. | Coverage | info | error |
+| [provider-missing](../rules/react-context/provider-missing.md) | a component that reads a required context, rendered with no Provider above it | A component that reads a required context outside its Provider gets the default value or an error at run time; the finding shows the render path without it. | Core | error | error |
 
-### defaults
+## [fake-default-value](../rules/react-context/fake-default-value.md)
 
-| Rule | Kind | recommended | strict | What it checks |
-| --- | --- | --- | --- | --- |
-| [fake-default-value](../rules/react-context/fake-default-value.md) | Coverage | info | error | A React context gets its value from a Provider, not from a fake default like {} as Theme. |
+A default like `{} as Theme` is used when the Provider is missing, so the code reads an empty object typed as a full one and fails later.
 
-### providers
+```tsx
+import { createContext, useContext } from "react";
 
-| Rule | Kind | recommended | strict | What it checks |
-| --- | --- | --- | --- | --- |
-| [provider-missing](../rules/react-context/provider-missing.md) | Core | error | error | A component that reads a required context is rendered under that context's Provider. |
+type Theme = { colors: { text: string } };
 
-## Options
+const ThemeContext = createContext({} as Theme);
 
-Set in the config as `rules: { "<rule>": [severity, { option: value }] }`.
+export function Title() {
+  return <h1 style={{ color: useContext(ThemeContext).colors.text }}>Hello</h1>;
+}
+```
 
-### fake-default-value
+```text
+info[react-context/fake-default-value]: `ThemeContext` defaults to a fake value, `{} as Theme`
+```
 
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of placeholder. Kinds: `cast`: a cast (`{} as Theme`, `x!`): the type says a real value is there when it is not; `empty`: an empty object `{}`: the context's type usually shows the gap. |
-| `ignore` | list of strings | `[]` | Context names (globs like *Optional*) whose placeholder is on purpose. |
+Fix: create the context with `undefined`, so its type says the value can be missing, and read it through a hook that throws when it is.
 
-### provider-missing
+Coverage rule (it points at code whose types do not say enough to check it): info under `recommended`, error under `strict`. Group: `react-context/defaults`.
 
-| Option | Type | Default | What it does |
-| --- | --- | --- | --- |
-| `ignore` | list of strings | `[]` | Required contexts (names or globs) whose missing Provider is not reported, such as one a framework provides above every page. |
-| `lazyFunctions` | list of strings | `[]` | Your own wrappers of React's `lazy`, by name (like ["lazyComponent"]), whose first argument is `() => import("./Page")`: the page they load is followed like `lazy`. |
+## [provider-missing](../rules/react-context/provider-missing.md)
+
+A component that reads a required context outside its Provider gets the default value or an error at run time; the finding shows the render path without it.
+
+```tsx
+// …
+function useAuth(): User {
+  const user = useContext(AuthContext);
+  if (user === undefined) throw new Error("useAuth needs an AuthContext Provider");
+  return user;
+}
+
+function Profile() {
+  return <h1>{useAuth().name}</h1>;
+}
+
+createRoot(document.body).render(<Profile />);
+```
+
+```text
+error[react-context/provider-missing]: `<Profile>` is rendered without `AuthContext.Provider`
+```
+
+Fix: render the component under the Provider.
+
+Core rule: error under `recommended` and `strict`. It checks more with the add-ons `react-context/react-router`, `react-context/dynamic-components`. Group: `react-context/providers`.
 
 ## Add-ons
 
+List an add-on in `addons` to turn on its rules: `addons: ["react-context/<add-on>"]`.
+
 - `react-context/dynamic-components`: `provider-missing` (checks more with it)
 - `react-context/react-router`: `provider-missing` (checks more with it)
-
-## Settings
-
-Presets and add-ons are set in the config, not on the plugin:
-
-```ts
-export default defineConfig({
-  plugins: [reactContext()],
-  preset: "strict",
-  // addons: ["react-context/<addon>"],
-});
-```

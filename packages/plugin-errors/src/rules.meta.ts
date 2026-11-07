@@ -7,7 +7,8 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "A catch that handles some errors with instanceof also rethrows or handles all the others.",
+        "A `catch` that tests some error classes and has no last branch ignores every other error, bugs included; rethrowing the rest keeps them visible.",
+      summary: "a `catch` that handles some error classes with `instanceof` and ignores the rest",
       defaultSeverity: "error",
       tier: "core",
       group: "catch",
@@ -21,54 +22,12 @@ export const RULES = {
       },
     },
   },
-  "catch-without-intent": {
-    kind: "file",
-    meta: {
-      description:
-        "Experimental: on real projects it is mostly wrong; it may change or be removed. A catch that handles every error says how: it narrows, reports, or falls back; one that only logs, or calls something stateward cannot judge, and carries on is reported.",
-      defaultSeverity: "warning",
-      tier: "addon",
-      addon: "catch-intent",
-      group: "catch",
-      heuristic: true,
-      options: {
-        loggers: {
-          kind: "strings",
-          default: ["console", "logger", "log"],
-          description:
-            "Objects whose every method only logs (globs like *Logger): a catch that only calls them swallows the error.",
-        },
-        logMethods: {
-          kind: "strings",
-          default: ["error", "warn", "info", "debug"],
-          description:
-            "Method names that only log, on any object (`Sentry.captureException` is not one).",
-        },
-        logFunctions: {
-          kind: "strings",
-          default: [],
-          description: "Plain functions of your own that only log, like logError (globs allowed).",
-        },
-        edgeHelpers: {
-          kind: "strings",
-          default: [],
-          description:
-            "Your functions that report an error where it ends (to a service, to the user): a catch that calls one is handled, like reportAndShow (globs allowed). Sentry, Bugsnag and Datadog are known without it.",
-        },
-        swallowHelpers: {
-          kind: "strings",
-          default: [],
-          description:
-            "Functions that mark an error as ignored on purpose, like ignoreError (globs allowed): a catch that calls one is not reported.",
-        },
-      },
-    },
-  },
   "finally-can-throw": {
     kind: "file",
     meta: {
       description:
-        "A finally block does not call something that throws, so the error that led to it is not lost.",
+        "An error thrown in `finally` replaces the error that was already thrown, so the report names the cleanup instead of the original cause.",
+      summary: "a `finally` that calls something that can throw and replace the original error",
       defaultSeverity: "error",
       tier: "core",
       group: "catch",
@@ -92,7 +51,8 @@ export const RULES = {
     kind: "project",
     meta: {
       description:
-        "A catch that branches with instanceof handles every error class its try can throw, or rethrows the rest; so does an error boundary's fallback.",
+        "An error class the `try` can throw and the `catch` does not test goes to the generic branch, or is ignored; a branch for it, or a rethrow, handles it explicitly.",
+      summary: "a `catch` that branches on error classes but misses one its `try` can throw",
       defaultSeverity: "error",
       tier: "core",
       group: "catch",
@@ -111,7 +71,9 @@ export const RULES = {
     kind: "project",
     meta: {
       description:
-        "A function's @throws tag lists exactly the error classes it can throw, as far as stateward can see.",
+        "Callers decide what to catch from `@throws`: a class it omits reaches them unhandled, and a class listed in excess asks them to handle a case that cannot happen.",
+      summary:
+        "a `@throws` tag that lists an error the function cannot throw, or misses one it can",
       defaultSeverity: "error",
       tier: "core",
       group: "callers",
@@ -139,11 +101,14 @@ export const RULES = {
     kind: "project",
     meta: {
       description:
-        "A component that can throw a known error while rendering has an error boundary above it.",
+        "An error thrown while rendering, with no error boundary above the component, unmounts the whole React tree and leaves a blank page.",
+      summary:
+        "a component that can throw a known error while rendering, with no error boundary above it",
       defaultSeverity: "warning",
       tier: "core",
       group: "render",
       needsJsDoc: true,
+      needsTypes: { library: "React", modules: ["react"] },
       options: {
         skipContextGuards: {
           kind: "boolean",
@@ -176,7 +141,9 @@ export const RULES = {
     kind: "project",
     meta: {
       description:
-        "An error class marked @mustHandle is named in a catch or passed on with @throws by every call that can throw it.",
+        "An error marked `@mustHandle` needs a decision at each call, such as a message to the user; a call that neither catches it nor passes it on lets it reach the top.",
+      summary:
+        "a call that can throw an error marked `@mustHandle`, with no code that handles or passes it on",
       defaultSeverity: "error",
       tier: "core",
       group: "callers",
@@ -188,7 +155,9 @@ export const RULES = {
     kind: "project",
     meta: {
       description:
-        "Calls to your own code placed in a `try` after the call it is for: move them after the `try`.",
+        "A bug in code inside a `try` meant for another call is caught and reported as that call's failure; moving the code after the `try` keeps the two apart.",
+      summary:
+        "calls to your own code inside a `try` after the call it is for, so their bugs look like its failure",
       defaultSeverity: "warning",
       tier: "addon",
       addon: "narrow-try",
@@ -200,7 +169,8 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "The Result of a call is checked or passed on, not dropped as a statement, after void or after await.",
+        "A `Result` dropped as a statement discards its error, so a failed call looks the same as a successful one.",
+      summary: "a `Result` dropped as a statement, after `void` or after `await`",
       defaultSeverity: "error",
       tier: "core",
       group: "callers",
@@ -230,7 +200,9 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "A call that reports failure in its value, not by throwing, is checked before the code goes on as if it worked.",
+        "A call that returns its failure instead of throwing never reaches the `catch`; without a check, the code after it runs as if the call worked.",
+      summary:
+        "a call that fails in its value (an RTK Query trigger, a Result) used as if it had worked",
       defaultSeverity: "warning",
       tier: "core",
       group: "callers",

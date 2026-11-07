@@ -4,8 +4,8 @@ import { checkOnly, fixture, says, shown } from "./lookup-helpers.js";
 
 const RULE = "lookup-misses-key";
 
-function unchecked(map: string, type: string, access: string): string {
-  return `\`${map}\` is typed \`${type}\`, so \`${access}\` is never checked`;
+function unchecked(_map: string, _type: string, access: string): string {
+  return `\`${access}\` can be missing, but its type says it never is`;
 }
 
 function declare(map: string, key: string): string {
@@ -106,15 +106,15 @@ describe(`records/${RULE}: flagged`, () => {
       ),
       says(
         "registry.ts",
-        '`response` is cast to `Record<string, number>`, so `(response as Record<string, number>)["total_users"]` is never checked',
-        "the cast hides which keys `response` has: type it where it is made, or handle a missing entry with `??`",
+        '`(response as Record<string, number>)["total_users"]` can be missing, but the cast to `Record<string, number>` says it never is',
+        "type `response` where it is made, or handle a missing entry with `??`: the cast drops which keys it has",
       ),
     ]);
   });
 
   it("reads that a guard on another key, another map, or the wrong branch does not cover", () => {
     expect(shown(inFile("not-guarded.ts")).map((one) => one.message)).toEqual(
-      Array.from({ length: 6 }, () =>
+      Array.from({ length: 8 }, () =>
         unchecked("labels", "Record<string, string>", "labels[status]"),
       ),
     );
@@ -123,8 +123,8 @@ describe(`records/${RULE}: flagged`, () => {
   it("never cuts a name, so a long one makes the headline longer than 100", () => {
     const messages = shown(inFile("long-names.ts")).map((one) => one.message);
     expect(messages).toEqual([
-      "`labelsForEveryStatusOfTheUploadPipelineInTheApp` is typed `Record<string, string>`, so `labelsForEveryStatusOfTheUploadPipelineInTheApp[theCurrentStatusOfTheUploadPipelineInTheApp]` is never checked",
-      "`exactLabelsForEveryStatusOfTheUploadPipeline` is typed `{ [key: string]: string; idle…`, so `exactLabelsForEveryStatusOfTheUploadPipeline[theCurrentStatusOfTheUploadPipelineInTheApp]` is never checked",
+      "`labelsForEveryStatusOfTheUploadPipelineInTheApp[theCurrentStatusOfTheUploadPipelineInTheApp]` can be missing, but its type says it never is",
+      "`exactLabelsForEveryStatusOfTheUploadPipeline[theCurrentStatusOfTheUploadPipelineInTheApp]` can be missing, but its type says it never is",
     ]);
   });
 

@@ -2,83 +2,86 @@
 
 # react/effect-missing-cleanup
 
-An effect that starts a listener, timer, subscription, observer or connection returns a cleanup that stops it.
-
-- Group: react/effects
-- Tier: core (on in every preset)
-- Add-on: none
-- Heuristic: no
-- Severity under `recommended`: warning
-- Severity under `strict`: warning
-
-An effect that starts something (a listener, a timer, a subscription, an observer, a connection) returns a cleanup that stops it.
-
-## Why
-
-React runs an effect's cleanup before it runs the effect again and when the component goes away. Without one, what the effect started keeps going: `window.addEventListener("resize", onResize)` adds one more listener on every run and keeps calling `setWidth` after the component is gone; an interval keeps ticking; a chat subscription keeps delivering messages to a closed screen. In development, React's Strict Mode runs every effect twice, so a missing cleanup shows as every event handled twice.
-
-## When to use it
-
-Use it in any React app. It is a warning in every preset. It stays on with the React Compiler, which does not add cleanups.
-
-## What it catches
-
-In an effect, with no returned cleanup that undoes it:
-
-- `addEventListener(type, handler)`: undone by `removeEventListener` with the same target, type and handler variable, or by aborting the `signal` passed in its options. A handler written inline cannot be removed, since the cleanup cannot name the same function.
-- `setInterval(…)`: undone by `clearInterval` on the stored id.
-- `setTimeout(…)`: undone by `clearTimeout` on the stored id; reported only when the timeout sets state, or the effect runs more than once (it has dependencies, or no list).
-- A timer kept in a ref that the effect clears itself before it starts the next one (a debounce): only unmount is missing, and the fix is an effect of its own, `useEffect(() => () => clearTimeout(timer.current), [])`, not a cleanup in this effect.
-- `subscribe(…)` or `.on(…)` that returns an unsubscribe function (undone by calling it, or by returning the call itself) or a subscription object (undone by its `unsubscribe()`).
-- `new ResizeObserver`, `IntersectionObserver` or `MutationObserver`: undone by `disconnect()`.
-- `new WebSocket` or `EventSource`: undone by `close()`.
-
-What is kept in a ref or a variable outside the effect may also be stopped by another effect of the same component that has an empty dependency list (its cleanup runs on unmount), when this effect runs once or clears the previous timer itself. A value created only on some paths (`supported ? new ResizeObserver(…) : undefined`) and stopped through `?.` counts as stopped.
-
-The options below add classes and methods to these lists, or leave `setTimeout` out.
-
-### Bad
+A listener, timer or subscription that an effect starts and never stops keeps running after unmount, and each run of the effect adds another one.
 
 ```tsx
-useEffect(() => {
-  window.addEventListener("resize", () => setWidth(window.innerWidth));
-}, []);
+import { useEffect, useState } from "react";
+
+export function WindowWidth() {
+  const [width, setWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    window.addEventListener("resize", () => setWidth(window.innerWidth));
+  }, []);
+  return <p>{width}px</p>;
+}
 ```
 
-### Good
+`stateward check` prints:
+
+```text
+warning[react/effect-missing-cleanup]: `resize` listener on `window` is an inline function: no cleanup can remove it
+ --> example.tsx:6:5
+  |
+6 |     window.addEventListener("resize", () => setWidth(window.innerWidth));
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = fix: keep the handler in a variable (`const onResize = …`), then `return () => window.removeEventListener("resize", onResize)`
+  = docs: stateward explain react/effect-missing-cleanup
+```
+
+Keep what the effect starts in a variable, and return a function that stops it:
 
 ```tsx
-useEffect(() => {
-  const onResize = () => setWidth(window.innerWidth);
-  window.addEventListener("resize", onResize);
-  return () => window.removeEventListener("resize", onResize);
-}, []);
+import { useEffect, useState } from "react";
+
+export function WindowWidth() {
+  const [width, setWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return <p>{width}px</p>;
+}
 ```
 
-### Fix
+The same goes for a timer id, an unsubscribe function or an observer. There is no quick fix.
 
-Keep what the effect starts in a variable (the handler, the timer id, the unsubscribe function, the observer) and return a function that stops it. There is no quick fix.
+## Why it matters
+
+React runs an effect's cleanup before it runs the effect again and when the component goes away. Without one, what the effect started keeps going: the listener above keeps calling `setWidth` after the component is gone, and an effect with dependencies adds one more on every run; an interval keeps ticking; a chat subscription keeps delivering messages to a closed screen. In development, React's Strict Mode runs every effect twice, so a missing cleanup shows as every event handled twice.
+
+## When it says “not checked”
+
+A cleanup that calls a function declared outside the effect with what was started (`return () => stopAll(id)`) is listed as not checked, since stateward cannot see that function's body. Stop it in the cleanup itself.
 
 ## What it does not catch
 
-- Something started in a function the effect calls, or in a callback it passes on (`.then(() => addEventListener(…))`).
-- A cleanup that calls a function declared outside the effect with what was started (`return () => stopAll(id)`): it is listed as a place not checked, since it cannot see that function's body.
-- An `.on(…)` that returns the emitter itself rather than an unsubscribe (Node's `EventEmitter`): undone by `.off`, which this rule does not check.
-- Libraries' own resources (a map, a chart) other than the ones above.
+It looks for these, each with what undoes it in a returned cleanup:
+
+- `addEventListener(type, handler)`: `removeEventListener` with the same target, type and handler variable, or aborting the `signal` passed in its options. A handler written inline cannot be removed, since the cleanup cannot name the same function;
+- `setInterval(…)`: `clearInterval` on the stored id;
+- `setTimeout(…)`: `clearTimeout` on the stored id; reported only when the timeout sets state, or the effect runs more than once (it has dependencies, or no list);
+- a timer kept in a ref that the effect clears itself before it starts the next one (a debounce): only unmount is missing, and the fix is an effect of its own, `useEffect(() => () => clearTimeout(timer.current), [])`;
+- `subscribe(…)` or `.on(…)` that returns an unsubscribe function (call it, or return the call itself) or a subscription object (its `unsubscribe()`);
+- `new ResizeObserver`, `IntersectionObserver` or `MutationObserver`: `disconnect()`;
+- `new WebSocket` or `EventSource`: `close()`.
+
+Something kept in a ref or a variable outside the effect may also be stopped by another effect of the same component with an empty dependency list (its cleanup runs on unmount), when this effect runs once or clears the previous one itself. A value created only on some paths (`supported ? new ResizeObserver(…) : undefined`) and stopped through `?.` counts as stopped. It is silent on:
+
+- something started in a function the effect calls, or in a callback it passes on (`.then(() => addEventListener(…))`);
+- an `.on(…)` that returns the emitter itself rather than an unsubscribe (Node's `EventEmitter`): undone by `.off`, which this rule does not check;
+- libraries' own resources (a map, a chart) other than the ones above; the options add classes and methods to the lists, or leave `setTimeout` out.
+
+It stays on with the React Compiler, which does not add cleanups.
 
 ## Turn it on or off
 
-In `stateward.config.ts`:
-
 ```ts
 rules: { "react/effect-missing-cleanup": "off" } // or "error"
-groups: { "react/effects": "off" } // the whole group
 rules: { "react/effect-missing-cleanup": ["warning", { severities: { "inline-handler": "error" } }] } // an inline listener is always a bug
 ```
 
-### Options
-
-Set as `rules: { "react/effect-missing-cleanup": ["warning", { … }] }`.
+Options, set as `rules: { "react/effect-missing-cleanup": ["warning", { … }] }`:
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
@@ -87,3 +90,5 @@ Set as `rules: { "react/effect-missing-cleanup": ["warning", { … }] }`.
 | `subscribeMethods` | list of strings | `["subscribe","on"]` | Methods that start a subscription and return a way to stop it (an unsubscribe function or object). |
 | `timeouts` | boolean | `true` | Check `setTimeout` too; false checks only intervals, listeners and the rest. |
 | `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of finding. Kinds: `inline-handler`: a listener written inline: no cleanup can remove it, even one you add later; `missing-cleanup`: something the effect starts and no cleanup stops. |
+
+Core rule: warning under `recommended` and `strict`. Group: `react/effects`.

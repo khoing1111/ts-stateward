@@ -34,19 +34,19 @@ describe(`errors/${RULE}: an error marked @mustHandle is handled or passed on by
       says(
         "checkout.ts",
         "`pay(…)` can throw `PaymentDeclinedError`, which must be handled",
-        "name it in this `catch`, which treats every error alike, or rethrow it and add `@throws {PaymentDeclinedError}` to `payWithToast`:\n" +
+        "name it in the `catch`, which treats every error alike, or rethrow it and add `@throws {PaymentDeclinedError}` to `payWithToast`:\n" +
           example("PaymentDeclinedError"),
       ),
       says(
         "checkout.ts",
         "`pay(…)` can throw `PaymentDeclinedError`, which must be handled",
-        "name it in this `catch`, which treats every error alike, or rethrow it and add `@throws {PaymentDeclinedError}` to `payOrShowError`:\n" +
+        "name it in the `catch`, which treats every error alike, or rethrow it and add `@throws {PaymentDeclinedError}` to `payOrShowError`:\n" +
           example("PaymentDeclinedError"),
       ),
       says(
         "checkout.ts",
         "`pay(…)` can throw `PaymentDeclinedError`, which must be handled",
-        "this `catch` passes it on: add `@throws {PaymentDeclinedError}` to `payAndReport`, or handle it in the `catch`:\n" +
+        "add `@throws {PaymentDeclinedError}` to `payAndReport`, or handle it in the `catch`: the `catch` passes it on:\n" +
           example("PaymentDeclinedError"),
       ),
       says(
@@ -57,13 +57,13 @@ describe(`errors/${RULE}: an error marked @mustHandle is handled or passed on by
       ),
       says(
         "checkout.ts",
-        "`pay(…)` can throw `PaymentDeclinedError` out of a callback stateward cannot follow",
-        "name `PaymentDeclinedError` in a `catch` here, or make sure the code that calls this callback does: it must be handled",
+        "not checked: whether `PaymentDeclinedError` from `pay(…)` is handled: it leaves a callback whose caller is not known",
+        "name `PaymentDeclinedError` in a `catch` around the call, or in the code that calls the callback: it must be handled",
       ),
       says(
         "session.ts",
-        "stateward does not check `@mustHandle` on a type yet, only on an error class",
-        "to have every call checked, throw an error class marked `@mustHandle`; plain-object errors come later",
+        "not checked: the calls that meet `@mustHandle` on a type: only an error class is followed",
+        "throw an error class marked `@mustHandle`, so every call is checked; plain-object errors come later",
       ),
     ]);
   });
@@ -98,14 +98,14 @@ describe(`errors/${RULE}: an error marked @mustHandle is handled or passed on by
     expect(notes.slice(0, 5)).toEqual([
       [tag],
       [
-        "checkout.ts: this `catch` does not name `PaymentDeclinedError`: it handles every error alike",
+        "checkout.ts: `catch` does not name `PaymentDeclinedError`: it handles every error alike",
         tag,
       ],
       [
-        "checkout.ts: this `catch` does not name `PaymentDeclinedError`: it handles every error alike",
+        "checkout.ts: `catch` does not name `PaymentDeclinedError`: it handles every error alike",
         tag,
       ],
-      ["checkout.ts: this `catch` rethrows `PaymentDeclinedError`", tag],
+      ["checkout.ts: `catch` rethrows `PaymentDeclinedError`", tag],
       [
         "errors.ts: `CardExpiredError` extends `PaymentDeclinedError`, which must be handled: Tell the user the card was declined and let them pick another card.",
       ],
@@ -144,7 +144,7 @@ describe(`errors/${RULE}: an error marked @mustHandle is handled or passed on by
 
   it("flags a guard or conditional that names another class, a guard that does not leave, and a helper also called bare", () => {
     const hint = (fn: string): string =>
-      `name it in this \`catch\`, which treats every error alike, or rethrow it and add \`@throws {Declined}\` to \`${fn}\`:\n` +
+      `name it in the \`catch\`, which treats every error alike, or rethrow it and add \`@throws {Declined}\` to \`${fn}\`:\n` +
       "    if (e instanceof Declined) {\n      // Tell the user the card was declined.\n    }";
     const bare = (fn: string): string =>
       `name it in a \`catch\`, pass it on with \`@throws {Declined}\` on \`${fn}\`, or return it as a failure instead of throwing:\n` +

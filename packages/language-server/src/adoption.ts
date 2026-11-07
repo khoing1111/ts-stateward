@@ -2,6 +2,7 @@ import {
   RolloutError,
   advance,
   buildPlan,
+  describeNotChecked,
   describeTurnOn,
   readRollout,
   ruleIsOn,
@@ -90,6 +91,8 @@ export type NextAnswer =
   | { kind: "all-on"; message: string }
   /** The rule turned on last still has findings; asking again with `anyway` moves on. */
   | { kind: "blocked"; message: string }
+  /** Every rule left could not run here (a library's types are missing): nothing was turned on. */
+  | { kind: "not-checked"; message: string }
   | { kind: "rollout-off"; message: string }
   /** The config cannot be used, a rule failed or the rollout file is broken. */
   | { kind: "failed"; message: string };
@@ -120,7 +123,7 @@ export function parseNextParams(params: unknown): boolean {
 export function rolloutOffAnswer(configFileName: string): NextAnswer {
   return {
     kind: "rollout-off",
-    message: `Turn on \`rollout: true\` in ${configFileName} first: without it every rule runs, and there is no next rule to turn on.`,
+    message: `Set \`rollout: true\` in ${configFileName} first: without it every rule runs, and there is no next rule to turn on.`,
   };
 }
 
@@ -138,6 +141,8 @@ export function applyNext(config: Config, result: CheckResult, anyway: boolean):
     const enabled = readRollout(config);
     const step = advance(buildPlan(config, result), enabled, anyway);
     switch (step.kind) {
+      case "not-checked":
+        return { kind: "not-checked", message: describeNotChecked(step.rows) };
       case "all-on":
         return {
           kind: "all-on",

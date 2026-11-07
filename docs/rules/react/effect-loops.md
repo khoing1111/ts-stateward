@@ -2,64 +2,68 @@
 
 # react/effect-loops
 
-An effect does not set, every time it runs, a state it depends on to a new value: that is a render loop.
-
-- Group: react/effects
-- Tier: core (on in every preset)
-- Add-on: none
-- Heuristic: no
-- Severity under `recommended`: error
-- Severity under `strict`: error
-
-## Why
-
-`useEffect(() => { setCount(count + 1); }, [count])` sets `count`, which re-renders the component; `count` changed, so the effect runs again, and sets it again. The page freezes or React stops it with "Maximum update depth exceeded". The same happens with a new object or array each time (`setFilters({ ...filters, page: 1 })`, `setItems(items.filter(…))`): React compares state by identity, so a new object is always a change.
-
-## When to use it
-
-Use it in any React app. It is an error in every preset: the loop is certain. It stays on with the React Compiler, which does not change what an effect sets.
-
-## What it catches
-
-An effect with the state in its dependency list (or with no list, so it runs after every render) that calls the state's setter with no condition around it, and with a value that is always new:
-
-- the state changed by arithmetic or negation (`count + 1`, `!open`) or put in a template string;
-- a new object or array (a literal, `new`, `.map`, `.filter`, `.concat`, `.slice` and the like);
-- an updater function that returns one of these (`setCount((c) => c + 1)`).
-
-### Bad
+An effect that sets one of its own dependencies to a new value each time it runs triggers itself again, so the component renders without end.
 
 ```tsx
-useEffect(() => {
-  setFilters({ ...filters, page: 1 });
-}, [filters]);
+import { useEffect, useState } from "react";
+
+export function Results() {
+  const [filters, setFilters] = useState({ query: "", page: 3 });
+  useEffect(() => {
+    setFilters({ ...filters, page: 1 });
+  }, [filters]);
+  return <p>Page {filters.page}</p>;
+}
 ```
 
-### Good
+`stateward check` prints:
+
+```text
+error[react/effect-loops]: render loop: the effect sets `filters`, one of its own dependencies, to a new value each time
+ --> example.tsx:6:5
+  |
+6 |     setFilters({ ...filters, page: 1 });
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = fix: set it only when it must change (`if (…) setFilters(…)`), or make the change in the event that causes it
+  = docs: stateward explain react/effect-loops
+```
+
+Set the state only when it must change, with a condition that compares the old and the new value:
 
 ```tsx
-useEffect(() => {
-  if (filters.page !== 1) setFilters({ ...filters, page: 1 });
-}, [filters]);
+import { useEffect, useState } from "react";
+
+export function Results() {
+  const [filters, setFilters] = useState({ query: "", page: 3 });
+  useEffect(() => {
+    if (filters.page !== 1) setFilters({ ...filters, page: 1 });
+  }, [filters]);
+  return <p>Page {filters.page}</p>;
+}
 ```
 
-### Fix
+Better still, make the change in the event that causes it (the handler that changes the query), and remove the effect. There is no quick fix.
 
-Set the state only when it must change, with a condition that compares the old and the new value. Better still, make the change in the event that causes it (the handler that changes the filters), and remove the effect. There is no quick fix.
+## Why it matters
+
+The effect sets `filters`, which re-renders the component; `filters` changed, so the effect runs again and sets it again. The page freezes, or React stops it with "Maximum update depth exceeded". React compares state by identity, so a new object or array is always a change, even with the same contents; the same goes for `setCount(count + 1)` with `count` in the dependencies.
 
 ## What it does not catch
 
-- A set inside any condition, loop or `try`: a condition that compares the old and new value stops the loop, and stateward does not judge other conditions.
-- A value that is not always new (`setName(props.name)`): React skips a set to the same value, so it does not loop.
-- A loop through two states or two effects (`a` sets `b`, `b` sets `a`).
-- A set in a callback the effect starts (a timer, a listener, a `.then`).
-- An effect whose dependencies are not written as an array in the call.
+It reports an effect with the state in its dependency list (or with no list, so it runs after every render) that calls the state's setter with no condition around it, and with a value that is always new: the state changed by arithmetic or negation (`count + 1`, `!open`) or put in a template string; a new object or array (a literal, `new`, `.map`, `.filter`, `.concat`, `.slice` and the like); or an updater function that returns one of these (`setCount((c) => c + 1)`). The loop is then certain. It is silent on:
+
+- a set inside any condition, loop or `try`: a condition that compares the old and the new value stops the loop, and stateward does not judge other conditions;
+- a value that is not always new (`setName(props.name)`): React skips a set to the same value, so it does not loop;
+- a loop through two states or two effects (`a` sets `b`, `b` sets `a`);
+- a set in a callback the effect starts (a timer, a listener, a `.then`);
+- an effect whose dependencies are not written as an array in the call.
+
+It stays on with the React Compiler, which does not change what an effect sets.
 
 ## Turn it on or off
 
-In `stateward.config.ts`:
-
 ```ts
 rules: { "react/effect-loops": "off" } // or "warning"
-groups: { "react/effects": "off" } // the whole group
 ```
+
+Core rule: error under `recommended` and `strict`. Group: `react/effects`.
