@@ -54,26 +54,6 @@ export const RULES = {
       },
     },
   },
-  "provider-value-changes-every-render": {
-    kind: "file",
-    meta: {
-      description:
-        "A Provider value created on every render re-renders every component that reads the context, even when nothing in the value changed.",
-      summary: "a context Provider given a new object or function on every render",
-      defaultSeverity: "warning",
-      tier: "core",
-      group: "render",
-      needsTypes: { library: "React", modules: ["react"] },
-      options: {
-        ignore: {
-          kind: "strings",
-          default: [],
-          description:
-            "Contexts (names or globs) whose readers are few or cheap, so a new value each render is fine.",
-        },
-      },
-    },
-  },
   "effect-copies-derived-value": {
     kind: "file",
     meta: {

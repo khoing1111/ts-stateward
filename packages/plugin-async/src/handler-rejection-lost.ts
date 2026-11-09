@@ -2,6 +2,7 @@ import ts from "@stateward/core/typescript";
 import {
   defineRule,
   matchesName,
+  neverRejectsFactOf,
   option,
   type FileContext,
   type OptionsOf,
@@ -348,6 +349,7 @@ function factsSayNeverRejects(call: ts.CallExpression, ctx: FileContext): boolea
 function neverRejects(expression: ts.Expression, ctx: FileContext): boolean {
   const code = stripParentheses(expression);
   if (ctx.types.settlesWithError(code)) return true;
+  if (neverRejectsFactOf(code, ctx) !== undefined) return true;
   return (
     ts.isCallExpression(code) &&
     (factsSayNeverRejects(code, ctx) || ctx.types.calleeTags(code).includes(NEVER_REJECTS))

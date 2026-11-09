@@ -35,11 +35,12 @@ npx stateward check
 with the change to make:
 
 ```text
-error[unions/default-hides-cases]: "failed" of `status` is not listed; `default` handles it
+error[unions/non-exhaustive-switch]: `switch` on `status` does not handle "failed"
  --> src/status.ts:9:5
-  = fix: list the case, then put `status satisfies never;` in the `default`; or name it in the `default` instead, if that is where it belongs:
-        default: status satisfies "failed";
-  = docs: stateward explain unions/default-hides-cases
+  = fix: one of
+      - add `case "failed":` with its own code
+      - or allow it in `default`: `default: void (status satisfies "failed");`
+  = docs: stateward explain unions/non-exhaustive-switch
 ```
 
 ## Commands
@@ -71,14 +72,14 @@ Rules come in packs, each its own package. Install the ones you use and list the
 
 | Pack | What it promises | Package | Rules |
 | --- | --- | --- | --- |
-| [unions](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/unions.md) | Every case of a union is handled, and its tag tells the cases apart. | `@stateward/plugin-unions` | 3 |
-| [records](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/records.md) | Lookup tables and records keyed by a union have every key, once, under a type that names them. | `@stateward/plugin-records` | 3 |
+| [unions](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/unions.md) | Every case of a union is handled, and its tag tells the cases apart. | `@stateward/plugin-unions` | 2 |
+| [records](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/records.md) | Lookup tables and records keyed by a union have every key, once, under a type that names them. | `@stateward/plugin-records` | 4 |
 | [async](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/async.md) | An async failure is never lost: handlers catch their own, and state set before an await is set again when it fails. | `@stateward/plugin-async` | 2 |
-| [react-context](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/react-context.md) | A component that needs a context is always rendered under its Provider. | `@stateward/plugin-react-context` | 2 |
+| [react-context](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/react-context.md) | Every context reader is under its Provider, defaults are real values, and Provider values keep their identity. | `@stateward/plugin-react-context` | 5 |
 | [errors](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/errors.md) | Errors are handled where they can happen: none ignored, none replaced in `finally`, no `Result` dropped. | `@stateward/plugin-errors` | 9 |
-| [ownership](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/ownership.md) | One owner per piece of shared state and per brand: others call the owner's functions. | `@stateward/plugin-ownership` | 2 |
+| [ownership](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/ownership.md) | One owner per piece of shared state, per brand and per resource: others call the owner's functions, and what is started is released. | `@stateward/plugin-ownership` | 3 |
 | [reducers](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/reducers.md) | A reducer reaches every state it declares and can leave every state it enters. | `@stateward/plugin-reducers` | 3 |
-| [react](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/react.md) | Values that effects and memoized components depend on keep their identity; effects do not copy state, loop, leak or race; state updates see the latest state; flags do not stand in for one state. | `@stateward/plugin-react` | 10 |
+| [react](https://github.com/khoing1111/ts-stateward/blob/main/docs/packs/react.md) | Values that effects and memoized components depend on keep their identity; effects do not copy state, loop, leak or race; state updates see the latest state; flags do not stand in for one state. | `@stateward/plugin-react` | 9 |
 
 <!-- /generated:packs -->
 

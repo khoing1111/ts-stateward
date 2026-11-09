@@ -9,7 +9,7 @@ import {
   type SemanticTokens,
   type TextEdit as LspTextEdit,
 } from "vscode-languageserver";
-import { ignoreFix } from "@stateward/core/internal";
+import { ignoreFix, laidOutHint } from "@stateward/core/internal";
 import type {
   Finding,
   FixForm,
@@ -80,7 +80,7 @@ export type FileMapper = {
 
 /** The same words as the terminal: the headline, then the fix. */
 function diagnosticMessage(finding: Finding, baselined: boolean): string {
-  return `${baselined ? "baselined: " : ""}${finding.message}\nFix: ${finding.hint}`;
+  return `${baselined ? "baselined: " : ""}${finding.message}\nFix: ${laidOutHint(finding.hint, "")}`;
 }
 
 /**

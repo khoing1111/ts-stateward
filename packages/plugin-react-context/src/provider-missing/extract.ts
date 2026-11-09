@@ -1,10 +1,16 @@
 import path from "node:path";
 import ts from "@stateward/core/typescript";
-import type { FileContext } from "@stateward/core";
+import type { FileContext, TypeQueries } from "@stateward/core";
 import { declareFixOf, removalOf } from "./declare-fix.js";
 import { fateOf, isValueWrapper, type FateEnv } from "./fate.js";
 import { placementOf } from "./placement.js";
-import { REQUIRED_CONTEXT, createResolver, type Resolver, type Tag } from "./resolve.js";
+import {
+  REQUIRED_CONTEXT,
+  createResolver,
+  type Resolver,
+  type StatedRef,
+  type Tag,
+} from "./resolve.js";
 import { createRoutes } from "./routes.js";
 import {
   ANY_CONTEXT,
@@ -145,6 +151,9 @@ export function summarizeFile(
     externalContexts: [],
     guards: [],
     declared: [],
+    providers: [],
+    statedProviders: [],
+    singles: [],
   };
   const hookSummaries: HookSummary[] = [];
   const scopes = new Map<ts.Node, Scope>();
@@ -411,10 +420,13 @@ export function summarizeFile(
     const opening = ts.isJsxElement(element) ? element.openingElement : element;
     const scope = scopeOf(element);
     const tag = resolver.resolveTag(opening.tagName, scope?.fn);
+    if (tag.kind === "provider" || isProviderTagName(opening.tagName)) addStatedProvider(opening);
     switch (tag.kind) {
+      case "provider":
+        if (tag.single !== undefined) addProvider(element, opening, tag.context, tag.single);
+        return;
       case "intrinsic":
       case "library":
-      case "provider":
       case "route":
         return;
       case "consumer":
@@ -494,6 +506,52 @@ export function summarizeFile(
     }
   }
 
+  /** A Provider of a context stated `SingleProvider`, with where it stands (`ProviderSite`). */
+  function addProvider(
+    element: ts.JsxElement | ts.JsxSelfClosingElement,
+    opening: ts.JsxOpeningLikeElement,
+    context: string,
+    single: StatedRef,
+  ): void {
+    const site = siteOf(element);
+    const owner =
+      site.entryRoot !== undefined
+        ? null
+        : site.scope?.kind === "component"
+          ? site.scope.component.id
+          : "";
+    const stop = site.entryRoot ?? site.scope?.anchor ?? sourceFile;
+    const at = placementAt(element, site);
+    summary.providers.push({
+      owner,
+      context,
+      name: tagText(opening.tagName),
+      loc: locOf(opening),
+      span: locOf(element),
+      under: at.under,
+      via: at.via,
+      outer: enclosingProvider(element, context, stop, site.scope?.fn),
+    });
+    if (!summary.singles.some((known) => known.id === single.id)) summary.singles.push(single);
+  }
+
+  /** The nearest Provider of `context` whose children hold `element`, up to `stop`. */
+  function enclosingProvider(
+    element: ts.Node,
+    context: string,
+    stop: ts.Node,
+    fn: FunctionLike | undefined,
+  ): Loc | null {
+    for (let child = element; child !== stop && !ts.isSourceFile(child); child = child.parent) {
+      const parent = child.parent;
+      if (ts.isJsxElement(parent) && parent.children.some((member) => member === child)) {
+        const tag = resolver.resolveTag(parent.openingElement.tagName, fn);
+        if (tag.kind === "provider" && tag.context === context) return locOf(parent.openingElement);
+      }
+    }
+    return null;
+  }
+
   /** A context stated required, read in this file: listed once, with where it is declared. */
   function addStated(context: { id: string; name: string; loc: Loc }): void {
     if (summary.contexts.some((known) => known.id === context.id)) return;
@@ -537,11 +595,11 @@ export function summarizeFile(
     }
   }
 
-  /** A top-level context whose type states it required, read or not (`Summary.declared`). */
+  /** A top-level context whose type states a trait, read or not (`Summary.declared`). */
   function addDeclared(declaration: ts.VariableDeclaration, name: ts.Identifier): void {
     const statement = declaration.parent.parent;
     if (!ts.isVariableStatement(statement) || !ts.isSourceFile(statement.parent)) return;
-    const stated = resolver.statedContext(name);
+    const stated = resolver.contextTraits(name);
     if (stated === undefined) return;
     const text = ctx.types.typeTextOf(name);
     summary.declared.push({
@@ -549,7 +607,26 @@ export function summarizeFile(
       name: name.text,
       loc: stated.loc,
       marker: text.length <= MARKER_TEXT_MAX ? text : REQUIRED_CONTEXT,
+      traits: stated.traits,
     });
+  }
+
+  /**
+   * A Provider of a context stated `SingleProvider` or `Stable` (`<StoreContext.Provider>`, or
+   * `<StoreContext>` in React 19), for the list of its Providers (`Summary.statedProviders`).
+   */
+  function addStatedProvider(opening: ts.JsxOpeningLikeElement): void {
+    const tag = opening.tagName;
+    const named =
+      ts.isPropertyAccessExpression(tag) && tag.name.text === "Provider"
+        ? tag.expression
+        : ts.isIdentifier(tag)
+          ? tag
+          : undefined;
+    if (named === undefined) return;
+    const stated = resolver.contextTraits(named);
+    if (stated?.traits.some((trait) => trait !== REQUIRED_CONTEXT) !== true) return;
+    summary.statedProviders.push({ context: stated.id, name: tagText(tag), loc: locOf(opening) });
   }
 
   function handleDeclaration(declaration: ts.VariableDeclaration): void {
@@ -620,8 +697,19 @@ export function summarizeFile(
     summary.routes.length === 0 &&
     summary.externalContexts.length === 0 &&
     summary.guards.length === 0 &&
-    summary.declared.length === 0;
+    summary.declared.length === 0 &&
+    summary.providers.length === 0 &&
+    summary.statedProviders.length === 0;
   return empty ? undefined : summary;
+}
+
+/**
+ * A tag that can be a Provider without the resolver knowing its context: `X.Provider`, whatever
+ * `X` is (a context stated only `Stable` has a default, so it is not one of the contexts the
+ * rule follows).
+ */
+function isProviderTagName(tag: ts.JsxTagNameExpression): boolean {
+  return ts.isPropertyAccessExpression(tag) && tag.name.text === "Provider";
 }
 
 /**
@@ -669,4 +757,33 @@ function hookOf(component: ComponentSummary): HookSummary {
 function isPropertyName(identifier: ts.Identifier): boolean {
   const parent = identifier.parent;
   return ts.isPropertyAccessExpression(parent) && parent.name === identifier;
+}
+
+/**
+ * The summaries made in this run, by the file's type queries (one object per file per run, which
+ * every rule on that file gets), then by what changes a summary. \`provider-missing\` and
+ * \`provider-nested\` read the same render tree: the second rule on a file gets the first one's
+ * summary instead of reading the file again. The engine records what a file reads per file, not per
+ * rule, so its cache still sees every declaration the summary read.
+ */
+const made = new WeakMap<
+  TypeQueries,
+  Map<string, { sourceFile: ts.SourceFile; summary: Summary | undefined }>
+>();
+
+/** \`summarizeFile\`, made once per file per run for every rule of the pack that reads it. */
+export function sharedSummary(
+  ctx: FileContext<{ readonly lazyFunctions: readonly string[] }>,
+): Summary | undefined {
+  const key = JSON.stringify([ctx.file, ctx.options.lazyFunctions, [...ctx.addons].sort()]);
+  let known = made.get(ctx.types);
+  if (known === undefined) {
+    known = new Map();
+    made.set(ctx.types, known);
+  }
+  const hit = known.get(key);
+  if (hit?.sourceFile === ctx.sourceFile) return hit.summary;
+  const summary = summarizeFile(ctx);
+  known.set(key, { sourceFile: ctx.sourceFile, summary });
+  return summary;
 }

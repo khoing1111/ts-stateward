@@ -3,6 +3,63 @@
 The changes an app needs when it moves to a newer stateward. For a new install, see
 [quick-start.md](quick-start.md).
 
+## From 1.1 to 1.2
+
+Update `stateward` and every pack together (`npm install --save-dev stateward@1.2.0` and the same
+version for each pack). Then:
+
+1. **Rename four rules.** The old ids still work, with a warning that names the new one, in
+   `rules`, `overrides`, `// stateward-ignore` comments (the warning has a quick fix),
+   `stateward.rollout.json` and the baseline; `check --fix` renames them in the config:
+
+   | Old id                                      | New id                                              |
+   | ------------------------------------------- | --------------------------------------------------- |
+   | `unions/default-hides-cases`                | `unions/non-exhaustive-switch`                      |
+   | `unions/tag-does-not-discriminate`          | `unions/ambiguous-discriminant`                     |
+   | `records/table-type-too-loose`              | `records/ambiguous-table`                           |
+   | `react/provider-value-changes-every-render` | `react-context/provider-value-changes-every-render` |
+
+   The last rule moved to the react-context pack. A config that sets it but does not load
+   `reactContext()` gets a warning that says to add the pack or remove the line; the setting is
+   ignored until then.
+
+2. **Remove `unions/if-chain-misses-case`.** Delete it from `rules`, ignore comments and
+   `stateward.rollout.json`; a config that names it stops with "unknown rule". A chain that must
+   handle every case can end with `else { status satisfies never; }`, which TypeScript checks.
+3. **Expect the switch rule to work the other way round.** With `unions/non-exhaustive-switch` on,
+   a `default` handles no case unless it is allowed: `default: void (type satisfies "newsletters");`.
+   - A `default` that cannot be reached is no longer reported: nothing to add.
+   - `status satisfies never;` lines may stay; they are read like a plain `default`.
+   - A project's own `never` helper (`ensureNever(status)`) is no longer needed by stateward and
+     can go.
+   - The kind `complete` is gone from `severities`; remove it if the config sets it.
+   - A `switch` without a `default` that misses a case is reported (kind `missing`), unless
+     TypeScript already reports it. Add the case, or `default: void (status satisfies "failed");`.
+4. **Optional: rewrite `src/guarantees.ts`.** The 1.1 form (`__guarantee?: "owned"`) is still
+   read. To combine guarantees on one type, open the file in VS Code and use the lightbulb on a
+   marker: "Rewrite the guarantee markers to the 1.2 form".
+5. **Optional: try `records/unchecked-key`, a new add-on** (off until listed in `addons`). It
+   reports a key cast such as `status as keyof typeof LABELS` used to read a table without a
+   check, and its quick fix "Check the key with isKeyOf" writes the helper once and rewrites the
+   read. It is an add-on because on real projects many such casts are safe (keys taken from the
+   same object, reads with a fallback).
+6. **Expect `ownership/resource-not-released`, a new rule** (on in `recommended`). It
+   reports a value with the release trait that a function never releases. Without a marker or a
+   `facts` line it reads a `Disposable` type (Node's own types are left out) and the ownership
+   pack's facts for Firebase `onSnapshot`, RxJS `Observable.subscribe`, Redux and zustand
+   `subscribe`. Turn it off with `rules: { "ownership/resource-not-released": "off" }`, or leave a
+   function out with its `ignore` option.
+7. **Optional: state the new traits.** `Opaque<T, Name>` makes a brand strict, `Release<T>` states
+   a result that must be released, `Pending<T, Running>` a state that marks work in progress. Each
+   is a line in `src/guarantees.ts` ([guarantees.md](guarantees.md#the-catalog)). A `facts` line
+   takes `returns: "release"` or `returns: { release: "<method>" }`.
+8. **Expect a note on some pending findings.** When the function also writes other state, the note
+   names it and points at one status union. `ownership/state-written-outside-owner`'s fix line now
+   lists two ways, the read-only view first.
+9. **Clean up the baseline**, if there is one: `npx stateward baseline --prune` drops the entries
+   of the removed rule. Entries of a renamed rule match by rule, file and count until
+   `npx stateward baseline` writes them again.
+
 ## From 1.0 to 1.1
 
 Update `stateward` and every pack you use together (`npm outdated` lists them):

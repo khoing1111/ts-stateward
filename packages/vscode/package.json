@@ -20,7 +20,7 @@
     "Linters",
     "Programming Languages"
   ],
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "license": "MIT",
   "repository": {
@@ -80,7 +80,7 @@
           "type": "string",
           "default": "",
           "scope": "machine",
-          "markdownDescription": "Absolute path to a language server to run instead of the project's or the bundled one, for example `/path/to/stateward/packages/language-server/dist/bin.js` in a clone (what `pnpm try` prints). Empty: the project's `@stateward/language-server`, else the bundled copy."
+          "markdownDescription": "Absolute path to a language server to run instead of the project's `@stateward/language-server` and the bundled copy, for testing a clone of stateward (`/path/to/stateward/packages/language-server/dist/bin.js`). It overrides the project's server in every project. It is a machine setting, so it is in the User settings only. Empty (the default): the project's server, else the bundled copy."
         },
         "stateward.inlayHints.throws": {
           "type": "boolean",

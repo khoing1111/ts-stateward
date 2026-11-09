@@ -8,6 +8,7 @@ import type { MessagePort } from "node:worker_threads";
 import { createJiti } from "jiti";
 import { configLocalImports, foreignTypeScriptWarnings } from "./implementation.js";
 import { parseConfig } from "./config.js";
+import { renamedIdsIn } from "./renamed.js";
 import { RuleDeclarationError, RuleLoadError, loadRules } from "./lazy.js";
 import type { Config, ParseResult } from "./types.js";
 import { CONFIG_FILE_NAMES, CONFIG_FILE_PATTERN } from "./vocabulary.js";
@@ -15,6 +16,21 @@ import { CONFIG_FILE_NAMES, CONFIG_FILE_PATTERN } from "./vocabulary.js";
 /** The path of the config file in `cwd`, if there is one. */
 export function findConfigFile(cwd: string): string | undefined {
   return CONFIG_FILE_NAMES.map((name) => path.join(cwd, name)).find((file) => existsSync(file));
+}
+
+/**
+ * One warning per other config file in the folder of `configFile`, when `configFile` is the one
+ * the search picks (`CONFIG_FILE_NAMES` order): the others are never read. A config named with
+ * `--config` is a choice, and gets none.
+ */
+export function ignoredConfigWarnings(configFile: string): readonly string[] {
+  const dir = path.dirname(configFile);
+  if (findConfigFile(dir) !== configFile) return [];
+  const used = path.basename(configFile);
+  return CONFIG_FILE_NAMES.filter((name) => name !== used && existsSync(path.join(dir, name))).map(
+    (name) =>
+      `\`${name}\` is ignored: \`${used}\` in the same folder is the config used; delete the one not wanted`,
+  );
 }
 
 /**
@@ -210,7 +226,14 @@ export async function loadConfigFile(
       errors: [`${name} must export the config: export default defineConfig({ ... })`],
     };
   }
-  const parsed = parseConfig(exported, path.dirname(configFile));
+  // The first line that names each old rule id, for the notice that says where to rename it.
+  const places = renamedIdsIn(readFileSync(configFile, "utf8"));
+  const parsed = parseConfig(
+    exported,
+    path.dirname(configFile),
+    path.basename(configFile),
+    (id) => places.find((place) => place.before === id)?.line,
+  );
   if (!parsed.ok) return { ok: false, errors: parsed.errors.map((e) => `${configFile}: ${e}`) };
   // The rules that are on are loaded now, so a check can run them; the rest never load.
   try {
@@ -221,6 +244,10 @@ export async function loadConfigFile(
     }
     throw error;
   }
-  const warnings = [...parsed.value.warnings, ...foreignTypeScriptWarnings(configFile)];
+  const warnings = [
+    ...ignoredConfigWarnings(configFile),
+    ...parsed.value.warnings,
+    ...foreignTypeScriptWarnings(configFile),
+  ];
   return { ok: true, value: { ...parsed.value, warnings, configFile } };
 }

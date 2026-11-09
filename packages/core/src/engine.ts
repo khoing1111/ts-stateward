@@ -22,6 +22,8 @@ import type { ProjectUnit } from "./backend/typescript6.js";
 import type { TimingRecorder } from "./timing.js";
 import type {
   PackageFactsConfig,
+  FunctionFacts,
+  Plugin,
   CheckNotes,
   CheckResult,
   MissingTypes,
@@ -225,7 +227,23 @@ type ActiveRule = {
   options: Options;
   /** The config's facts about packages, for every rule: part of its cache key. */
   facts: PackageFactsConfig;
+  /** The facts the loaded plugins ship (`Plugin.facts`): part of its cache key too. */
+  shippedFacts: PackageFactsConfig;
 };
+
+/**
+ * The facts every loaded plugin ships, joined in plugin order: per package, per function; a later
+ * plugin's line for the same function wins.
+ */
+function shippedFactsOf(plugins: readonly Plugin[]): PackageFactsConfig {
+  const joined: Record<string, Readonly<Record<string, FunctionFacts>>> = {};
+  for (const plugin of plugins) {
+    for (const [name, functions] of Object.entries(plugin.facts ?? {})) {
+      joined[name] = { ...joined[name], ...functions };
+    }
+  }
+  return joined;
+}
 
 function nodeLocation(node: ts.Node): Location {
   return { file: node.getSourceFile().fileName, start: node.getStart(), end: node.getEnd() };
@@ -289,8 +307,12 @@ function entryOf(
     addons,
     options,
     facts: config.facts,
+    shippedFacts: shippedFactsOf(config.plugins),
   };
-  return { ...active, key: ruleKey(active) };
+  return {
+    ...active,
+    key: ruleKey({ ...active, facts: { config: active.facts, shipped: active.shippedFacts } }),
+  };
 }
 
 function ruleSets(config: Config, selection: RuleSelection): RuleSets {
@@ -455,6 +477,8 @@ function problemFinding(
     findingKind?: string;
     /** The rule's own choice to lower this finding (`ReportProblem.severity`). */
     severity?: "info" | "warning";
+    /** A finding against a stated guarantee (`ReportProblem.stated`): an error while the rule is on. */
+    stated?: true;
     about?: Location;
   },
 ): Finding | undefined {
@@ -467,7 +491,11 @@ function problemFinding(
     ruleId: entry.id,
     severity:
       setting ??
-      (problem.severity === undefined ? entry.severity : lower(problem.severity, entry.severity)),
+      (problem.stated === true
+        ? "error"
+        : problem.severity === undefined
+          ? entry.severity
+          : lower(problem.severity, entry.severity)),
     message: problem.message,
     hint: problem.hint,
     location: problem.location,
@@ -484,7 +512,7 @@ function fileContext(
   types: TypeQueries,
   findings: Finding[],
 ): FileContext {
-  const { id, addons, options, facts } = entry;
+  const { id, addons, options, facts, shippedFacts } = entry;
   return {
     file: sourceFile.fileName,
     sourceFile,
@@ -492,6 +520,7 @@ function fileContext(
     addons,
     options,
     facts,
+    shippedFacts,
     report(problem) {
       const finding = problemFinding(entry, {
         message: problem.message,
@@ -504,6 +533,7 @@ function fileContext(
         fixes: problem.fixes ?? [],
         ...(problem.findingKind === undefined ? {} : { findingKind: problem.findingKind }),
         ...(problem.severity === undefined ? {} : { severity: problem.severity }),
+        ...(problem.stated === true ? { stated: true as const } : {}),
         ...(problem.about === undefined ? {} : { about: nodeLocation(problem.about) }),
       });
       if (finding !== undefined) findings.push(finding);
@@ -749,7 +779,9 @@ function* filePhaseSteps(
   let done = 0;
 
   for (const entry of rules) {
-    if (entry.rule.kind === "project") summaries.set(entry.id, new Map());
+    if (entry.rule.kind === "project" || entry.rule.summarize !== undefined) {
+      summaries.set(entry.id, new Map());
+    }
   }
 
   for (const unit of units) {
@@ -908,7 +940,13 @@ export function* projectPhaseSteps(
   let previous: string | undefined;
   for (const entry of rules) {
     const fileSummaries = summaries.get(entry.id);
-    if (entry.rule.kind !== "project" || fileSummaries === undefined) continue;
+    if (fileSummaries === undefined) continue;
+    if (entry.rule.kind !== "project") {
+      // A file rule's summaries are for the editor's contributions only (`FileRule.summarize`).
+      const sorted = [...fileSummaries].sort(([a], [b]) => compareText(a, b));
+      keepSummaries?.set(entry.id, () => summaryMap(sorted));
+      continue;
+    }
     if (done > 0)
       yield {
         phase: "project",
@@ -1179,7 +1217,7 @@ function runFileSide(rule: Rule, ctx: FileContext): Json | undefined {
   switch (rule.kind) {
     case "file":
       rule.check(ctx);
-      return undefined;
+      return rule.summarize?.(ctx);
     case "project":
       return rule.summarize(ctx);
     default: {
@@ -1313,7 +1351,8 @@ export function runFileRules(
         if (sourceFile === undefined) break;
         types ??= unit.typesFor(file);
         try {
-          runFileSide(entry.rule, fileContext(entry, sourceFile, types, findings));
+          // The fast pass keeps no summaries: a file rule's are read after a full check.
+          entry.rule.check(fileContext(entry, sourceFile, types, findings));
         } catch (error) {
           findings.push(failureFinding(entry, startOfFile, error));
         }

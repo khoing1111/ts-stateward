@@ -1,5 +1,5 @@
 import ts from "@stateward/core/typescript";
-import type { FileContext } from "@stateward/core";
+import { neverRejectsFactOf, type FileContext } from "@stateward/core";
 import { functionOfDeclaration, pathOf, scanRunning, stripParentheses } from "./syntax.js";
 
 /**
@@ -68,6 +68,8 @@ export function rejectionsOf(ctx: FileContext): CanReject {
 
   const callRejects = (call: ts.CallExpression, depth: number): boolean => {
     if (ctx.types.settlesWithError(call)) return false;
+    // The facts say so: `neverRejects: true` for the package function.
+    if (neverRejectsFactOf(call, ctx) !== undefined) return false;
     // The project says so: `/** @neverRejects */` on the function, the prop or its function type.
     if (ctx.types.calleeTags(call).includes(NEVER_REJECTS)) return false;
     const callee = stripParentheses(call.expression);

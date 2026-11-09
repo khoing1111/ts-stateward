@@ -2,7 +2,7 @@
 
 # ownership
 
-One owner per piece of shared state and per brand: others call the owner's functions.
+One owner per piece of shared state, per brand and per resource: others call the owner's functions, and what is started is released.
 
 ## Turn it on
 
@@ -19,6 +19,7 @@ Each rule's page has its options and what it does not catch. One rule or a whole
 | Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
 | --- | --- | --- | --- | --- | --- |
 | [brand-built-outside-owner](../rules/ownership/brand-built-outside-owner.md) | a cast to a checked brand like `as Positive` outside the file that owns its check | A cast to a checked brand like `Positive` outside its check skips the validation the brand stands for, so the type promises more than the value holds. | Core | error | error |
+| [resource-not-released](../rules/ownership/resource-not-released.md) | a subscription, listener or connection stated to need releasing that is never released | A value with the release trait (a subscription, a listener, a connection) that a function starts and never releases keeps running, and the leak shows far from its cause. | Core | error | error |
 | [state-written-outside-owner](../rules/ownership/state-written-outside-owner.md) | shared module state changed by a file other than the one that declares it | When several modules change the same module-level state, each change must be read to know its value; one owning module with functions keeps that in one place. | Core | error | error |
 
 ## [brand-built-outside-owner](../rules/ownership/brand-built-outside-owner.md)
@@ -38,6 +39,26 @@ error[ownership/brand-built-outside-owner]: `Positive` is built without its chec
 ```
 
 Fix: in `cart.ts`, call the brand's check instead, and handle the value it rejects.
+
+Core rule: error under `recommended` and `strict`. Group: `ownership/owners`.
+
+## [resource-not-released](../rules/ownership/resource-not-released.md)
+
+A value with the release trait (a subscription, a listener, a connection) that a function starts and never releases keeps running, and the leak shows far from its cause.
+
+```ts
+import { watchPrices } from "./prices.js";
+
+export function showFirstPrice(show: (price: number) => void): void {
+  const stop = watchPrices((price) => show(price));
+}
+```
+
+```text
+error[ownership/resource-not-released]: `stop` from `watchPrices(…)` is never released
+```
+
+Fix: release it when it is no longer needed, or return it so the caller does.
 
 Core rule: error under `recommended` and `strict`. Group: `ownership/owners`.
 

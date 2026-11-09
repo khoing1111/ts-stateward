@@ -19,6 +19,9 @@ const SUMMARY_LISTS = [
   "externalContexts",
   "guards",
   "declared",
+  "providers",
+  "statedProviders",
+  "singles",
 ] as const;
 
 /** The engine hands summaries over as JSON; ours have these lists, whatever else they hold. */

@@ -33,9 +33,9 @@ One rule's severity (`error`, `warning`, `info` or `off`), and its options, go u
 
 ```ts
 rules: {
-  "unions/if-chain-misses-case": "warning",
+  "unions/ambiguous-discriminant": "warning",
   // a severity and options; this option is at its default, the rule's page lists them all
-  "unions/default-hides-cases": ["error", { maxHidden: 5 }],
+  "unions/non-exhaustive-switch": ["error", { maxHidden: 5 }],
 },
 ```
 
@@ -49,9 +49,8 @@ Every key of the config: [config.md](https://github.com/khoing1111/ts-stateward/
 
 | Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
 | --- | --- | --- | --- | --- | --- |
-| [default-hides-cases](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/unions/default-hides-cases.md) | a `default` that handles cases the switch does not list, or that has no `never` check | A case added to the union later goes to the `default` with no compile error; listing the cases makes each switch fail to compile until it handles the new case. | Core | error | error |
-| [if-chain-misses-case](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/unions/if-chain-misses-case.md) | an `if` / `else if` chain over a union that misses a case or has no `never` check | A case added to the union later goes to the last `else` with no compile error; testing every case and checking the rest with `never` makes the chain fail to compile. | Core | error | error |
-| [tag-does-not-discriminate](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/unions/tag-does-not-discriminate.md) | a tag like `kind` that is `string` in one member, so a test on it does not pick a member | When `kind` is `string` in one member, testing `kind` does not narrow the union, so TypeScript cannot check which properties each branch reads. | Coverage | info | error |
+| [non-exhaustive-switch](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/unions/non-exhaustive-switch.md) | a `switch` over a union that misses a case, or whose `default` handles a case nobody allowed | Every `switch` over a union handles every case: a `switch` without a `default` lists them all, and a `default` handles only the cases it allows, so a case added later is reported where it is not handled. | Core | error | error |
+| [ambiguous-discriminant](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/unions/ambiguous-discriminant.md) | a tag like `kind` that is `string` in one member, so a test on it does not pick a member | A tag like `kind` tells the members of a union apart only when every member gives it a literal; a member where it is `string` makes every test on it ambiguous. | Coverage | info | error |
 
 **Core** rules are on in every preset. **Coverage** rules point at code whose types do not say
 enough for stateward to check it; they are info under `recommended` and errors under `strict`.

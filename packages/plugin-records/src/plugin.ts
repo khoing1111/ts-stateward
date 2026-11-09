@@ -4,8 +4,9 @@ import { RULES } from "./rules.meta.js";
 /** Each rule's module, imported the first time the rule is on. */
 const load = {
   lookupMissesKey: moduleLoader(() => import("./lookup-misses-key.js")),
-  tableTypeTooLoose: moduleLoader(() => import("./table-type-too-loose.js")),
+  ambiguousTable: moduleLoader(() => import("./ambiguous-table.js")),
   duplicateKey: moduleLoader(() => import("./duplicate-key.js")),
+  uncheckedKey: moduleLoader(() => import("./unchecked-key.js")),
 };
 
 export function records() {
@@ -19,15 +20,20 @@ export function records() {
         load.lookupMissesKey,
         (module) => module.lookupMissesKey,
       ),
-      "table-type-too-loose": lazyRule(
-        RULES["table-type-too-loose"],
-        load.tableTypeTooLoose,
-        (module) => module.tableTypeTooLoose,
+      "ambiguous-table": lazyRule(
+        RULES["ambiguous-table"],
+        load.ambiguousTable,
+        (module) => module.ambiguousTable,
       ),
       "duplicate-key": lazyRule(
         RULES["duplicate-key"],
         load.duplicateKey,
         (module) => module.duplicateKey,
+      ),
+      "unchecked-key": lazyRule(
+        RULES["unchecked-key"],
+        load.uncheckedKey,
+        (module) => module.uncheckedKey,
       ),
     },
   });

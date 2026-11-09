@@ -9,17 +9,11 @@ type Case = { rule: RuleKey; dir: string; name: string; extra?: Record<string, u
 /** For each rule: a fixture folder and a name its findings are about, to ignore. */
 const CASES: readonly Case[] = [
   {
-    rule: "default-hides-cases",
-    dir: "default-hides-cases/real-a",
+    rule: "non-exhaustive-switch",
+    dir: "non-exhaustive-switch/real-a",
     name: "EventName",
   },
-  {
-    rule: "if-chain-misses-case",
-    dir: "if-chain-misses-case/real-a",
-    name: "Step",
-    extra: { report: "all" },
-  },
-  { rule: "tag-does-not-discriminate", dir: "tag-does-not-discriminate/flagged", name: "Event" },
+  { rule: "ambiguous-discriminant", dir: "ambiguous-discriminant/flagged", name: "Event" },
 ];
 
 function run(test: Case, ignore?: readonly string[]): readonly Finding[] {
@@ -44,7 +38,7 @@ describe("unions: ignore", () => {
 
 describe("unions: the order of severities", () => {
   const many = (setting: Parameters<typeof checkOnly>[2]): string[] =>
-    checkOnly(fixture("default-hides-cases/real-a"), "default-hides-cases", setting)
+    checkOnly(fixture("non-exhaustive-switch/real-a"), "non-exhaustive-switch", setting)
       .filter((finding) => finding.location.file.endsWith("many.ts"))
       .map((finding) => (finding.kind === "problem" ? finding.severity : finding.kind));
 

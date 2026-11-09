@@ -40,7 +40,8 @@ const PACKS = [
     name: "react-context",
     packageName: "@stateward/plugin-react-context",
     importName: "reactContext",
-    description: "A component that needs a context is always rendered under its Provider.",
+    description:
+      "Every context reader is under its Provider, defaults are real values, and Provider values keep their identity.",
     detect: { kind: "dependency", dependencies: ["react"] },
   },
   {
@@ -56,7 +57,7 @@ const PACKS = [
     packageName: "@stateward/plugin-ownership",
     importName: "ownership",
     description:
-      "One owner per piece of shared state and per brand: others call the owner's functions.",
+      "One owner per piece of shared state, per brand and per resource: others call the owner's functions, and what is started is released.",
     detect: { kind: "chosen" },
   },
   {

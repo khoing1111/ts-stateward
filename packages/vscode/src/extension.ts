@@ -1,7 +1,7 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import * as vscode from "vscode";
-import { LanguageClient, TransportKind } from "vscode-languageclient/node";
+import { LanguageClient, State, TransportKind } from "vscode-languageclient/node";
 import {
   EXPLAIN_COMMAND,
   EXPLAIN_REQUEST,
@@ -17,6 +17,7 @@ import {
   STATUS_NOTIFICATION,
   parseChecking,
   parseNext,
+  isMethodNotFound,
   parsePlan,
   parseStatus,
   type Plan,
@@ -31,8 +32,18 @@ import {
 import { PythonServers } from "./python-clients.js";
 import { PYPROJECT, PYTHON_RESTART_COMMAND } from "./python-folders.js";
 import { COMMANDS, actionItems, planItems, ruleItems } from "./quick-pick.js";
-import { routeFor, type ActiveDocument } from "./routing.js";
-import { locateServer } from "./server-location.js";
+import { noServerMessage, routeFor, type ActiveDocument } from "./routing.js";
+import {
+  KEEP_SERVER_PATH,
+  USE_PROJECT_SERVER,
+  locateServer,
+  serverPathNotice,
+  serverPathNoticeKey,
+  serverSourceLine,
+  serverSourceNote,
+  unsupportedMessage,
+  type ServerLocation,
+} from "./server-location.js";
 import {
   answerKey,
   decideSetup,
@@ -45,14 +56,25 @@ import {
   STATUS_COMMAND,
   WAITING_VIEW,
   checkingView,
+  notRunningView,
   statusFor,
   statusViewFor,
+  withNote,
   type StatusView,
 } from "./status.js";
 import type { Status } from "./protocol.js";
 import { WATCH_GLOBS, folderWithConfig, hasStatewardConfig } from "./workspace-config.js";
 
 let client: LanguageClient | undefined;
+
+/** `file` with every link followed; itself when it does not exist. */
+function realOrSelf(file: string): string {
+  try {
+    return realpathSync(file);
+  } catch {
+    return file;
+  }
+}
 /** The Python servers, one per Python folder; set while the extension is active. */
 let python: PythonServers | undefined;
 let statusBar: vscode.StatusBarItem | undefined;
@@ -64,6 +86,23 @@ const typeScriptStatus: {
 } = { statuses: new Map(), last: undefined, checking: new Set() };
 /** A start is looking for a config: a second call returns, so two clients never start. */
 let starting = false;
+/** The TypeScript side: whether the workspace has a stateward config, where the server came from, and why it is not running. */
+const typeScript: {
+  project: boolean;
+  location: ServerLocation | undefined;
+  failure: string | undefined;
+  /** The file watchers of the running client; disposed when it restarts. */
+  disposables: vscode.Disposable[];
+} = { project: false, location: undefined, failure: undefined, disposables: [] };
+
+/** Whether the TypeScript client exists and has not failed: requests to it wait for its start. */
+function typeScriptAvailable(): boolean {
+  return client !== undefined && typeScript.failure === undefined;
+}
+
+function typeScriptSide(): { running: boolean; project: boolean } {
+  return { running: typeScriptAvailable(), project: typeScript.project };
+}
 
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("Stateward", { log: true });
@@ -97,6 +136,14 @@ export function activate(context: vscode.ExtensionContext): void {
     configWatcher.onDidCreate(() => {
       void startClient(context, output);
     }),
+  );
+
+  // A changed stateward.serverPath (or "Use the project's server") restarts the TypeScript server.
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("stateward.serverPath")) void restartClient(context, output);
+    }),
+    { dispose: disposeClientResources },
   );
 
   void startClient(context, output);
@@ -144,6 +191,7 @@ async function startClient(
     output.info("No stateward.config.{ts,mts,js,mjs} in the workspace; not starting.");
     return;
   }
+  typeScript.project = true;
 
   const configuredPath = vscode.workspace
     .getConfiguration("stateward")
@@ -156,13 +204,16 @@ async function startClient(
   const server = locateServer(
     workspaceDir,
     context.asAbsolutePath(path.join("dist", "server.cjs")),
-    { path: configuredPath, exists: existsSync },
+    { path: configuredPath, exists: existsSync, realPath: realOrSelf },
   );
-  output.info(`Using the ${server.kind} language server: ${server.modulePath}`);
+  output.info(serverSourceLine(server));
+  typeScript.location = server;
+  typeScript.failure = undefined;
+  void offerProjectServer(context, server);
 
   const transport = { module: server.modulePath, transport: TransportKind.stdio };
   const watchers = WATCH_GLOBS.map((glob) => vscode.workspace.createFileSystemWatcher(glob));
-  context.subscriptions.push(...watchers);
+  typeScript.disposables.push(...watchers);
 
   const started = new LanguageClient(
     "stateward",
@@ -202,7 +253,77 @@ async function startClient(
     else checking.delete(update.configFile);
     refreshStatus();
   });
-  void started.start();
+  typeScript.disposables.push(
+    started.onDidChangeState(({ newState }) => {
+      // A client this extension stopped (a restart) is no longer `client`: its end is no failure.
+      if (client !== started) return;
+      if (newState === State.Running) typeScript.failure = undefined;
+      else if (newState === State.Stopped) typeScript.failure ??= "the server stopped";
+      refreshStatus();
+    }),
+  );
+  started.start().catch((error: unknown) => {
+    if (client !== started) return;
+    const reason = error instanceof Error ? error.message : String(error);
+    output.error(`The TypeScript server did not start: ${reason}`);
+    typeScript.failure = reason;
+    refreshStatus();
+  });
+}
+
+function disposeClientResources(): void {
+  for (const disposable of typeScript.disposables.splice(0)) disposable.dispose();
+}
+
+/** Stops the TypeScript client and starts it again with the current settings. */
+async function restartClient(
+  context: vscode.ExtensionContext,
+  output: vscode.LogOutputChannel,
+): Promise<void> {
+  const previous = client;
+  client = undefined;
+  disposeClientResources();
+  typeScript.location = undefined;
+  typeScript.failure = undefined;
+  typeScriptStatus.statuses.clear();
+  typeScriptStatus.checking.clear();
+  typeScriptStatus.last = undefined;
+  if (previous?.needsStop() === true) {
+    try {
+      await previous.stop();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      output.warn(`Stopping the TypeScript server failed: ${reason}`);
+    }
+  }
+  await startClient(context, output);
+  refreshStatus();
+}
+
+/**
+ * Once per pair of servers: the stateward.serverPath setting overrides the project's own server,
+ * so say which one runs and offer to clear the setting (in the user settings, where it is).
+ */
+async function offerProjectServer(
+  context: vscode.ExtensionContext,
+  location: ServerLocation,
+): Promise<void> {
+  const message = serverPathNotice(location);
+  if (message === undefined) return;
+  const key = serverPathNoticeKey(location);
+  if (context.globalState.get<boolean>(key, false)) return;
+  // Remembered before asking: a notification closed unanswered counts as "Keep".
+  await context.globalState.update(key, true);
+  const chosen = await vscode.window.showInformationMessage(
+    message,
+    USE_PROJECT_SERVER,
+    KEEP_SERVER_PATH,
+  );
+  if (chosen === USE_PROJECT_SERVER) {
+    await vscode.workspace
+      .getConfiguration("stateward")
+      .update("serverPath", undefined, vscode.ConfigurationTarget.Global);
+  }
 }
 
 function activeDocument(): ActiveDocument | undefined {
@@ -243,14 +364,24 @@ function pythonView(servers: PythonServers, folder: string): StatusView {
 function refreshStatus(): void {
   if (statusBar === undefined) return;
   const active = activeDocument();
-  const route = routeFor(active, python?.folders() ?? [], client !== undefined);
+  const route = routeFor(active, python?.folders() ?? [], typeScriptSide());
   if (route === undefined) {
-    statusBar.hide();
+    if (!typeScript.project) {
+      statusBar.hide();
+      return;
+    }
+    const view =
+      typeScript.failure === undefined
+        ? WAITING_VIEW
+        : notRunningView(noServerMessage(true, typeScript.failure));
+    statusBar.text = view.text;
+    statusBar.tooltip = withNote(view, serverSourceNote(typeScript.location)).tooltip;
+    statusBar.show();
     return;
   }
   const view =
     route.kind === "typescript"
-      ? typeScriptView(active?.fsPath)
+      ? withNote(typeScriptView(active?.fsPath), serverSourceNote(typeScript.location))
       : python === undefined
         ? WAITING_VIEW
         : pythonView(python, route.folder);
@@ -261,7 +392,7 @@ function refreshStatus(): void {
 
 /** The server that explains a rule: the active document's (Python or TypeScript). */
 function explainingServer(): LanguageClient | undefined {
-  const route = routeFor(activeDocument(), python?.folders() ?? [], client !== undefined);
+  const route = routeFor(activeDocument(), python?.folders() ?? [], typeScriptSide());
   if (route === undefined) return undefined;
   return route.kind === "typescript" ? client : python?.client(route.folder);
 }
@@ -312,8 +443,14 @@ function registerExplain(output: vscode.LogOutputChannel): vscode.Disposable[] {
   });
   const command = vscode.commands.registerCommand(EXPLAIN_COMMAND, async (argument: unknown) => {
     const ruleId = ruleIdFromArgument(argument);
+    if (ruleId === undefined) return;
     const server = explainingServer();
-    if (ruleId === undefined || server === undefined) return;
+    if (server === undefined) {
+      if (typeScript.project) {
+        void vscode.window.showErrorMessage(noServerMessage(true, typeScript.failure));
+      }
+      return;
+    }
     try {
       const markdown = await server.sendRequest<string | null>(EXPLAIN_REQUEST, { ruleId });
       if (markdown === null) {
@@ -328,7 +465,12 @@ function registerExplain(output: vscode.LogOutputChannel): vscode.Disposable[] {
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       output.error(`Explaining ${ruleId} failed: ${reason}`);
-      void vscode.window.showErrorMessage(`Stateward could not explain ${ruleId}: ${reason}`);
+      // Only the TypeScript server's origin is known; a Python server's error is shown as it is.
+      const message =
+        isMethodNotFound(error) && server === client
+          ? unsupportedMessage(typeScript.location, "Explain a rule")
+          : `Stateward could not explain ${ruleId}: ${reason}`;
+      void vscode.window.showErrorMessage(message);
     }
   });
   return [changed, provider, command];
@@ -380,32 +522,37 @@ function registerPlaces(): vscode.Disposable[] {
   ];
 }
 
-const NOT_CHECKING =
-  'Stateward is not checking this folder: it has no stateward config. Run "Stateward: Set up the project".';
-
-/** Runs `work` with the client, or says there is none; a failure becomes one message, never a silent command. */
 /** The active editor's file, so a command acts on that file's config in a monorepo. */
 function activeFile(): { uri?: string } {
   const uri = vscode.window.activeTextEditor?.document.uri;
   return uri?.scheme === "file" ? { uri: uri.toString() } : {};
 }
 
+/**
+ * Runs `work` with the TypeScript client, or says why there is none; a failure becomes one
+ * message, never a silent command. `title` is the command as the palette shows it.
+ */
 function withClient(
   output: vscode.LogOutputChannel,
-  what: string,
+  title: string,
   work: (active: LanguageClient) => Promise<void>,
 ): () => Promise<void> {
   return async () => {
-    if (client === undefined) {
-      void vscode.window.showInformationMessage(NOT_CHECKING);
+    if (client === undefined || !typeScriptAvailable()) {
+      const message = noServerMessage(typeScript.project, typeScript.failure);
+      if (typeScript.project) void vscode.window.showErrorMessage(message);
+      else void vscode.window.showInformationMessage(message);
       return;
     }
     try {
       await work(client);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      output.error(`${what} failed: ${reason}`);
-      void vscode.window.showErrorMessage(`Stateward could not ${what}: ${reason}`);
+      output.error(`${title} failed: ${reason}`);
+      const message = isMethodNotFound(error)
+        ? unsupportedMessage(typeScript.location, title)
+        : `Stateward could not run ${title}: ${reason}`;
+      void vscode.window.showErrorMessage(message);
     }
   };
 }
@@ -457,7 +604,7 @@ function registerAdoptionCommands(output: vscode.LogOutputChannel): vscode.Dispo
   return [
     vscode.commands.registerCommand(
       COMMANDS.plan,
-      withClient(output, "show the rule plan", async (active) => {
+      withClient(output, "Show the rule plan", async (active) => {
         const plan = await fetchPlan(active);
         const picked = await vscode.window.showQuickPick(planItems(plan.rules), {
           title: plan.rollout
@@ -471,11 +618,11 @@ function registerAdoptionCommands(output: vscode.LogOutputChannel): vscode.Dispo
     ),
     vscode.commands.registerCommand(
       COMMANDS.next,
-      withClient(output, "turn on the next rule", (active) => turnOnNext(active, false)),
+      withClient(output, "Turn on the next rule", (active) => turnOnNext(active, false)),
     ),
     vscode.commands.registerCommand(
       COMMANDS.explain,
-      withClient(output, "list the rules", async (active) => {
+      withClient(output, "Explain a rule", async (active) => {
         const plan = await fetchPlan(active);
         const picked = await vscode.window.showQuickPick(ruleItems(plan.rules), {
           placeHolder: "Explain which rule?",
@@ -486,7 +633,7 @@ function registerAdoptionCommands(output: vscode.LogOutputChannel): vscode.Dispo
     ),
     vscode.commands.registerCommand(
       COMMANDS.recheck,
-      withClient(output, "check again", async (active) => {
+      withClient(output, "Check again", async (active) => {
         await active.sendRequest(RECHECK_REQUEST);
       }),
     ),

@@ -58,11 +58,12 @@ A cleanup that calls a function declared outside the effect with what was starte
 
 It looks for these, each with what undoes it in a returned cleanup:
 
+- a value whose release trait is stated: a `Disposable` type, the `Release<T>` marker, a `facts` line (`returns: "release"`) or the facts the ownership pack ships (Firebase `onSnapshot`, RxJS, Redux and zustand `subscribe`). It is found whatever the function is called, and the note says where the trait comes from: calling it, its stated method or `[Symbol.dispose]()` undoes it. Node's own `Disposable` types (child processes, streams, timers) state nothing. The names below are the guess for everything else;
 - `addEventListener(type, handler)`: `removeEventListener` with the same target, type and handler variable, or aborting the `signal` passed in its options. A handler written inline cannot be removed, since the cleanup cannot name the same function;
 - `setInterval(…)`: `clearInterval` on the stored id;
 - `setTimeout(…)`: `clearTimeout` on the stored id; reported only when the timeout sets state, or the effect runs more than once (it has dependencies, or no list);
 - a timer kept in a ref that the effect clears itself before it starts the next one (a debounce): only unmount is missing, and the fix is an effect of its own, `useEffect(() => () => clearTimeout(timer.current), [])`;
-- `subscribe(…)` or `.on(…)` that returns an unsubscribe function (call it, or return the call itself) or a subscription object (its `unsubscribe()`);
+- `subscribe(…)` or `.on(…)` that returns an unsubscribe function (call it, or return the call itself) or a subscription object (its `unsubscribe()`), or the emitter's own way with the same arguments: `bus.off(event, handler)` for `bus.on(event, handler)`, `removeListener` for `addListener`;
 - `new ResizeObserver`, `IntersectionObserver` or `MutationObserver`: `disconnect()`;
 - `new WebSocket` or `EventSource`: `close()`.
 

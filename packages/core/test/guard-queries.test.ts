@@ -477,6 +477,28 @@ describe("TypeQueries.propertyKeysOf with generic keys", () => {
   });
 });
 
+describe("TypeQueries.propertyKeysOf with keys from a type that does not resolve", () => {
+  it("says generic for a mapped type over the keys of an unresolved import, not an index signature", () => {
+    expect(
+      project(
+        {
+          "a.ts": [
+            "// @ts-expect-error: the package is not installed",
+            "import { type NAMES } from 'not-installed';",
+            "const LOCAL = { a: 1, b: 2 } as const;",
+            "export declare const probeUnresolved: { [k in keyof typeof NAMES]: string };",
+            "export declare const probeResolved: { [k in keyof typeof LOCAL]: string };",
+          ].join("\n"),
+        },
+        valueProbe,
+      ),
+    ).toEqual([
+      "probeUnresolved: generic undefined=false",
+      "probeResolved: required=a,b optional= index=false undefined=false",
+    ]);
+  });
+});
+
 describe("TypeQueries.typeTextOf", () => {
   it("prints the type of an expression on one line", () => {
     expect(

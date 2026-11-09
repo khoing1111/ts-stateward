@@ -59,7 +59,7 @@ export {
 } from "./engine.js";
 export type { CheckProgress } from "./engine.js";
 export { SLICE_MS } from "./checker.js";
-export { describeStatus, guaranteeAt, proveGuarantees } from "./guarantees.js";
+export { counted, describeStatus, guaranteeAt, proveGuarantees } from "./guarantees.js";
 export type { GuaranteeProof, GuaranteeStatus } from "./guarantees.js";
 export type { LongestStep, SliceOptions, SlicedCheck } from "./checker.js";
 export { IGNORE_FIX_TITLE, IGNORE_RULE_ID, ignoreFix } from "./ignores.js";
@@ -101,3 +101,6 @@ export {
 export type { DiskCache, ResultsCacheStats } from "./disk-cache.js";
 export type { CacheEntry } from "./disk-limits.js";
 export type { RuleCost, RunTiming, TimingRecorder } from "./timing.js";
+export { hintLines, hintWithoutExamples, laidOutHint } from "./hint-lines.js";
+export type { HintLine } from "./hint-lines.js";
+export { renameNotice, renamedIdsIn, renamedRule } from "./renamed.js";

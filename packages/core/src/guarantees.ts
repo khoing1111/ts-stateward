@@ -1,5 +1,5 @@
 import { compareFindings } from "./engine.js";
-import type { Finding, Location, StatedGuarantee } from "./types.js";
+import type { CoveredNoun, Finding, Location, StatedGuarantee } from "./types.js";
 
 type Problem = Extract<Finding, { kind: "problem" }>;
 
@@ -27,11 +27,39 @@ function compareStated(a: StatedGuarantee, b: StatedGuarantee): number {
   return a.location.start - b.location.start || (a.guarantee < b.guarantee ? -1 : 1);
 }
 
+function contains(place: Location, inner: Location): boolean {
+  return place.file === inner.file && inner.start >= place.start && inner.end <= place.end;
+}
+
+/**
+ * Whether a finding is about a guarantee: a problem of the guarantee's rule with a related note
+ * at its declaration; or, when it has a note at no declaration of that rule, one that lies in a
+ * place the guarantee covers (a file rule notes only declarations in its own file, so a finding
+ * at a Provider in another file names the context by where it is).
+ */
+function isAbout(
+  finding: Problem,
+  guarantee: StatedGuarantee,
+  declarations: readonly StatedGuarantee[],
+): boolean {
+  if (finding.ruleId !== guarantee.ruleId) return false;
+  if (finding.related.some((note) => sameStart(note.location, guarantee.location))) return true;
+  const namesAnother = declarations.some(
+    (other) =>
+      other.ruleId === finding.ruleId &&
+      finding.related.some((note) => sameStart(note.location, other.location)),
+  );
+  return (
+    !namesAnother && guarantee.covered.some((place) => contains(place.location, finding.location))
+  );
+}
+
 /**
  * Each stated guarantee with its status, in file and offset order. `findings` are a check's
  * (after ignore comments, before a baseline: an accepted error still leaves it unproven);
  * `active` the rules that check ran. A finding is about a guarantee when it is a problem of the
- * guarantee's rule, not an info, with a related note at the declaration.
+ * guarantee's rule, not an info, that names its declaration in a note or lies in a place it
+ * covers (`isAbout`).
  */
 export function proveGuarantees(
   stated: readonly StatedGuarantee[],
@@ -44,11 +72,7 @@ export function proveGuarantees(
   return [...stated].sort(compareStated).map((guarantee): GuaranteeProof => {
     if (!active.has(guarantee.ruleId)) return { stated: guarantee, status: { kind: "off" } };
     const errors = problems
-      .filter(
-        (finding) =>
-          finding.ruleId === guarantee.ruleId &&
-          finding.related.some((note) => sameStart(note.location, guarantee.location)),
-      )
+      .filter((finding) => isAbout(finding, guarantee, stated))
       .sort(compareFindings);
     if (errors.length > 0) return { stated: guarantee, status: { kind: "unproven", errors } };
     if (guarantee.covered.length === 0) return { stated: guarantee, status: { kind: "unused" } };
@@ -56,14 +80,12 @@ export function proveGuarantees(
   });
 }
 
-function plural(count: number, noun: string): string {
-  return `${String(count)} ${count === 1 ? noun : `${noun}s`}`;
+/** "1 switch", "2 switches": the count and the noun in its form for it, as the noun gives both. */
+export function counted(count: number, noun: CoveredNoun): string {
+  return `${String(count)} ${count === 1 ? noun.one : noun.many}`;
 }
 
-/** "reader" for "readers": the noun of one covered place. */
-function singular(covers: string): string {
-  return covers.endsWith("s") ? covers.slice(0, -1) : covers;
-}
+const ERROR: CoveredNoun = { one: "error", many: "errors" };
 
 /**
  * The status in a few words, the same in `stateward guarantees` and the editor: "proven for 3
@@ -73,11 +95,11 @@ export function describeStatus(proof: GuaranteeProof): string {
   const { stated, status } = proof;
   switch (status.kind) {
     case "proven":
-      return `proven for ${plural(stated.covered.length, singular(stated.covers))}`;
+      return `proven for ${counted(stated.covered.length, stated.covers)}`;
     case "unproven":
-      return `not proven: ${plural(status.errors.length, "error")}`;
+      return `not proven: ${counted(status.errors.length, ERROR)}`;
     case "unused":
-      return `unused: no ${singular(stated.covers)}, so nothing to prove; use it or drop the marker`;
+      return `unused: no ${stated.covers.one}, so nothing to prove; use it or drop the marker`;
     case "off":
       return `not checked: ${stated.ruleId} is not on`;
     default: {

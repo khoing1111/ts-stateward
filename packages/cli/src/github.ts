@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { CheckResult, Finding } from "@stateward/core/internal";
+import { hintWithoutExamples, type CheckResult, type Finding } from "@stateward/core/internal";
 import { isShownByCheck, positionAt } from "./format.js";
 
 export type GitHubOptions = {
@@ -40,9 +40,9 @@ function level(finding: Finding): "error" | "warning" | "notice" {
   }
 }
 
-/** Only the first line of the fix (a code example would not fit in an annotation), without a closing colon. */
+/** The fix without its code examples, which do not fit in an annotation: its first line and each way to fix (M22). */
 function fixLine(hint: string): string {
-  return (hint.split("\n")[0] ?? "").replace(/:$/, "");
+  return hintWithoutExamples(hint);
 }
 
 /**

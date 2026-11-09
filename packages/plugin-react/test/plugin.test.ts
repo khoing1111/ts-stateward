@@ -7,7 +7,6 @@ describe("react", () => {
     expect(plugin.name).toBe("react");
     expect(Object.keys(plugin.rules)).toEqual([
       "dependency-changes-every-render",
-      "provider-value-changes-every-render",
       "effect-copies-derived-value",
       "state-copies-prop",
       "effect-loops",
@@ -34,7 +33,6 @@ describe("react", () => {
       ]),
     ).toEqual([
       ["dependency-changes-every-render", "project", "core", "render", "warning", null, false],
-      ["provider-value-changes-every-render", "file", "core", "render", "warning", null, false],
       ["effect-copies-derived-value", "file", "core", "effects", "warning", null, false],
       ["state-copies-prop", "file", "core", "state", "warning", null, false],
       ["effect-loops", "file", "core", "effects", "error", null, false],

@@ -172,6 +172,34 @@ describe("install-into --vendor writes the app's package.json", () => {
   });
 });
 
+describe("install-into without --vendor", () => {
+  // A stand-in for npm, so the test installs nothing: it only says it ran.
+  it.skipIf(process.platform === "win32")(
+    "says the file: paths it writes work only on this machine and are not to be committed",
+    () => {
+      const source = repo("0.2.0");
+      const target = app();
+      const bin = temp();
+      writeFileSync(path.join(bin, "npm"), "#!/bin/sh\necho npm ran\n", { mode: 0o755 });
+      const result = spawnSync(
+        process.execPath,
+        [path.join(source, "scripts", "install-into.mjs"), target],
+        {
+          encoding: "utf8",
+          cwd: source,
+          env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` },
+        },
+      );
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(
+        `The file: paths written (package.json and the lockfile) point at ${path.join(source, "artifacts")}\nand work only on this machine: do not commit them. For a team or CI, run this again with --vendor.\n`,
+      );
+      expect(result.stdout).toContain("npm ran");
+    },
+  );
+});
+
 describe("install-into for pnpm", () => {
   it("writes pnpm-workspace.yaml with the overrides in a project of its own", () => {
     const source = repo("0.2.0");

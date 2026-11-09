@@ -23,7 +23,8 @@ const ROUTER_PACKAGES: ReadonlySet<string> = new Set(["react-router", "react-rou
 export type Tag =
   | { kind: "intrinsic" }
   | { kind: "library" }
-  | { kind: "provider"; context: string }
+  /** `single`: the context is stated `SingleProvider` (its declaration, for notes). */
+  | { kind: "provider"; context: string; single: StatedRef | undefined }
   /** `<X.Consumer>` of a context stated required: it reads the context where it stands. */
   | { kind: "consumer"; context: string; name: string; loc: Loc }
   | { kind: "prop"; name: string }
@@ -88,6 +89,22 @@ export type ContextRead =
 
 /** The guarantee a context states when its type is a `RequiredContext` (`TypeQueries.guaranteesOf`). */
 export const REQUIRED_CONTEXT = "required-context";
+
+/** The guarantee a context states when its type has `SingleProvider`: one Provider on any path. */
+export const SINGLE_PROVIDER = "single-provider";
+
+/** The guarantee a context states when its type has `Stable`: its Provider's value never changes. */
+export const STABLE_CONTEXT = "stable";
+
+/** The traits a context's type can state, in the order `stateward guarantees` lists them. */
+export const CONTEXT_TRAITS: readonly string[] = [
+  REQUIRED_CONTEXT,
+  SINGLE_PROVIDER,
+  STABLE_CONTEXT,
+];
+
+/** A context that states a guarantee: its id, name and declaration. */
+export type StatedRef = { id: string; name: string; loc: Loc };
 
 /**
  * The declaration behind a name or `a.b` expression (the checker resolves aliases and imports).
@@ -250,26 +267,63 @@ function createResolver(types: TypeQueries, lazyFunctions: readonly string[] = [
     return isStated(found) ? found.symbol.id : undefined;
   }
 
-  const statedCache = new Map<string, boolean>();
+  const statedCache = new Map<string, readonly string[]>();
 
   /**
-   * Whether a variable's type states `required-context` (`RequiredContext<T>`). Only a variable
-   * with a type written on it or made by a call is asked (a component or a plain value never is),
-   * so the type checker is not asked about every tag.
+   * The guarantees a variable's type states (`RequiredContext<T>`, `SingleProvider`). Only a
+   * variable with a type written on it or made by a call is asked (a component or a plain value
+   * never is), so the type checker is not asked about every tag.
    */
-  function isStated(found: Resolved): boolean {
+  function guaranteesOfVariable(found: Resolved): readonly string[] {
     const declaration = found.node;
-    if (!ts.isVariableDeclaration(declaration)) return false;
+    if (!ts.isVariableDeclaration(declaration)) return [];
     const initializer = declaration.initializer && skipWrappers(declaration.initializer);
     const candidate =
       declaration.type !== undefined ||
       (initializer !== undefined && ts.isCallExpression(initializer));
-    if (!candidate) return false;
+    if (!candidate) return [];
     const known = statedCache.get(found.symbol.id);
     if (known !== undefined) return known;
-    const stated = types.guaranteesOf(found.symbol).includes(REQUIRED_CONTEXT);
+    const stated = types.guaranteesOf(found.symbol);
     statedCache.set(found.symbol.id, stated);
     return stated;
+  }
+
+  /** Whether a variable's type states `required-context` (`RequiredContext<T>`). */
+  function isStated(found: Resolved): boolean {
+    return guaranteesOfVariable(found).includes(REQUIRED_CONTEXT);
+  }
+
+  /**
+   * The traits the context an expression names states on its declaration (`RequiredContext`,
+   * `SingleProvider`, `Stable`), with the declaration; undefined when it states none. Only a type
+   * written on the declaration, or made by its call, states one (`guaranteesOfVariable`).
+   */
+  function contextTraits(
+    expression: ts.Expression,
+  ): (StatedRef & { traits: string[] }) | undefined {
+    const found = resolve(expression);
+    if (found === undefined) return undefined;
+    const stated = guaranteesOfVariable(found);
+    const traits = CONTEXT_TRAITS.filter((trait) => stated.includes(trait));
+    if (traits.length === 0) return undefined;
+    return { id: found.symbol.id, name: found.symbol.name, loc: locOf(found.node), traits };
+  }
+
+  /** The context an expression names when its type states `single-provider`. */
+  function singleProviderContext(expression: ts.Expression): StatedRef | undefined {
+    const found = resolve(expression);
+    if (found === undefined || !guaranteesOfVariable(found).includes(SINGLE_PROVIDER)) {
+      return undefined;
+    }
+    return { id: found.symbol.id, name: found.symbol.name, loc: locOf(found.node) };
+  }
+
+  /** The Provider tag of the context an expression names (`X` in `<X.Provider>` or `<X>`). */
+  function providerTag(expression: ts.Expression): Tag | undefined {
+    const single = singleProviderContext(expression);
+    const context = contextIdOf(expression) ?? single?.id;
+    return context === undefined ? undefined : { kind: "provider", context, single };
   }
 
   /** The context an expression names when its type states `required-context`. */
@@ -673,8 +727,8 @@ function createResolver(types: TypeQueries, lazyFunctions: readonly string[] = [
 
   function resolveTag(tag: ts.JsxTagNameExpression, fn: FunctionLike | undefined): Tag {
     if (ts.isPropertyAccessExpression(tag) && tag.name.text === "Provider") {
-      const context = contextIdOf(tag.expression);
-      if (context !== undefined) return { kind: "provider", context };
+      const provider = providerTag(tag.expression);
+      if (provider !== undefined) return provider;
     }
     if (ts.isPropertyAccessExpression(tag) && tag.name.text === "Consumer") {
       const stated = statedContext(tag.expression);
@@ -692,10 +746,10 @@ function createResolver(types: TypeQueries, lazyFunctions: readonly string[] = [
     const found = resolve(tag);
     if (found === undefined) return { kind: "computed", candidate: false };
     const alias = providerAliasContext(found.node);
-    if (alias !== undefined) return { kind: "provider", context: alias };
+    if (alias !== undefined) return alias;
     // React 19 renders a context itself as its Provider: `<ThemeContext value={…}>`.
-    const itself = contextIdOf(tag);
-    if (itself !== undefined) return { kind: "provider", context: itself };
+    const itself = providerTag(tag);
+    if (itself !== undefined) return itself;
     if (!types.isOwnFile(found.file)) return routerTag(tag) ?? { kind: "library" };
     if (isClass(found.node)) return { kind: "class" };
     if (componentShape(found.node) !== undefined) return { kind: "component", id: found.symbol.id };
@@ -923,11 +977,11 @@ function createResolver(types: TypeQueries, lazyFunctions: readonly string[] = [
   }
 
   /** The Provider a declaration aliases: `const P = Ctx.Provider` or `const { Provider } = Ctx`. */
-  function providerAliasContext(declaration: ts.Node): string | undefined {
+  function providerAliasContext(declaration: ts.Node): Tag | undefined {
     if (ts.isVariableDeclaration(declaration)) {
       const value = declaration.initializer && skipWrappers(declaration.initializer);
       return value && ts.isPropertyAccessExpression(value) && value.name.text === "Provider"
-        ? contextIdOf(value.expression)
+        ? providerTag(value.expression)
         : undefined;
     }
     if (!ts.isBindingElement(declaration)) return undefined;
@@ -935,7 +989,7 @@ function createResolver(types: TypeQueries, lazyFunctions: readonly string[] = [
     const holder = declaration.parent.parent;
     const source = ts.isVariableDeclaration(holder) ? holder.initializer : undefined;
     const isProvider = ts.isIdentifier(key) && key.text === "Provider";
-    return isProvider && source !== undefined ? contextIdOf(source) : undefined;
+    return isProvider && source !== undefined ? providerTag(source) : undefined;
   }
 
   /** The id of an own component's default export, found from the literal of `import("./Page")`. */
@@ -1005,6 +1059,7 @@ function createResolver(types: TypeQueries, lazyFunctions: readonly string[] = [
     isMissingDefaultContextCall,
     checkedContextRead,
     statedContext,
+    contextTraits,
     isChildrenCall,
     contextIdOf,
     entryArgument,

@@ -33,7 +33,7 @@ One rule's severity (`error`, `warning`, `info` or `off`), and its options, go u
 
 ```ts
 rules: {
-  "ownership/state-written-outside-owner": "warning",
+  "ownership/resource-not-released": "warning",
   // a severity and options; this option is at its default, the rule's page lists them all
   "ownership/brand-built-outside-owner": ["error", { predicates: true }],
 },
@@ -50,6 +50,7 @@ Every key of the config: [config.md](https://github.com/khoing1111/ts-stateward/
 | Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
 | --- | --- | --- | --- | --- | --- |
 | [brand-built-outside-owner](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/ownership/brand-built-outside-owner.md) | a cast to a checked brand like `as Positive` outside the file that owns its check | A cast to a checked brand like `Positive` outside its check skips the validation the brand stands for, so the type promises more than the value holds. | Core | error | error |
+| [resource-not-released](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/ownership/resource-not-released.md) | a subscription, listener or connection stated to need releasing that is never released | A value with the release trait (a subscription, a listener, a connection) that a function starts and never releases keeps running, and the leak shows far from its cause. | Core | error | error |
 | [state-written-outside-owner](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/ownership/state-written-outside-owner.md) | shared module state changed by a file other than the one that declares it | When several modules change the same module-level state, each change must be read to know its value; one owning module with functions keeps that in one place. | Core | error | error |
 
 **Core** rules are on in every preset. **Coverage** rules point at code whose types do not say

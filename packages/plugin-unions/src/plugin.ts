@@ -1,11 +1,11 @@
 import { definePlugin, lazyRule, moduleLoader } from "@stateward/core";
+import { guarantees } from "./open-union.js";
 import { RULES } from "./rules.meta.js";
 
 /** Each rule's module, imported the first time the rule is on. */
 const load = {
-  defaultHidesCases: moduleLoader(() => import("./default-hides-cases.js")),
-  ifChainMissesCase: moduleLoader(() => import("./if-chain-misses-case.js")),
-  tagDoesNotDiscriminate: moduleLoader(() => import("./tag-does-not-discriminate.js")),
+  nonExhaustiveSwitch: moduleLoader(() => import("./non-exhaustive-switch.js")),
+  ambiguousDiscriminant: moduleLoader(() => import("./ambiguous-discriminant.js")),
 };
 
 export function unions() {
@@ -13,21 +13,17 @@ export function unions() {
     name: "unions",
     description: "Every case of a union is handled, and its tag tells the cases apart.",
     rules: {
-      "default-hides-cases": lazyRule(
-        RULES["default-hides-cases"],
-        load.defaultHidesCases,
-        (module) => module.defaultHidesCases,
+      "non-exhaustive-switch": lazyRule(
+        RULES["non-exhaustive-switch"],
+        load.nonExhaustiveSwitch,
+        (module) => module.nonExhaustiveSwitch,
       ),
-      "if-chain-misses-case": lazyRule(
-        RULES["if-chain-misses-case"],
-        load.ifChainMissesCase,
-        (module) => module.ifChainMissesCase,
-      ),
-      "tag-does-not-discriminate": lazyRule(
-        RULES["tag-does-not-discriminate"],
-        load.tagDoesNotDiscriminate,
-        (module) => module.tagDoesNotDiscriminate,
+      "ambiguous-discriminant": lazyRule(
+        RULES["ambiguous-discriminant"],
+        load.ambiguousDiscriminant,
+        (module) => module.ambiguousDiscriminant,
       ),
     },
+    editor: { guarantees },
   });
 }

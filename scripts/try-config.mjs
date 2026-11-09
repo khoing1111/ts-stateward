@@ -16,6 +16,8 @@ export const ALL_ADDONS = [
   "errors/narrow-try",
   "react-context/react-router",
   "react-context/dynamic-components",
+  "react-context/value-changed-by-reader",
+  "records/unchecked-key",
 ];
 
 /**

@@ -20,8 +20,8 @@ import type { CliEnv, ExitCode } from "../src/main.js";
 
 const fixtures = fileURLToPath(new URL("fixtures", import.meta.url));
 
-/* The fix fixture: status.ts has a switch default and an else to prove (safe fixes), theme.ts has
-   a switch default (safe), search.ts has a spinner left on (a warning with no safe fix). */
+/* The fix fixture: status.ts has two ignore comments and theme.ts one that name a rule by its old
+   id (a safe fix renames each), search.ts has a spinner left on (a warning with no safe fix). */
 let work = "";
 
 beforeEach(() => {
@@ -56,8 +56,57 @@ const write = (name: string, text: string): void => {
 };
 
 const LEFT = "1 problem needs a decision (run without --fix to see it)";
+const OLD = "// stateward-ignore unions/default-hides-cases";
+const RENAMED = "// stateward-ignore unions/non-exhaustive-switch";
 
 describe("stateward check --fix", { timeout: 60_000 }, () => {
+  it("renames old rule ids in the config, which the notice names with its line", async () => {
+    const configPath = path.join(work, "stateward.config.mjs");
+    writeFileSync(
+      configPath,
+      readFileSync(configPath, "utf8").replace(
+        '  include: ["src/**"],',
+        '  include: ["src/**"],\n  rules: { "records/table-type-too-loose": "warning" },',
+      ),
+    );
+    const checked = await run(["check"]);
+    expect(checked.stderr + checked.stdout).toContain(
+      "`records/table-type-too-loose` is now `records/ambiguous-table`; rename it in stateward.config.mjs:9",
+    );
+    const dry = await run(["check", "--fix", "--dry-run"]);
+    expect(dry.stdout).toContain(
+      "Would rename 1 old rule id in stateward.config.mjs; nothing was written.\n",
+    );
+    expect(dry.stdout).toContain('+  rules: { "records/ambiguous-table": "warning" },');
+    expect(readFileSync(configPath, "utf8")).toContain('"records/table-type-too-loose"');
+    const fixed = await run(["check", "--fix"]);
+    expect(fixed.stdout).toContain("Renamed 1 old rule id in stateward.config.mjs.\n");
+    expect(readFileSync(configPath, "utf8")).toContain(
+      '  rules: { "records/ambiguous-table": "warning" },',
+    );
+    const again = await run(["check"]);
+    expect(again.stderr + again.stdout).not.toContain("is now");
+  });
+
+  it("leaves an old id whose rule moved to a pack the config does not load", async () => {
+    const configPath = path.join(work, "stateward.config.mjs");
+    const moved = '  rules: { "react/provider-value-changes-every-render": "off" },';
+    writeFileSync(
+      configPath,
+      readFileSync(configPath, "utf8").replace(
+        '  include: ["src/**"],',
+        `  include: ["src/**"],\n${moved}`,
+      ),
+    );
+    const checked = await run(["check"]);
+    expect(checked.stderr + checked.stdout).toContain(
+      "`react/provider-value-changes-every-render` is now `react-context/provider-value-changes-every-render`, in the react-context pack, which the config does not load; add that pack, or remove the line in stateward.config.mjs:9",
+    );
+    const fixed = await run(["check", "--fix"]);
+    expect(fixed.stdout).not.toContain("old rule id");
+    expect(readFileSync(configPath, "utf8")).toContain(moved);
+  });
+
   it("applies the safe fixes only and says what is left", async () => {
     const search = read("search.ts");
     const fixed = await run(["check", "--fix"]);
@@ -67,10 +116,11 @@ describe("stateward check --fix", { timeout: 60_000 }, () => {
       stderr: "",
     });
     expect(read("status.ts")).toContain(
-      '    default:\n      status satisfies never;\n      return "Other";',
+      `${RENAMED}: a failed upload shows the default label\nexport function label`,
     );
-    expect(read("status.ts")).toContain('  } else {\n    status satisfies never;\n    return "?";');
-    expect(read("theme.ts")).toContain("      mode satisfies never;");
+    expect(read("status.ts")).toContain(`${RENAMED}: only an idle upload has its own icon`);
+    expect(read("theme.ts")).toContain(RENAMED);
+    expect(read("status.ts") + read("theme.ts")).not.toContain(OLD);
     // The spinner fix changes behaviour (the flag is reset after a failure): never applied here.
     expect(read("search.ts")).toBe(search);
   });
@@ -93,7 +143,7 @@ describe("stateward check --fix", { timeout: 60_000 }, () => {
 
   it("leaves a clean check after the fixes (the fixed code passes)", async () => {
     await run(["check", "--fix"]);
-    const checked = await run(["check", "--rule", "unions/default-hides-cases"]);
+    const checked = await run(["check", "--rule", "unions/non-exhaustive-switch"]);
     expect(checked.code).toBe(0);
     expect(checked.stdout).toContain("No problems");
   });
@@ -102,8 +152,8 @@ describe("stateward check --fix", { timeout: 60_000 }, () => {
     const before = { status: read("status.ts"), theme: read("theme.ts") };
     const dry = await run(["check", "--fix", "--dry-run"]);
     expect(dry.code).toBe(0);
-    expect(dry.stdout).toContain("--- a/src/theme.ts\n+++ b/src/theme.ts\n@@ -7,6 +7,7 @@");
-    expect(dry.stdout).toContain('+      mode satisfies never;\n       return "Other";');
+    expect(dry.stdout).toContain("--- a/src/theme.ts\n+++ b/src/theme.ts\n@@ -1,6 +1,6 @@");
+    expect(dry.stdout).toContain(`-${OLD}: the system mode follows the light one\n+${RENAMED}:`);
     expect(dry.stdout).toContain("--- a/src/status.ts\n+++ b/src/status.ts\n");
     // A path shown to the user uses `/` on every system (Windows included): no `\` in a header.
     expect(dry.stdout).not.toMatch(/^(---|\+\+\+) .*\\/m);
@@ -113,49 +163,51 @@ describe("stateward check --fix", { timeout: 60_000 }, () => {
     expect({ status: read("status.ts"), theme: read("theme.ts") }).toEqual(before);
   });
 
-  it("fixes only the rule or group asked for", async () => {
-    const only = await run(["check", "--fix", "--rule", "unions/default-hides-cases"]);
-    expect(only.stdout).toBe("Fixed 2 problems in 2 files; nothing is left.\n");
-    expect(read("status.ts")).not.toContain('status satisfies never;\n    return "?"');
-    expect(read("theme.ts")).toContain("mode satisfies never;");
-    const group = await run(["check", "--fix", "--group", "unions/cases"]);
-    expect(group.code).toBe(0);
-    expect(group.stdout).toContain("Fixed 1 problem in 1 file; nothing is left.");
-    expect(read("status.ts")).toContain("  } else {\n    status satisfies never;");
+  it("fixes only the rule or group asked for, and the ignore comments", async () => {
+    const search = read("search.ts");
+    const only = await run(["check", "--fix", "--rule", "unions/non-exhaustive-switch"]);
+    expect(only.stdout).toBe("Fixed 3 problems in 2 files; nothing is left.\n");
+    expect(read("theme.ts")).toContain(RENAMED);
+    const group = await run(["check", "--fix", "--group", "async/failures"]);
+    expect(group.stdout).toBe(`Nothing to fix without review; ${LEFT}.\n`);
+    expect(read("search.ts")).toBe(search);
   });
 
   it("does not fix what the baseline accepted, and fixes what is new", async () => {
+    writeFileSync(path.join(work, "stateward.config.mjs"), CHECKED_CONFIG);
+    write("numbers.ts", "export const even = 2;\n");
     await run(["baseline"]);
-    const baselined = { status: read("status.ts"), theme: read("theme.ts") };
-    write(
-      "extra.ts",
-      'export type Size = "s" | "l";\n\nexport function size(value: Size): number {\n  switch (value) {\n    case "s":\n      return 1;\n    case "l":\n      return 2;\n    default:\n      return 0;\n  }\n}\n',
-    );
+    const baselined = read("numbers.ts");
+    write("extra.ts", "export const even = 4;\n");
     const fixed = await run(["check", "--fix"]);
-    expect(fixed.stdout).toBe("Fixed 1 problem in 1 file; nothing is left.\n");
-    expect(read("extra.ts")).toContain("value satisfies never;");
-    expect({ status: read("status.ts"), theme: read("theme.ts") }).toEqual(baselined);
+    // The ignore comments are not baselined: their three renames are fixed too. The copy rule
+    // still reports `even` after its fix, so one finding is left.
+    expect(fixed.stdout).toBe(
+      "Fixed 4 problems in 3 files; 1 problem needs a decision (run without --fix to see it); 1 of it was caused by the fixes.\n",
+    );
+    expect(read("extra.ts")).toContain("export const evenCopy: number = even;");
+    expect(read("numbers.ts")).toBe(baselined);
   });
 
   it("fixes the ignore comments that are not needed", async () => {
     write(
       "theme.ts",
-      `// stateward-ignore unions/tag-does-not-discriminate: old\n${read("theme.ts")}`,
+      `// stateward-ignore unions/ambiguous-discriminant: old\n${read("theme.ts")}`,
     );
     const all = await run(["check", "--fix"]);
     expect(all.code).toBe(0);
-    expect(read("theme.ts")).not.toContain("stateward-ignore");
-    expect(read("theme.ts")).toContain("mode satisfies never;");
+    expect(read("theme.ts")).not.toContain("ambiguous-discriminant");
+    expect(read("theme.ts")).toContain(RENAMED);
   });
 
   it("counts removing an unneeded ignore as a fix with --dry-run too, and shows it in the diff", async () => {
     write(
       "theme.ts",
-      `// stateward-ignore unions/tag-does-not-discriminate: old\n${read("theme.ts")}`,
+      `// stateward-ignore unions/ambiguous-discriminant: old\n${read("theme.ts")}`,
     );
     const dry = await run(["check", "--fix", "--dry-run"]);
     expect(dry.stdout).toContain(
-      "--- a/src/theme.ts\n+++ b/src/theme.ts\n@@ -1,4 +1,3 @@\n-// stateward-ignore unions/tag-does-not-discriminate: old\n",
+      "--- a/src/theme.ts\n+++ b/src/theme.ts\n@@ -1,7 +1,6 @@\n-// stateward-ignore unions/ambiguous-discriminant: old\n",
     );
     expect(dry.stdout).toContain(
       `Would fix 4 problems in 2 files; ${LEFT}. Nothing was written.\n`,
@@ -195,8 +247,8 @@ describe("stateward check --fix", { timeout: 60_000 }, () => {
     write("theme.ts", `${read("theme.ts")}\n`);
     const fixed = await run(["check", "--fix", "--changed"]);
     expect(fixed.stdout).toContain("Fixed 1 problem in 1 file;");
-    expect(read("theme.ts")).toContain("mode satisfies never;");
-    expect(read("status.ts")).not.toContain("satisfies never");
+    expect(read("theme.ts")).toContain(RENAMED);
+    expect(read("status.ts")).toContain(OLD);
   });
 
   it("leaves a file alone that changed while it was checking, and fixes the others", async () => {
@@ -211,7 +263,7 @@ describe("stateward check --fix", { timeout: 60_000 }, () => {
         "Fixed 2 problems in 1 file; 2 problems need a decision (run without --fix to see them).\n",
     );
     expect(read("theme.ts")).toBe(saved);
-    expect(read("status.ts")).toContain("status satisfies never;");
+    expect(read("status.ts")).toContain(RENAMED);
   });
 
   it("refuses a bad command line", async () => {
@@ -268,8 +320,8 @@ describe("stateward check: fixes are tried first", { timeout: 60_000 }, () => {
     expect(read("numbers.ts")).toBe(
       "export const odd = 1;\nexport const even = 2;\nexport const evenCopy: number = even;\n",
     );
-    // The unions fixes compile and are applied as before.
-    expect(read("theme.ts")).toContain("mode satisfies never;");
+    // The ignore comments' fixes compile and are applied as before.
+    expect(read("theme.ts")).toContain(RENAMED);
   });
 
   it('lists in JSON the fixes as given, not tried ("verified": null), unless --verify-fixes', async () => {
@@ -331,7 +383,7 @@ describe("stateward check: fixes are tried first", { timeout: 60_000 }, () => {
       fixes: [{ title: "Copy as number", safe: true, verified: true }],
       rejected: [{ title: "Copy as text", reason }],
     });
-    // An earlier release listed `"fixes": []` here: the unions fix is listed, tried.
+    // An earlier release listed `"fixes": []` here: the ignore comment's fix is listed, tried.
     const theme = findings.find(
       (finding: unknown) =>
         typeof finding === "object" &&
@@ -340,8 +392,8 @@ describe("stateward check: fixes are tried first", { timeout: 60_000 }, () => {
         JSON.stringify(finding.location).includes("theme.ts"),
     );
     expect(theme).toMatchObject({
-      ruleId: "unions/default-hides-cases",
-      fixes: [{ title: "Add `mode satisfies never;` to the default", verified: true }],
+      ruleId: "stateward/ignore",
+      fixes: [{ title: "Change to `unions/non-exhaustive-switch`", verified: true }],
       rejected: [],
     });
   });

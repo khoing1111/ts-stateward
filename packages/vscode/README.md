@@ -64,6 +64,10 @@ server. View › Output, "Stateward (Python): <folder>", shows its log.
 - **The lightbulb** on a finding offers its fixes, "Explain" for the rule's page, "Fix all stateward
   problems in this file", and "Ignore this case here", which writes a `// stateward-ignore` comment.
   Each fix is tried on a copy of the code first, and one that would not compile is not offered.
+- **On save**, with `"editor.codeActionsOnSave": { "source.fixAll": "explicit" }`, stateward
+  applies only the fixes that need no review, the ones `stateward check --fix` applies. Fixes that
+  are a decision about the code (add a missing case, wrap in `finally`) are applied only from the
+  lightbulb.
 - **The status bar** shows `Stateward` with a check mark, or the number of errors. With
   `rollout: true` in the config it shows the rollout's progress (`Stateward: rule 2 of 9 · 3 left`). Click it
   for the commands.
@@ -93,15 +97,30 @@ In the command palette, type "Stateward":
   itself.
 - **Show the rule plan** and **Turn on the next rule**: turn the rules on one at a time.
 - **Explain a rule…**: why the rule matters, what it flags and how to fix it.
-- **Re-check now**.
+- **Check again**: checks the whole project again.
 
 ## Settings
 
 - `stateward.inlayHints.throws`, `stateward.inlayHints.catchVariable`: the grey hints (both on).
-- `stateward.serverPath`: the path to a locally built language server.
+- `stateward.serverPath`: the path to a language server built from a clone of stateward, for
+  testing that clone. It overrides the project's server in every project. It is a machine setting,
+  so it is in the User settings only.
 
 The extension runs the project's config, so it stays off in an untrusted workspace.
-View › Output, then "Stateward", shows which copy of stateward started and any error.
+
+## Troubleshooting
+
+The log is in View › Output, then "Stateward". It names the language server that started and
+shows any error. The extension runs, in this order:
+
+1. the server in `stateward.serverPath`, when the setting is set and the file exists;
+2. the project's own `@stateward/language-server`, so the editor and `stateward check` agree;
+3. the copy bundled with the extension.
+
+When `stateward.serverPath` is used, the log and the status bar tooltip say so. When the project
+also has its own server, a notification offers **Use the project's server**, which removes the
+setting from your user settings. A server older than the extension does not support every command.
+The message then names the server and how to update it or remove the setting.
 
 ## Docs
 

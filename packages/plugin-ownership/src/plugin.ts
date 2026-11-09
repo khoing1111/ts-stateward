@@ -1,18 +1,20 @@
 import { definePlugin, lazyRule, moduleLoader } from "@stateward/core";
 import { guarantees } from "./guarantees.js";
+import { RELEASE_FACTS } from "./release-facts.js";
 import { RULES } from "./rules.meta.js";
 
 /** Each rule's module, imported the first time the rule is on. */
 const load = {
   stateWrittenOutsideOwner: moduleLoader(() => import("./state-written-outside-owner.js")),
   brandBuiltOutsideOwner: moduleLoader(() => import("./brand-built-outside-owner.js")),
+  resourceNotReleased: moduleLoader(() => import("./resource-not-released.js")),
 };
 
 export function ownership() {
   return definePlugin({
     name: "ownership",
     description:
-      "One owner per piece of shared state and per brand: others call the owner's functions.",
+      "One owner per piece of shared state, per brand and per resource: others call the owner's functions, and what is started is released.",
     rules: {
       "state-written-outside-owner": lazyRule(
         RULES["state-written-outside-owner"],
@@ -24,7 +26,13 @@ export function ownership() {
         load.brandBuiltOutsideOwner,
         (module) => module.brandBuiltOutsideOwner,
       ),
+      "resource-not-released": lazyRule(
+        RULES["resource-not-released"],
+        load.resourceNotReleased,
+        (module) => module.resourceNotReleased,
+      ),
     },
     editor: { guarantees },
+    facts: RELEASE_FACTS,
   });
 }

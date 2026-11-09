@@ -46,6 +46,16 @@ const expected: Shown[] = [
     fixes: [],
   },
   {
+    rule: "react/effect-missing-cleanup",
+    severity: "warning",
+    file: "ChatRoom.tsx",
+    at: "bus.on(event, onEvent)",
+    message: "`bus.on(…)` returns an unsubscribe function that the effect never calls",
+    hint: "keep it (`const unsubscribe = bus.on(…)`) and call it in the cleanup: `unsubscribe();`",
+    notes: [],
+    fixes: [],
+  },
+  {
     rule: "react/effect-copies-derived-value",
     severity: "warning",
     file: "ProfilePage.tsx",

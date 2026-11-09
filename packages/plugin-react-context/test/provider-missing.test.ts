@@ -8,6 +8,9 @@ import { reactContext } from "../src/index.js";
 import { createProviderMissing } from "../src/provider-missing/rule.js";
 import type { Summary } from "../src/provider-missing/summary.js";
 
+/** The Provider-value rule reads the same fixtures; its findings are tested in provider-value.test.ts. */
+const PROVIDER_RULES_ONLY = { "react-context/provider-value-changes-every-render": "off" } as const;
+
 // Each fixture is a TypeScript program; the engine-contract tests run every one of them.
 const SLOW = 300_000;
 const FIXTURES = fileURLToPath(new URL("./fixtures/provider-missing", import.meta.url));
@@ -37,27 +40,19 @@ function run(
   addons: readonly string[] = [],
 ): string[][] {
   const dir = fixture(name);
-  const { findings } = checkFixture(dir, [plugin], {}, addons);
+  const { findings } = checkFixture(dir, [plugin], PROVIDER_RULES_ONLY, addons);
   expectMessageStandard(findings);
   return findings.map((finding) => show(finding, dir));
 }
 
-/** The value type of each fixture context: the hint shows the call that states it required. */
-const VALUE_TYPES: Readonly<Record<string, string>> = {
-  AuthCtx: "User",
-  AuthContext: "User",
-  ThemeCtx: "Theme",
-  ThemeContext: "Theme",
-};
-
 const FIX_MISSING = (context: string): string =>
   [
-    `fix: wrap it in \`<${context}.Provider value={…}>\`, or render it inside a component that provides it`,
-    "    // if it is always under its Provider, state it (quick fix); stateward proves every reader:",
-    `    const ${context} = requiredContext<${VALUE_TYPES[context] ?? "?"}>();`,
+    "fix: one of",
+    `- wrap it in \`<${context}.Provider value={…}>\``,
+    `- or render it inside a component that provides \`${context}\``,
   ].join("\n");
 const FIX_UNREACHABLE =
-  "fix: render it from your app, or list it in `entries` in the react-context options";
+  "fix: one of\n- render it from the app\n- or list it in `entries` in the react-context options";
 const UNREACHABLE_PROFILE =
   "info src/Profile.tsx:4: not checked: whether `Profile` is under the Provider of `AuthCtx`: no entry point renders it";
 
@@ -77,7 +72,7 @@ const FIX_DYNAMIC =
 const PLAIN =
   "fix: render the component directly; constant maps are checked by the dynamic-components add-on";
 const NARROW =
-  "fix: render the component directly, or pick it from a `const` object by a key of a finite type";
+  "fix: one of\n- render the component directly\n- or pick it from a `const` object by a key with a fixed set of values";
 const unreachable = (site: string, name: string, context: string): string[] => [
   `info ${site}: not checked: whether \`${name}\` is under the Provider of \`${context}\`: no entry point renders it`,
   FIX_UNREACHABLE,
@@ -397,7 +392,10 @@ describe("react-context/provider-missing: React Router", () => {
       const named = checkFixture(
         dir,
         [reactContext()],
-        { "react-context/provider-missing": ["error", { lazyFunctions: ["withRetry"] }] },
+        {
+          "react-context/provider-missing": ["error", { lazyFunctions: ["withRetry"] }],
+          ...PROVIDER_RULES_ONLY,
+        },
         ROUTER_ADDON,
       ).findings;
       expectMessageStandard(named);
@@ -422,7 +420,10 @@ describe("react-context/provider-missing: React Router", () => {
       const findings = checkFixture(
         dir,
         [reactContext()],
-        { "react-context/provider-missing": ["error", { lazyFunctions: ["load"] }] },
+        {
+          "react-context/provider-missing": ["error", { lazyFunctions: ["load"] }],
+          ...PROVIDER_RULES_ONLY,
+        },
         ROUTER_ADDON,
       ).findings;
       expectMessageStandard(findings);
@@ -461,7 +462,7 @@ describe("react-context/provider-missing: entry points", () => {
     expect(run("entry-none")).toEqual([
       [
         "info src/contexts.ts:6: not checked: the Providers of `AuthCtx`: no entry point is found",
-        "fix: render your app with `createRoot(…).render(<App/>)`, or list it in `entries` in the react-context options",
+        "fix: one of\n- render the app with `createRoot(…).render(<App/>)`\n- or list the entry point in `entries` in the react-context options",
       ],
     ]);
   });
@@ -519,7 +520,7 @@ describe("react-context/provider-missing: entry points", () => {
     expect(unknowns).toEqual([
       [
         "info src/contexts.ts:6: not checked: `Typo` from entry `src/App.tsx#App`: it is not a required context",
-        "fix: check the names in `provides` against your required contexts (made with no default, read through a check)",
+        "fix: use the name of a required context in `provides`: one created with no default and read through a check, or stated `RequiredContext`",
       ],
       [
         "info src/contexts.ts:6: not checked: entry `src/Nope.tsx#Nope`: it matches no component",

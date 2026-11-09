@@ -494,6 +494,7 @@ function summaryOf(state: Opened, file: string): ThrowsSummary | undefined {
     types: state.source.types,
     addons: [],
     facts: {},
+    shippedFacts: {},
     report() {
       // A package's source is read for facts, never reported on.
     },

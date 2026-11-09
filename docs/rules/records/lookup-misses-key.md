@@ -22,23 +22,33 @@ error[records/lookup-misses-key]: `labels[status]` can be missing, but its type 
   |
 6 |   return labels[status].toUpperCase();
   |          ^^^^^^^^^^^^^^
-  = fix: declare `labels` with `satisfies Record<…>` over its real keys, or type `status` so a missing key is handled
+  = fix: declare `labels` with `as const satisfies Record<Status, …>`, or type `status` so a missing key is handled
+  = note: example.ts:1: `labels` is read with `Status` keys, declared here
   = docs: stateward explain records/lookup-misses-key
 ```
 
-Give the table an entry for every value, and say so with `satisfies`, so a missing one fails to compile where the table is written:
+Give the table an entry for every value. When the key's type is declared apart from the table, say so with `as const satisfies`, so a missing entry fails to compile where the table is written:
 
 ```ts
 type Status = "idle" | "failed";
 
-const labels = { idle: "Idle", failed: "Failed" } satisfies Record<Status, string>;
+const labels = { idle: "Idle", failed: "Failed" } as const satisfies Record<Status, string>;
 
 export function title(status: Status): string {
   return labels[status].toUpperCase();
 }
 ```
 
-When the table's own keys leave some values out, the message names the missing entries (the first 3, then a count). When the table has no fixed keys at all, as above (`Record<string, string>`, a registry a hook returns, a server response), it asks you to give the table its real keys or to handle a missing entry. When the table comes from a cast (`(value as Record<string, T>)[key]`), it points at the cast, which drops the keys. There is no quick fix, since the values are yours to write.
+The message names the missing entries (the first 3, then a count). The fix line follows what the code shows:
+
+| The code | The fix line suggests |
+| --- | --- |
+| the key is typed with a union or enum declared apart from the table (`status: Status`) | `as const satisfies Record<Status, …>`, with a note where `Status` is declared |
+| the key's type is not declared apart (an inline union, an inferred type) | the missing entries, or real keys for the table |
+| one known key (`HttpCode.Ok`) on a table with no fixed keys | real keys for the table, or `?.` or `??` for a missing entry |
+| the table comes from a cast (`(value as Record<string, T>)[key]`) | a type where the value is made, or `??` |
+
+There is no quick fix: the values are the code's own. A read with a fallback (`labels[status] ?? "Unknown"`) is not reported; for a table partial on purpose, `as const satisfies Partial<Record<Status, V>>` states it.
 
 ## Why it matters
 

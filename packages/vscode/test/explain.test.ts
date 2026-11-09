@@ -3,7 +3,7 @@ import { explainPath, ruleIdFromArgument } from "../src/explain.js";
 
 describe("the explain command", () => {
   it("takes the rule id from the first argument, and nothing else", () => {
-    expect(ruleIdFromArgument("records/table-type-too-loose")).toBe("records/table-type-too-loose");
+    expect(ruleIdFromArgument("records/ambiguous-table")).toBe("records/ambiguous-table");
     expect(ruleIdFromArgument("")).toBeUndefined();
     expect(ruleIdFromArgument(undefined)).toBeUndefined();
     expect(ruleIdFromArgument({ ruleId: "x" })).toBeUndefined();

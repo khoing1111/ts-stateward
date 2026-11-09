@@ -178,7 +178,7 @@ describe("extends", () => {
       "states/fixed": "warning",
     });
     expect(errorsOf({ extends: [team], plugins: [guards] })).toEqual([
-      'rules: unknown rule id "states/fixed"',
+      'rules: unknown rule id "states/fixed"; rules of the loaded plugins: guards/cover, guards/lookup, guards/wide, guards/wider',
     ]);
   });
 
@@ -288,7 +288,7 @@ describe("overrides", () => {
     const files = ["src/**"];
     const base = { plugins: [guards] };
     expect(errorsOf({ ...base, overrides: [{ files, rules: { "guards/nope": "off" } }] })).toEqual([
-      'overrides[0].rules: unknown rule id "guards/nope"',
+      'overrides[0].rules: unknown rule id "guards/nope"; rules of the loaded plugins: guards/cover, guards/lookup, guards/wide, guards/wider',
     ]);
     expect(
       errorsOf({ ...base, overrides: [{ files, rules: { "guards/lookup": "loud" } }] }),

@@ -112,16 +112,19 @@ function withoutNames(line: string): string {
   return line.replace(/`[^`]*`/g, "");
 }
 
-/** A hint is one line, or one line and an indented code example of up to four lines. */
-function hintProblems(hint: string): string[] {
-  const [first = "", ...example] = hint.split(/\r?\n/);
-  const problems = lineProblems("fix hint", first, undefined);
-  const words = withoutNames(first);
-  if (words.length > MAX_HINT_LENGTH) {
-    problems.push(
-      `fix hint words are ${String(words.length)} characters without its names; at most ${String(MAX_HINT_LENGTH)}`,
-    );
-  }
+/** The words of one line of a fix, its names left out, must fit the fix line's limit. */
+function wordsProblems(label: string, line: string): string[] {
+  const words = withoutNames(line);
+  return words.length > MAX_HINT_LENGTH
+    ? [
+        `${label} words are ${String(words.length)} characters without its names; at most ${String(MAX_HINT_LENGTH)}`,
+      ]
+    : [];
+}
+
+/** A code example: up to four lines, each indented 4 spaces and at most 100 characters. */
+function exampleProblems(example: readonly string[]): string[] {
+  const problems: string[] = [];
   if (example.length > MAX_EXAMPLE_LINES) {
     problems.push(
       `fix hint example has ${String(example.length)} lines; at most ${String(MAX_EXAMPLE_LINES)}`,
@@ -139,6 +142,36 @@ function hintProblems(hint: string): string[] {
       );
     }
   }
+  return problems;
+}
+
+/**
+ * A hint is one line, or one line and an indented code example of up to four lines (M2). With
+ * several ways to fix (M22) it is `one of`, then one `- ` line per way, each starting with its
+ * action in lowercase and every one after the first with `or`, each with its own example.
+ */
+function hintProblems(hint: string): string[] {
+  const [first = "", ...rest] = hint.split(/\r?\n/);
+  const problems = lineProblems("fix hint", first, undefined);
+  problems.push(...wordsProblems("fix hint", first));
+  if (!rest.some((line) => line.startsWith("- "))) return [...problems, ...exampleProblems(rest)];
+  if (first !== "one of") problems.push('a fix hint with ways to fix must start with "one of"');
+  const ways: { line: string; example: string[] }[] = [];
+  for (const line of rest) {
+    const last = ways.at(-1);
+    if (line.startsWith("- ")) ways.push({ line, example: [] });
+    else if (last === undefined) problems.push(`fix hint line "${line}" must follow a way to fix`);
+    else last.example.push(line);
+  }
+  if (ways.length < 2) problems.push('a fix hint with "one of" needs two ways to fix or more');
+  ways.forEach((way, index) => {
+    const text = way.line.slice(2);
+    problems.push(...wordsProblems("fix hint way", text), ...exampleProblems(way.example));
+    if (!/^[a-z]/.test(text)) problems.push(`fix hint way "${text}" must start in lowercase`);
+    if (index > 0 && !/^or\b/.test(text)) {
+      problems.push(`fix hint way "${text}" must start with "or"`);
+    }
+  });
   return problems;
 }
 

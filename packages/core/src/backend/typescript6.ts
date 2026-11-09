@@ -977,13 +977,22 @@ function compareLabels(a: Literal, b: Literal): number {
   return a.label > b.label ? 1 : 0;
 }
 
-function literalOf(checker: ts.TypeChecker, member: ts.Type): Literal | undefined {
+function literalOf(checker: ts.TypeChecker, found: ts.Type): Literal | undefined {
+  const member = withoutMarkers(checker, found);
   const label = checker.typeToString(member);
   if (member.isStringLiteral() || member.isNumberLiteral()) return { value: member.value, label };
   if (member.flags & ts.TypeFlags.BooleanLiteral) return { value: label === "true", label };
   if (member.flags & ts.TypeFlags.Null) return { value: null, label };
   if (member.flags & ts.TypeFlags.Undefined) return { value: undefined, label };
   return undefined;
+}
+
+/** The literal of `"paid" & { "__guarantee:open-union"?: true }`; any other type as it is. */
+function withoutMarkers(checker: ts.TypeChecker, type: ts.Type): ts.Type {
+  if (!type.isIntersection()) return type;
+  const rest = type.types.filter((part) => !isMarkerOnly(checker, part));
+  const [only] = rest;
+  return rest.length === 1 && only !== undefined && rest.length < type.types.length ? only : type;
 }
 
 /** The types compared by value: `===` on two of them never tells apart equal values. */
@@ -1044,11 +1053,123 @@ function isPromiseType(checker: ts.TypeChecker, type: ts.Type): boolean {
 
 const NULLISH = ts.TypeFlags.Null | ts.TypeFlags.Undefined;
 
-/** The property a stated guarantee is written in (`TypeQueries.guaranteesOf`). */
+/** The property a stated guarantee is written in by 1.1.0 (`__guarantee?: "owned"`). */
 const GUARANTEE_PROPERTY = "__guarantee";
+/** The prefix of the property each trait is written in from 1.2 (`"__guarantee:owned"?: true`). */
+const GUARANTEE_PREFIX = "__guarantee:";
 
-/** The guarantee names of one type that is not a union: its optional `__guarantee` literals. */
+/** Whether `file` declares a property named `marker` (`"__guarantee:opaque"?: …`) in a type or class. */
+function declaresMarkerProperty(file: ts.SourceFile, marker: string): boolean {
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (
+      (ts.isPropertySignature(node) || ts.isPropertyDeclaration(node)) &&
+      (ts.isStringLiteral(node.name) || ts.isIdentifier(node.name)) &&
+      node.name.text === marker
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return found;
+}
+
+/** Adds the `as` names a file's import and export specifiers give: `onSnapshot` → `listen`. */
+function addRenamed(file: ts.SourceFile, renamed: Map<string, Set<string>>): void {
+  const add = (specifier: ts.ImportSpecifier | ts.ExportSpecifier): void => {
+    const from = specifier.propertyName;
+    if (from === undefined || !ts.isIdentifier(from)) return;
+    const names = renamed.get(from.text) ?? new Set<string>();
+    names.add(specifier.name.text);
+    renamed.set(from.text, names);
+  };
+  const addName = (from: string, to: string): void => {
+    if (from === to) return;
+    const names = renamed.get(from) ?? new Set<string>();
+    names.add(to);
+    renamed.set(from, names);
+  };
+  for (const statement of file.statements) {
+    if (ts.isImportDeclaration(statement)) {
+      const bindings = statement.importClause?.namedBindings;
+      if (bindings !== undefined && ts.isNamedImports(bindings)) bindings.elements.forEach(add);
+    } else if (
+      ts.isExportDeclaration(statement) &&
+      statement.exportClause !== undefined &&
+      ts.isNamedExports(statement.exportClause)
+    ) {
+      statement.exportClause.elements.forEach(add);
+    }
+  }
+  // `const listen = onSnapshot`, `const listen = db.onSnapshot` and
+  // `const { onSnapshot: listen } = db`, anywhere in the file.
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      let value: ts.Expression = node.initializer;
+      while (
+        ts.isParenthesizedExpression(value) ||
+        ts.isAsExpression(value) ||
+        ts.isSatisfiesExpression(value) ||
+        ts.isNonNullExpression(value)
+      ) {
+        value = value.expression;
+      }
+      if (ts.isIdentifier(value)) addName(value.text, node.name.text);
+      else if (ts.isPropertyAccessExpression(value)) addName(value.name.text, node.name.text);
+    } else if (
+      ts.isBindingElement(node) &&
+      node.propertyName !== undefined &&
+      ts.isIdentifier(node.propertyName) &&
+      ts.isIdentifier(node.name)
+    ) {
+      addName(node.propertyName.text, node.name.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+}
+
+/** Whether a file declares a member named `[Symbol.dispose]` or `[Symbol.asyncDispose]`. */
+function declaresDisposeMember(file: ts.SourceFile): boolean {
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (
+      ts.isComputedPropertyName(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === "Symbol" &&
+      (node.expression.name.text === "dispose" || node.expression.name.text === "asyncDispose")
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return found;
+}
+
+/**
+ * The guarantee names of one type that is not a union: one per optional `"__guarantee:<name>"`
+ * property, and the string literals of an optional `__guarantee` property (the 1.1.0 form).
+ */
 function memberGuarantees(checker: ts.TypeChecker, type: ts.Type): readonly string[] {
+  const names: string[] = [];
+  for (const property of checker.getPropertiesOfType(type)) {
+    const name = property.getName();
+    if (!name.startsWith(GUARANTEE_PREFIX) || !(property.flags & ts.SymbolFlags.Optional)) continue;
+    const trait = name.slice(GUARANTEE_PREFIX.length);
+    if (trait !== "") names.push(trait);
+  }
+  return [...names, ...legacyGuarantees(checker, type)];
+}
+
+/** The names of the 1.1.0 form, `__guarantee?: "owned"`; none when it is required or not literals (a brand). */
+function legacyGuarantees(checker: ts.TypeChecker, type: ts.Type): readonly string[] {
   const property = checker.getPropertyOfType(type, GUARANTEE_PROPERTY);
   if (property === undefined || !(property.flags & ts.SymbolFlags.Optional)) return [];
   const value = checker.getTypeOfSymbol(property);
@@ -1059,6 +1180,26 @@ function memberGuarantees(checker: ts.TypeChecker, type: ts.Type): readonly stri
     names.push(part.value);
   }
   return names;
+}
+
+/**
+ * Whether an object type only states guarantees: every property is a guarantee marker. A literal
+ * intersected with one (`"paid" & { "__guarantee:open-union"?: true }`, what `OpenUnion<T>` gives
+ * each member) is still that literal.
+ */
+function isMarkerOnly(checker: ts.TypeChecker, type: ts.Type): boolean {
+  if (!(type.flags & ts.TypeFlags.Object)) return false;
+  const properties = checker.getPropertiesOfType(type);
+  return (
+    properties.length > 0 &&
+    properties.every((property) => {
+      const name = property.getName();
+      return (
+        (name === GUARANTEE_PROPERTY || name.startsWith(GUARANTEE_PREFIX)) &&
+        (property.flags & ts.SymbolFlags.Optional) !== 0
+      );
+    })
+  );
 }
 
 /**
@@ -1078,6 +1219,70 @@ function guaranteesOfType(checker: ts.TypeChecker, found: ts.Type): readonly str
     if (shared.length === 0) return [];
   }
   return [...new Set(shared ?? [])].sort();
+}
+
+/**
+ * The literals of the `"__guarantee:<name>"` property of `type` (its first member that states it),
+ * without the `undefined` the optional property adds; undefined when no member states it.
+ */
+function guaranteeValuesOfType(
+  checker: ts.TypeChecker,
+  found: ts.Type,
+  name: string,
+): readonly Literal[] | "not-finite" | undefined {
+  const type = widened(checker, found);
+  if (type === undefined) return undefined;
+  for (const member of type.isUnion() ? type.types : [type]) {
+    if (member.flags & NULLISH) continue;
+    const property = checker.getPropertyOfType(member, `${GUARANTEE_PREFIX}${name}`);
+    if (property === undefined || !(property.flags & ts.SymbolFlags.Optional)) continue;
+    const value = checker.getTypeOfSymbol(property);
+    const literals: Literal[] = [];
+    for (const part of value.isUnion() ? value.types : [value]) {
+      if (part.flags & ts.TypeFlags.Undefined) continue;
+      const literal = literalOf(checker, part);
+      if (literal === undefined) return "not-finite";
+      literals.push(literal);
+    }
+    return literals.sort(compareLabels);
+  }
+  return undefined;
+}
+
+/**
+ * How a value of `type` is disposed, read from its well-known symbol methods: `[Symbol.dispose]`
+ * (`"sync"`), `[Symbol.asyncDispose]` (`"async"`), with the file that declares the method. Every
+ * member but `null` and `undefined` must have the same. `any` and `unknown` have neither.
+ */
+function disposeOfType(
+  checker: ts.TypeChecker,
+  found: ts.Type,
+): { kind: "sync" | "async"; file: string } | undefined {
+  const type = widened(checker, found);
+  if (type === undefined || type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) {
+    return undefined;
+  }
+  const members = (type.isUnion() ? type.types : [type]).filter(
+    (member) => (member.flags & NULLISH) === 0,
+  );
+  const kindOf = (member: ts.Type): { kind: "sync" | "async"; file: string } | undefined => {
+    const properties = checker.getPropertiesOfType(member);
+    for (const [prefix, kind] of [
+      ["__@dispose@", "sync"],
+      ["__@asyncDispose@", "async"],
+    ] as const) {
+      const property = properties.find((one) => String(one.escapedName).startsWith(prefix));
+      const file = property?.declarations?.[0]?.getSourceFile().fileName;
+      if (file !== undefined) return { kind, file };
+    }
+    return undefined;
+  };
+  const found2 = members.map(kindOf);
+  const [first] = found2;
+  if (first === undefined) return undefined;
+  return found2.every((one) => one?.kind === first.kind && one.file === first.file)
+    ? first
+    : undefined;
 }
 
 /** The declared type of a declaration: a variable's or property's type, or a type alias's. */
@@ -1129,6 +1334,38 @@ function hasGenericKeys(checker: ts.TypeChecker, type: ts.Type): boolean {
       checker.getPropertiesOfType(part).length === 0 &&
       checker.getIndexInfosOfType(part).length === 0,
   );
+}
+
+/**
+ * Whether a mapped part of `type` takes its keys from a type that does not resolve:
+ * `{ [k in keyof typeof NAMES]: … }` where `NAMES` comes from a package that is not installed.
+ * TypeScript then gives it index signatures for every key, which says nothing about its keys.
+ */
+function hasUnresolvedKeys(checker: ts.TypeChecker, type: ts.Type): boolean {
+  const parts = type.isIntersection() ? type.types : [type];
+  return parts.some((part) =>
+    (part.getSymbol()?.declarations ?? []).some((declaration) => {
+      if (!ts.isMappedTypeNode(declaration)) return false;
+      const constraint = declaration.typeParameter.constraint;
+      if (constraint === undefined) return false;
+      let unresolved = false;
+      const visit = (node: ts.Node): void => {
+        if (unresolved) return;
+        if (ts.isTypeNode(node) && isErrorTypeOf(checker.getTypeFromTypeNode(node))) {
+          unresolved = true;
+          return;
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(constraint);
+      return unresolved;
+    }),
+  );
+}
+
+/** TypeScript's error type: an `any` whose intrinsic name is "error"; it has no public flag. */
+function isErrorTypeOf(type: ts.Type): boolean {
+  return !!(type.flags & ts.TypeFlags.Any) && Reflect.get(type, "intrinsicName") === "error";
 }
 
 function includesUndefined(type: ts.Type): boolean {
@@ -1573,6 +1810,12 @@ export function idFileNames(root: string): (fileName: string) => string {
   };
 }
 
+/**
+ * TypeScript's errors for a function whose end can be reached although it must return a value:
+ * TS2366, TS2355, TS2534 and TS7030 (`TypeQueries.reportsReachableEnd`).
+ */
+const REACHABLE_END_CODES: ReadonlySet<number> = new Set([2366, 2355, 2534, 7030]);
+
 export function createTypeQueries(
   program: ts.Program,
   own: ReadonlySet<string>,
@@ -1587,6 +1830,11 @@ export function createTypeQueries(
   let created: ts.TypeChecker | undefined;
   const typeChecker = (): ts.TypeChecker => (created ??= program.getTypeChecker());
   const declarations = new Map<string, ts.Node>();
+  const declaredTraits = new Map<string, boolean>();
+  // The starts of TypeScript's "end of the function can be reached" errors, per file asked about.
+  const reachableEndErrors = new WeakMap<ts.SourceFile, readonly number[]>();
+  let declaredDispose: boolean | undefined;
+  let renamedNames: ReadonlyMap<string, ReadonlySet<string>> | undefined;
   const idFileName = idFileNames(root);
   // symbolAt is asked about the same node by several rules (on excalidraw 570,000 questions about
   // 170,000 nodes, 52,000 symbols): the program does not change under these queries, so each
@@ -1648,7 +1896,9 @@ export function createTypeQueries(
         return "not-object";
       }
       if (isArrayLike(typeChecker(), type)) return "not-object";
-      if (hasGenericKeys(typeChecker(), type)) return "generic";
+      if (hasGenericKeys(typeChecker(), type) || hasUnresolvedKeys(typeChecker(), type)) {
+        return "generic";
+      }
       const required: string[] = [];
       const optional: string[] = [];
       for (const property of typeChecker().getPropertiesOfType(type)) {
@@ -1775,6 +2025,92 @@ export function createTypeQueries(
       const type = declaration === undefined ? undefined : declaredTypeOf(checker, declaration);
       return type === undefined ? [] : guaranteesOfType(checker, type);
     },
+    contextualGuaranteesOf(node) {
+      const checker = typeChecker();
+      const type = checker.getContextualType(node);
+      return type === undefined ? [] : guaranteesOfType(checker, type);
+    },
+    guaranteeValuesOf(target, name, contextual = false) {
+      const checker = typeChecker();
+      if ("kind" in target) {
+        const type =
+          contextual && ts.isExpression(target)
+            ? checker.getContextualType(target)
+            : checker.getTypeAtLocation(target);
+        return type === undefined ? undefined : guaranteeValuesOfType(checker, type, name);
+      }
+      const declaration = declarations.get(target.id);
+      const type = declaration === undefined ? undefined : declaredTypeOf(checker, declaration);
+      return type === undefined ? undefined : guaranteeValuesOfType(checker, type, name);
+    },
+    contextualAliasOf(node) {
+      const checker = typeChecker();
+      const found = checker.getContextualType(node);
+      const type = found === undefined ? undefined : widened(checker, found);
+      if (type === undefined) return undefined;
+      const aliasOf = (member: ts.Type): ts.Symbol | undefined =>
+        member.aliasSymbol?.declarations?.some(ts.isTypeAliasDeclaration) === true &&
+        (member.aliasTypeArguments?.length ?? 0) === 0
+          ? member.aliasSymbol
+          : undefined;
+      const whole = aliasOf(type);
+      if (whole !== undefined) return refOfSymbol(whole);
+      const members = (type.isUnion() ? type.types : [type]).filter(
+        (member) => (member.flags & NULLISH) === 0,
+      );
+      const aliases = new Set(members.map(aliasOf));
+      const [only] = aliases;
+      return aliases.size === 1 && only !== undefined ? refOfSymbol(only) : undefined;
+    },
+    bindingPropertyOf(element) {
+      const pattern = element.parent;
+      if (!ts.isObjectBindingPattern(pattern) || element.dotDotDotToken !== undefined) {
+        return undefined;
+      }
+      const key = element.propertyName ?? element.name;
+      if (!ts.isIdentifier(key) && !ts.isStringLiteral(key)) return undefined;
+      const checker = typeChecker();
+      const property = checker.getTypeAtLocation(pattern).getProperty(key.text);
+      return property === undefined ? undefined : refOfSymbol(property);
+    },
+    declaresDispose() {
+      // The text is only a quick filter, as for markers: the member must be declared.
+      declaredDispose ??= program
+        .getSourceFiles()
+        .some(
+          (file) =>
+            own.has(toTypeScriptPath(file.fileName)) &&
+            (file.text.includes("Symbol.dispose") || file.text.includes("Symbol.asyncDispose")) &&
+            declaresDisposeMember(file),
+        );
+      return declaredDispose;
+    },
+    renamedBindings() {
+      if (renamedNames === undefined) {
+        const found = new Map<string, Set<string>>();
+        for (const file of program.getSourceFiles()) {
+          if (own.has(toTypeScriptPath(file.fileName))) addRenamed(file, found);
+        }
+        renamedNames = found;
+      }
+      return renamedNames;
+    },
+    declaresTrait(name) {
+      const known = declaredTraits.get(name);
+      if (known !== undefined) return known;
+      const text = `${GUARANTEE_PREFIX}${name}`;
+      // The text is only a quick filter: the marker counts as a property of a type, never inside a
+      // string or a comment (stateward's own packages quote it, and a project's program can
+      // include them through its config file).
+      const found = program
+        .getSourceFiles()
+        .some((file) => file.text.includes(text) && declaresMarkerProperty(file, text));
+      declaredTraits.set(name, found);
+      return found;
+    },
+    disposeOf(node) {
+      return disposeOfType(typeChecker(), typeChecker().getTypeAtLocation(node));
+    },
     awaitedAliasOf(node) {
       return aliasOfType(typeChecker(), typeChecker().getTypeAtLocation(node));
     },
@@ -1790,7 +2126,7 @@ export function createTypeQueries(
       const declaration = alias?.declarations?.find(ts.isTypeAliasDeclaration);
       if (alias === undefined || declaration === undefined) return undefined;
       if ((type?.aliasTypeArguments?.length ?? 0) > 0) return undefined;
-      return { name: alias.getName(), file: declaration.getSourceFile().fileName };
+      return { name: alias.getName(), file: declaration.getSourceFile().fileName, declaration };
     },
     importSpecifierFor(alias, fromFile) {
       const from = toTypeScriptPath(fromFile);
@@ -1928,6 +2264,22 @@ export function createTypeQueries(
     signalParameterOf(call) {
       return signalParameter(typeChecker(), call);
     },
+    reportsReachableEnd(fn) {
+      const body = fn.body;
+      if (body === undefined) return false;
+      const sourceFile = fn.getSourceFile();
+      let starts = reachableEndErrors.get(sourceFile);
+      if (starts === undefined) {
+        starts = program
+          .getSemanticDiagnostics(sourceFile)
+          .filter((diagnostic) => REACHABLE_END_CODES.has(diagnostic.code))
+          .flatMap((diagnostic) => (diagnostic.start === undefined ? [] : [diagnostic.start]));
+        reachableEndErrors.set(sourceFile, starts);
+      }
+      const from = fn.getStart(sourceFile);
+      const to = body.getStart(sourceFile);
+      return starts.some((start) => start >= from && start < to);
+    },
     narrowedBy(reference, test) {
       return narrowedMembers(program, typeChecker(), reference, test);
     },
@@ -1937,9 +2289,7 @@ export function createTypeQueries(
       return predicate === undefined ? undefined : call.arguments[predicate.parameterIndex];
     },
     isErrorType(node) {
-      // TypeScript's error type is an `any` whose intrinsic name is "error"; it has no public flag.
-      const type = typeChecker().getTypeAtLocation(node);
-      return !!(type.flags & ts.TypeFlags.Any) && Reflect.get(type, "intrinsicName") === "error";
+      return isErrorTypeOf(typeChecker().getTypeAtLocation(node));
     },
     isPromiseLike(node) {
       return isPromiseType(typeChecker(), typeChecker().getTypeAtLocation(node));

@@ -1,11 +1,4 @@
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  realpathSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   BASELINE_FILE,
@@ -45,6 +38,8 @@ import {
   openDiskCache,
   readBaseline,
   readRollout,
+  renamedIdsIn,
+  renamedRule,
   resultsCacheLimit,
   resultsCacheStats,
   ruleIds,
@@ -64,6 +59,7 @@ import type {
   RunTiming,
   FixSetReview,
   ParseResult,
+  ResultCache,
   RuleSelection,
   CheckResult,
 } from "@stateward/core/internal";
@@ -121,6 +117,7 @@ import {
 } from "./fix.js";
 import type { FixPlan } from "./fix.js";
 import { writeHook } from "./hook.js";
+import { realPath } from "./real-path.js";
 import { formatTiming } from "./timing.js";
 import { describeScriptRun, projectScripts } from "./scripts.js";
 import { buildPlanReport, formatPlanJson, formatPlanPretty } from "./plan.js";
@@ -185,6 +182,10 @@ function readTextOrUndefined(file: string): string | undefined {
  * "records/table-type-too-loose"), then every known id.
  */
 export function unknownRuleMessage(ruleId: string, known: readonly string[]): string {
+  const renamed = renamedRule(ruleId);
+  if (renamed !== undefined && known.includes(renamed)) {
+    return `\`${ruleId}\` is now \`${renamed}\`; use the new id`;
+  }
   const close = known.filter(
     (id) => id.endsWith(`/${ruleId}`) || (ruleId.length >= 3 && id.includes(ruleId)),
   );
@@ -306,6 +307,52 @@ type Analysis = {
   cacheDir: string | undefined;
 };
 
+/**
+ * The results cache of the project at `cwd` (`env.cacheDir`), which every command that checks
+ * reads and writes, so they all report from the same findings; none with `--no-cache`.
+ */
+function resultsCacheOf(
+  command: { readonly noCache: true | undefined },
+  cwd: string,
+  config: Config & { configFile: string },
+  env: CliEnv,
+) {
+  const dir = command.noCache === true ? undefined : env.cacheDir?.(cwd);
+  const disk =
+    dir === undefined
+      ? undefined
+      : openDiskCache(dir, cwd, config.configFile, resultsCacheLimit(env.environment ?? {}));
+  return { dir, disk };
+}
+
+/**
+ * Opens the results cache for a command other than `check`, and saves it after the run: what
+ * the checker takes as `cache`, and the save. A save that fails only makes the next run slower.
+ */
+function sharedCache(
+  command: { readonly noCache: true | undefined },
+  cwd: string,
+  config: Config & { configFile: string },
+  env: CliEnv,
+) {
+  const { dir, disk } = resultsCacheOf(command, cwd, config, env);
+  return {
+    /** Undefined with `--no-cache`, or when the environment keeps no cache. */
+    cache: disk?.cache,
+    save: (): void => {
+      const unsaved = disk?.save();
+      if (unsaved !== undefined) {
+        env.stderr(`stateward: could not save the cache in ${dir ?? ""}: ${unsaved.message}\n`);
+      }
+    },
+  };
+}
+
+/** `cache` for core's `check`, which takes a cache or leaves it out. */
+function cacheOption(cache: ResultCache | undefined): { cache?: ResultCache } {
+  return cache === undefined ? {} : { cache };
+}
+
 /** One check of the project as `command` asks: the rules, the cache, ignores, the baseline and the chosen files. */
 function analyse(
   command: Extract<Command, { kind: "check" }>,
@@ -317,11 +364,7 @@ function analyse(
   /** Try the fixes of the findings shown: for `--fix` and `--format json --verify-fixes`. */
   tryFixes = command.fix || (command.format === "json" && command.verifyFixes),
 ): Analysis {
-  const dir = command.noCache === true ? undefined : env.cacheDir?.(cwd);
-  const disk =
-    dir === undefined
-      ? undefined
-      : openDiskCache(dir, cwd, config.configFile, resultsCacheLimit(env.environment ?? {}));
+  const { dir, disk } = resultsCacheOf(command, cwd, config, env);
   const recorder = command.timing ? createTimingRecorder() : undefined;
   const checker = createChecker({
     config,
@@ -427,6 +470,46 @@ function leftLine(left: number, introduced: number): string {
 }
 
 /**
+ * `check --fix` writes the old rule ids the config file names as they are now (`renamed.ts`).
+ * Safe: the config already reads them as the new ids. With `--dry-run` it prints the diff.
+ */
+function renameConfigIds(
+  config: Config & { configFile: string },
+  dryRun: boolean,
+  cwd: string,
+  env: CliEnv,
+): void {
+  const before = readTextOrUndefined(config.configFile);
+  if (before === undefined) return;
+  const known = new Set(ruleIds(config.plugins));
+  // An id whose rule moved to a pack the config does not load stays: the notice says to add the
+  // pack or remove the line, and renaming it would make the config fail to load.
+  const places = renamedIdsIn(before).filter(
+    (place) => !known.has(place.before) && known.has(place.now),
+  );
+  if (places.length === 0) return;
+  const edits = places.map((place) => ({
+    start: place.start,
+    end: place.end,
+    newText: place.now,
+  }));
+  const name = displayPath(cwd, config.configFile);
+  if (dryRun) env.stdout(unifiedDiff(name, before, edits));
+  else {
+    const after = [...edits]
+      .reverse()
+      .reduce(
+        (text, edit) => text.slice(0, edit.start) + edit.newText + text.slice(edit.end),
+        before,
+      );
+    writeFileSync(config.configFile, after);
+  }
+  env.stdout(
+    `${dryRun ? "Would rename" : "Renamed"} ${plural(places.length, "old rule id")} in ${name}${dryRun ? "; nothing was written" : ""}.\n`,
+  );
+}
+
+/**
  * `check --fix`: applies the fixes rules mark safe (fix.ts), then checks once more and says what
  * is left. With `--dry-run` it prints the diff and writes nothing. Findings the baseline accepts
  * and the ones an ignore comment covers are not in `first.result`, so they are never fixed.
@@ -448,6 +531,7 @@ function runFix(
     );
     return 2;
   }
+  renameConfigIds(config, command.dryRun, cwd, env);
   // Only fixes that compile are applied.
   const findings = first.result.findings.map(
     (finding) => first.reviews?.get(finding)?.finding ?? finding,
@@ -709,7 +793,15 @@ async function runBaseline(
     ]);
   }
   const selection: RuleSelection = { kind: "configured" };
-  const result = check({ config, cwd, rules: selection, uncapped: true });
+  const results = sharedCache(command, cwd, config, env);
+  const result = check({
+    config,
+    cwd,
+    rules: selection,
+    uncapped: true,
+    ...cacheOption(results.cache),
+  });
+  results.save();
   // A rule that failed means the findings are incomplete: baselining them would accept too little.
   const failures = result.findings.filter((finding) => finding.kind === "failure");
   if (failures.length > 0) {
@@ -769,8 +861,10 @@ async function runCoverage(
   const cwd = place.project;
   const loaded = await loadForAnalysis(place, env);
   if (!loaded.ok) return fail(env, loaded.errors);
-  const checker = createChecker({ config: loaded.value, cwd, cache: false });
+  const results = sharedCache(command, cwd, loaded.value, env);
+  const checker = createChecker({ config: loaded.value, cwd, cache: results.cache ?? false });
   const raw = checker.check();
+  results.save();
   // Findings the baseline accepts are not problems to look at; they are counted on their own.
   const view = layBaseline(loaded.value, readBaseline(loaded.value), raw, { kind: "configured" });
   const report = buildCoverage({
@@ -872,19 +966,21 @@ function workflowsIn(root: string): { name: string; text: string }[] {
  * with the root's package manager, and stateward in the package's folder.
  */
 function writeWorkflow(cwd: string, env: CliEnv, changed: boolean, force: boolean): string {
+  // git gives the repository's real path: the project's folder takes that form too, so the
+  // folder and the file written are named inside the repository, not through a link.
   const repository = gitRoot(cwd);
-  const project = realpathSync(cwd);
-  const root = repository === undefined || repository === project ? cwd : repository;
+  const project = realPath(cwd);
+  const root = repository ?? project;
   const directory =
-    root === cwd ? undefined : path.relative(root, project).split(path.sep).join("/");
+    root === project ? undefined : path.relative(root, project).split(path.sep).join("/");
   const target = path.join(root, WORKFLOW_FILE);
-  const shown = displayPath(cwd, target);
+  const shown = displayPath(project, target);
   const hasFile = (file: string): boolean => existsSync(path.join(root, file));
   const running = force
     ? undefined
     : workflowRunningStateward(
         workflowsIn(root).filter((file) => file.name !== WORKFLOW_FILE),
-        projectScripts(root, cwd),
+        projectScripts(root, project),
       );
   if (running !== undefined) {
     const how =
@@ -1016,7 +1112,12 @@ async function runExplain(given: string, place: Place, env: CliEnv): Promise<Exi
   if (!loaded.ok) return fail(env, loaded.errors);
   showWarnings(env, loaded.value.warnings);
   const known = ruleIds(loaded.value.plugins);
-  const text = await explain(loaded.value, given);
+  const renamed = known.includes(given) ? undefined : renamedRule(given);
+  if (renamed !== undefined && known.includes(renamed)) {
+    showWarnings(env, [`\`${given}\` is now \`${renamed}\`; use the new id`]);
+  }
+  const ruleId = renamed !== undefined && known.includes(renamed) ? renamed : given;
+  const text = await explain(loaded.value, ruleId);
   if (text === undefined) {
     return fail(env, [unknownRuleMessage(given, known)]);
   }
@@ -1039,8 +1140,15 @@ async function runPlan(
   if (!loaded.ok) return fail(env, loaded.errors);
   const config = loaded.value;
   const enabled = enabledRules(config);
-  const checker = createChecker({ config, cwd, rules: { kind: "all" }, cache: false });
+  const results = sharedCache(command, cwd, config, env);
+  const checker = createChecker({
+    config,
+    cwd,
+    rules: { kind: "all" },
+    cache: results.cache ?? false,
+  });
   const result = checker.check();
+  results.save();
   const report = buildPlanReport(
     buildPlan(config, result, checker.silentReasons()),
     config.rollout,
@@ -1073,7 +1181,15 @@ async function runNext(
   }
   const enabled = readRollout(config);
   const everything: RuleSelection = { kind: "all" };
-  const raw = check({ config, cwd, rules: everything, uncapped: true });
+  const results = sharedCache(command, cwd, config, env);
+  const raw = check({
+    config,
+    cwd,
+    rules: everything,
+    uncapped: true,
+    ...cacheOption(results.cache),
+  });
+  results.save();
   const failures = raw.findings.filter((finding) => finding.kind === "failure");
   if (failures.length > 0) {
     return fail(
@@ -1140,13 +1256,15 @@ async function runDeps(
   const loaded = await loadForAnalysis(place, env);
   if (!loaded.ok) return fail(env, loaded.errors);
   // Every rule the presets turn on, whatever the rollout says: the facts are read by the rules.
+  const results = sharedCache(command, cwd, loaded.value, env);
   const checker = createChecker({
     config: loaded.value,
     cwd,
     rules: { kind: "all" },
-    cache: false,
+    cache: results.cache ?? false,
   });
   const result = checker.check();
+  results.save();
   const rows = buildDeps(checker.libraryFacts());
   env.stdout(command.format === "json" ? `${formatDepsJson(rows)}\n` : formatDepsPretty(rows));
   const failures = result.findings.filter((finding) => finding.kind === "failure");
@@ -1170,14 +1288,17 @@ async function runGuarantees(
   const loaded = await loadForAnalysis(place, env);
   if (!loaded.ok) return fail(env, loaded.errors);
   const config = loaded.value;
+  // The same results cache as `check`: the proof is read from the findings `check` reports.
+  const results = sharedCache(command, place.project, config, env);
   const checker = createChecker({
     config,
     cwd: place.project,
     rules: { kind: "all" },
-    cache: false,
+    cache: results.cache ?? false,
     uncapped: true,
   });
   const result = checker.check();
+  results.save();
   const proofs = proveGuarantees(
     checker.guarantees(),
     result.findings,

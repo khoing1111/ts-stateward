@@ -4,7 +4,7 @@ import { checkFixture, expectMessageStandard } from "@stateward/core/testing";
 import type { Finding, RuleConfig, TextEdit } from "@stateward/core";
 import { unions } from "../src/index.js";
 
-const RULES = ["default-hides-cases", "tag-does-not-discriminate", "if-chain-misses-case"] as const;
+const RULES = ["non-exhaustive-switch", "ambiguous-discriminant"] as const;
 
 /** The pack has no add-ons left; kept so fixtures read the same way. */
 export const ADDONS: readonly string[] = [];

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { chat, presence, type Message } from "./api.js";
+import { bus, chat, presence, type Message } from "./api.js";
 
 export function ChatRoom({ room }: { room: string }) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -53,4 +53,25 @@ export function LiveFeedFixed({ url }: { url: string }) {
     return () => socket.close();
   }, [url]);
   return <p>{last}</p>;
+}
+
+export function BusListener({ event }: { event: string }) {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    const onEvent = () => setCount((current) => current + 1);
+    bus.on(event, onEvent);
+    return () => bus.off(event, onEvent);
+  }, [event]);
+  return <p>{count}</p>;
+}
+
+export function BusListenerWrongOff({ event }: { event: string }) {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    const onEvent = () => setCount((current) => current + 1);
+    const other = () => undefined;
+    bus.on(event, onEvent);
+    return () => bus.off(event, other);
+  }, [event]);
+  return <p>{count}</p>;
 }

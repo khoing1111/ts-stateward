@@ -104,6 +104,25 @@ describe("toDiagnostic", () => {
     });
   });
 
+  it("puts each way to fix on its own line, its code example under it (M22)", () => {
+    const listed = toDiagnostic(
+      {
+        ...problem,
+        hint: 'one of\n- add `case "x":` with its own code\n- or allow it in `default`:\n    default: void (k satisfies "x");',
+      },
+      files,
+    );
+    expect(listed.message).toBe(
+      [
+        "bad",
+        "Fix: one of",
+        '  - add `case "x":` with its own code',
+        "  - or allow it in `default`:",
+        '        default: void (k satisfies "x");',
+      ].join("\n"),
+    );
+  });
+
   it("shows a baselined finding as a faint hint, whatever its severity, with a prefix", () => {
     const hint = toDiagnostic({ ...problem, severity: "error" }, files, true);
     expect(hint.severity).toBe(DiagnosticSeverity.Hint);

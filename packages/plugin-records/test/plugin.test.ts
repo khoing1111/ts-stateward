@@ -10,10 +10,12 @@ describe("records", () => {
     expect(plugin.name).toBe("records");
     expect(Object.keys(plugin.rules)).toEqual([
       "lookup-misses-key",
-      "table-type-too-loose",
+      "ambiguous-table",
       "duplicate-key",
+      "unchecked-key",
     ]);
     expect(Object.values(plugin.rules).map((rule) => rule.meta.group)).toEqual([
+      "keys",
       "keys",
       "keys",
       "keys",
@@ -43,55 +45,69 @@ describe("records", () => {
     },
   );
 
-  it("makes table-type-too-loose a core project rule, an error by default", () => {
-    const rule = ruleCode(records(), "table-type-too-loose");
+  it("makes unchecked-key an add-on project rule, a warning once its add-on is listed", () => {
+    const rule = ruleCode(records(), "unchecked-key");
+    expect(rule.kind).toBe("project");
+    expect(rule.meta.defaultSeverity).toBe("warning");
+    expect(rule.meta.tier).toBe("addon");
+    expect(rule.meta.addon).toBe("unchecked-key");
+    const off = checkFixture(fixture("unchecked-key/flagged"), [records()]);
+    expect(off.findings.filter((f) => f.ruleId === "records/unchecked-key")).toEqual([]);
+    const { findings } = checkFixture(fixture("unchecked-key/flagged"), [records()], {}, [
+      "records/unchecked-key",
+    ]);
+    const own = findings.filter((finding) => finding.ruleId === "records/unchecked-key");
+    expect(own.length).toBeGreaterThan(0);
+    expect(own.every((f) => f.kind === "problem" && f.severity === "warning")).toBe(true);
+  });
+
+  it("makes ambiguous-table a core project rule, an error by default", () => {
+    const rule = ruleCode(records(), "ambiguous-table");
     expect(rule.kind).toBe("project");
     expect(rule.meta.defaultSeverity).toBe("error");
     expect(rule.meta.tier).toBe("core");
     expect(rule.meta.description.length).toBeGreaterThan(0);
     const explain = rule.meta.explain;
-    expect(explain).toContain("# records/table-type-too-loose");
+    expect(explain).toContain("# records/ambiguous-table");
     expect(explain).toContain("example-bad");
     expect(explain).toContain("example-good");
-    expect(explain).toContain('rules: { "records/table-type-too-loose": "off" }');
+    expect(explain).toContain('rules: { "records/ambiguous-table": "off" }');
   });
 
   it("reports nothing once switched off", () => {
-    const { findings } = checkFixture(fixture("table-type-too-loose/flagged"), [records()], {
-      "records/table-type-too-loose": "off",
+    const { findings } = checkFixture(fixture("ambiguous-table/flagged"), [records()], {
+      "records/ambiguous-table": "off",
     });
-    expect(findings.filter((f) => f.ruleId === "records/table-type-too-loose")).toEqual([]);
+    expect(findings.filter((f) => f.ruleId === "records/ambiguous-table")).toEqual([]);
   });
 
   it("reports as an error under the default preset", () => {
-    const { findings } = checkFixture(fixture("table-type-too-loose/flagged"), [records()]);
-    const own = findings.filter((f) => f.ruleId === "records/table-type-too-loose");
+    const { findings } = checkFixture(fixture("ambiguous-table/flagged"), [records()]);
+    const own = findings.filter((f) => f.ruleId === "records/ambiguous-table");
     expect(own.length).toBeGreaterThan(0);
     expect(own.every((f) => f.kind === "problem" && f.severity === "error")).toBe(true);
   });
 });
 
 describe("records: one cause, one message", () => {
-  it("leaves out a lookup into a table that table-type-too-loose reports, and only then", () => {
-    const dir = fixture("table-type-too-loose/flagged");
+  it("leaves out a lookup into a table that ambiguous-table reports, and only then", () => {
+    const dir = fixture("ambiguous-table/flagged");
     const lookups = (rules: Record<string, RuleConfig>): number =>
       checkFixture(dir, [records()], rules).findings.filter(
         (finding) => finding.ruleId === "records/lookup-misses-key",
       ).length;
-    const alone = lookups({ "records/table-type-too-loose": "off" });
+    const alone = lookups({ "records/ambiguous-table": "off" });
     expect(alone).toBeGreaterThan(0);
     expect(lookups({})).toBeLessThan(alone);
-    expect(ruleCode(records(), "lookup-misses-key").meta.yieldsTo).toEqual([
-      "table-type-too-loose",
-    ]);
+    expect(ruleCode(records(), "lookup-misses-key").meta.yieldsTo).toEqual(["ambiguous-table"]);
   });
 });
 
-describe("records/table-type-too-loose option `ignore`", () => {
-  const dir = fixture("table-type-too-loose/ignored");
+describe("records/ambiguous-table option `ignore`", () => {
+  const dir = fixture("ambiguous-table/ignored");
   const named = (rules: Record<string, RuleConfig>): string[] =>
     checkFixture(dir, [records()], rules).findings.flatMap((finding) =>
-      finding.kind === "problem" && finding.ruleId === "records/table-type-too-loose"
+      finding.kind === "problem" && finding.ruleId === "records/ambiguous-table"
         ? [finding.message.split("`")[1] ?? ""]
         : [],
     );
@@ -102,24 +118,24 @@ describe("records/table-type-too-loose option `ignore`", () => {
 
   it("skips the names and globs listed", () => {
     expect(
-      named({ "records/table-type-too-loose": ["error", { ignore: ["*_MESSAGES", "legacy"] }] }),
+      named({ "records/ambiguous-table": ["error", { ignore: ["*_MESSAGES", "legacy"] }] }),
     ).toEqual(["titles"]);
   });
 
   it("treats the dot and other characters of a name literally", () => {
     expect(
-      named({ "records/table-type-too-loose": ["error", { ignore: ["l.gacy", "t?tles"] }] }),
+      named({ "records/ambiguous-table": ["error", { ignore: ["l.gacy", "t?tles"] }] }),
     ).toEqual(["ERROR_MESSAGES", "legacy", "titles"]);
   });
 
   it("rejects a bad value in the config, naming the rule and the option", () => {
     const result = parseConfig(
-      { plugins: [records()], rules: { "records/table-type-too-loose": ["error", { ignore: 3 }] } },
-      fixture("table-type-too-loose/ignored"),
+      { plugins: [records()], rules: { "records/ambiguous-table": ["error", { ignore: 3 }] } },
+      fixture("ambiguous-table/ignored"),
     );
     expect(result).toEqual({
       ok: false,
-      errors: ['rules["records/table-type-too-loose"].ignore must be a list of strings, got 3'],
+      errors: ['rules["records/ambiguous-table"].ignore must be a list of strings, got 3'],
     });
   });
 });

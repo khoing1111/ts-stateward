@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parseConfig } from "@stateward/core";
 import { checkFixture, ruleCode } from "@stateward/core/testing";
 import type { RuleSetting, RuleTier, Severity } from "@stateward/core";
 import { unions } from "../src/index.js";
@@ -9,20 +10,19 @@ type UnionsKey = keyof ReturnType<typeof unions>["rules"];
 
 /** Rule key, default severity, tier, and the severity under the default (recommended) preset. */
 const EXPECTED: readonly (readonly [UnionsKey, Severity, RuleTier, Severity])[] = [
-  ["default-hides-cases", "error", "core", "error"],
-  ["if-chain-misses-case", "error", "core", "error"],
-  ["tag-does-not-discriminate", "warning", "coverage", "info"],
+  ["non-exhaustive-switch", "error", "core", "error"],
+  ["ambiguous-discriminant", "warning", "coverage", "info"],
 ];
 
 /** The rules that need the whole project. */
-const PROJECT_RULES: readonly UnionsKey[] = ["tag-does-not-discriminate"];
+const PROJECT_RULES: readonly UnionsKey[] = ["ambiguous-discriminant"];
 
 describe("unions", () => {
-  it("is a plugin named unions with its three rules and no editor contributions", () => {
+  it("is a plugin named unions with its two rules, listing the open unions it proves", () => {
     const plugin = unions();
     expect(plugin.name).toBe("unions");
     expect(Object.keys(plugin.rules)).toEqual(EXPECTED.map(([key]) => key));
-    expect(plugin.editor).toBeUndefined();
+    expect(Object.keys(plugin.editor ?? {})).toEqual(["guarantees"]);
     expect(plugin.description).toBe(
       "Every case of a union is handled, and its tag tells the cases apart.",
     );
@@ -57,15 +57,8 @@ describe("unions", () => {
     const { findings } = checkFixture(fixture(`${key}/flagged`), [unions()], {}, ADDONS);
     const own = findings.filter((finding) => finding.ruleId === `unions/${key}`);
     expect(own.length).toBeGreaterThan(0);
-    // if-chain-misses-case's guesses (a chain that leaves a case out) are warnings at most.
-    const guess = (kind: string | undefined): boolean =>
-      key === "if-chain-misses-case" && (kind === "missing" || kind === "hidden");
     expect(
-      own.every(
-        (finding) =>
-          finding.kind === "problem" &&
-          finding.severity === (guess(finding.findingKind) ? "warning" : severity),
-      ),
+      own.every((finding) => finding.kind === "problem" && finding.severity === severity),
     ).toBe(true);
   });
 
@@ -74,5 +67,15 @@ describe("unions", () => {
       (key) => ruleCode(unions(), key).meta.heuristic === true,
     );
     expect(heuristic).toEqual([]);
+  });
+
+  it("does not have unions/if-chain-misses-case, removed in 1.2: a config naming it is told the rules there are", () => {
+    const parsed = parseConfig(
+      { plugins: [unions()], rules: { "unions/if-chain-misses-case": "error" } },
+      "/work",
+    );
+    expect(parsed.ok ? [] : parsed.errors).toEqual([
+      'rules: unknown rule id "unions/if-chain-misses-case"; rules of the loaded plugins: unions/ambiguous-discriminant, unions/non-exhaustive-switch',
+    ]);
   });
 });

@@ -15,6 +15,17 @@ export { createPropagationMemo, propagate } from "./graph.js";
 export type { Propagation, PropagationMemo } from "./graph.js";
 export { highestUncovered, shortestPath } from "./tree.js";
 export type { TreeEdge, Uncovered, WalkDown } from "./tree.js";
+// The release trait: where a call's result is stated to need releasing (type, marker, facts).
+export {
+  describeRelease,
+  describeTraitSource,
+  releaseCandidates,
+  releaseTraitOf,
+} from "./release.js";
+// Facts about packages: the config's and the shipped lines, and the promises they say never reject.
+export { neverRejectsFactOf } from "./package-facts.js";
+export type { FactContext, PackageFact } from "./package-facts.js";
+export type { ReleaseCandidate, ReleaseOptions, ReleaseTrait, ReleaseWay } from "./release.js";
 // What a pack learns about a library's code, cached outside the project.
 export { packageCodeId } from "./implementation.js";
 export { readPackageCache, writePackageCache } from "./package-cache.js";
@@ -28,6 +39,7 @@ export type {
   CheckResult,
   Config,
   ConfigOverride,
+  CoveredNoun,
   CoveredPlace,
   EditorAction,
   EditorContributions,
@@ -57,6 +69,8 @@ export type {
   NarrowedMembers,
   SignalParameter,
   StatedGuarantee,
+  TraitSource,
+  ReleaseFact,
   NoOptions,
   NumberOption,
   OptionSpec,

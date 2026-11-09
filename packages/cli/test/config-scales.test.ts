@@ -6,7 +6,7 @@ import { main } from "../src/main.js";
 import type { CliEnv, ExitCode } from "../src/main.js";
 
 const fixtures = fileURLToPath(new URL("fixtures", import.meta.url));
-const SWITCH_RULE = "unions/default-hides-cases";
+const SWITCH_RULE = "unions/non-exhaustive-switch";
 const HINT =
   "your `exclude` replaces the default list, so 1 file matching `*.test.*` is checked now; add `...defaults.exclude` to skip them";
 

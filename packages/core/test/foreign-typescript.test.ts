@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -12,13 +12,19 @@ import { computeImplementationId } from "../src/implementation.js";
  */
 
 let dir = "";
+let temporary = "";
 
 beforeEach(() => {
-  dir = mkdtempSync(path.join(tmpdir(), "stateward-foreign-ts-"));
+  // The app is reached through a link, as every folder under macOS's `/tmp` is: the warning still
+  // names the file from the config's folder.
+  temporary = mkdtempSync(path.join(tmpdir(), "stateward-foreign-ts-"));
+  mkdirSync(path.join(temporary, "app"));
+  symlinkSync(path.join(temporary, "app"), path.join(temporary, "link"), "dir");
+  dir = path.join(temporary, "link");
 });
 
 afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(temporary, { recursive: true, force: true });
 });
 
 function write(relative: string, text: string): string {

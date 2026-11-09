@@ -4,9 +4,6 @@ import { RULES } from "./rules.meta.js";
 /** Each rule's module, imported the first time the rule is on. */
 const load = {
   dependencyChangesEveryRender: moduleLoader(() => import("./dependency-changes-every-render.js")),
-  providerValueChangesEveryRender: moduleLoader(
-    () => import("./provider-value-changes-every-render.js"),
-  ),
   effectCopiesDerivedValue: moduleLoader(() => import("./effect-copies-derived-value.js")),
   stateCopiesProp: moduleLoader(() => import("./state-copies-prop.js")),
   effectLoops: moduleLoader(() => import("./effect-loops.js")),
@@ -27,11 +24,6 @@ export function react() {
         RULES["dependency-changes-every-render"],
         load.dependencyChangesEveryRender,
         (module) => module.dependencyChangesEveryRender,
-      ),
-      "provider-value-changes-every-render": lazyRule(
-        RULES["provider-value-changes-every-render"],
-        load.providerValueChangesEveryRender,
-        (module) => module.providerValueChangesEveryRender,
       ),
       "effect-copies-derived-value": lazyRule(
         RULES["effect-copies-derived-value"],

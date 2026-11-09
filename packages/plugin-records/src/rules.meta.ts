@@ -13,7 +13,7 @@ export const RULES = {
       tier: "core",
       group: "keys",
       fixNeedsStrictNulls: true,
-      yieldsTo: ["table-type-too-loose"],
+      yieldsTo: ["ambiguous-table"],
       options: {
         ignore: {
           kind: "strings",
@@ -23,11 +23,11 @@ export const RULES = {
       },
     },
   },
-  "table-type-too-loose": {
+  "ambiguous-table": {
     kind: "project",
     meta: {
       description:
-        "A table typed `Record<string, V>` lets a misspelt or missing key compile; typing its keys, or its reads as possibly missing, lets TypeScript check each read.",
+        "A table typed `Record<string, V>` does not say whether its keys are fixed or come from outside, so a misspelt or missing key compiles and the read gives `undefined`.",
       summary:
         'a lookup table typed `Record<string, V>` that says neither "all keys" nor "keys from outside"',
       defaultSeverity: "error",
@@ -59,6 +59,26 @@ export const RULES = {
           default: [],
           description:
             "Names of maps and sets (globs like *_ALIASES) whose repeats are deliberate, such as generated tables.",
+        },
+      },
+    },
+  },
+  "unchecked-key": {
+    kind: "project",
+    meta: {
+      description:
+        "A cast such as `status as keyof typeof LABELS` tells TypeScript that `status` is a key of `LABELS` without checking it, so `LABELS[status]` compiles and can give `undefined` or an inherited value.",
+      summary:
+        "a key cast (`as keyof typeof LABELS`) or `in` test used to read a table without an own-key check",
+      defaultSeverity: "warning",
+      tier: "addon",
+      addon: "unchecked-key",
+      group: "keys",
+      options: {
+        ignore: {
+          kind: "strings",
+          default: [],
+          description: "Table names (globs like *_LABELS) whose reads are not checked.",
         },
       },
     },

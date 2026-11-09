@@ -4,7 +4,7 @@ import { checkFixture, expectMessageStandard } from "@stateward/core/testing";
 import type { Finding, RuleConfig, TextEdit } from "@stateward/core";
 import { records } from "../src/index.js";
 
-const RULES = ["lookup-misses-key", "table-type-too-loose", "duplicate-key"] as const;
+const RULES = ["lookup-misses-key", "ambiguous-table", "duplicate-key"] as const;
 
 /** The lookup rules need no add-on; kept so fixtures read the same way. */
 export const ADDONS: readonly string[] = [];

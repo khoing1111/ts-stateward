@@ -107,3 +107,13 @@ export function checkingView(view: StatusView): StatusView {
     tooltip: `Stateward is checking the project in the background; the open file's findings are up to date. Last result: ${view.tooltip}`,
   };
 }
+
+/** The view when the TypeScript server is not running; `message` says why. */
+export function notRunningView(message: string): StatusView {
+  return { text: "$(warning) Stateward: not running", tooltip: message };
+}
+
+/** `view` with a line added to its tooltip, such as which server is in use; unchanged without one. */
+export function withNote(view: StatusView, note: string | undefined): StatusView {
+  return note === undefined ? view : { text: view.text, tooltip: `${view.tooltip}\n\n${note}` };
+}

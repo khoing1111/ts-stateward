@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { findConfigFile, loadConfig } from "../src/internal.js";
+import { findConfigFile, loadConfig, loadConfigFile } from "../src/internal.js";
 
 let dir = "";
 
@@ -40,6 +40,26 @@ describe("loadConfig", () => {
       value: { configFile: file, tsconfig: [path.join(dir, "tsconfig.json")], include: ["src/**"] },
     });
     expect(findConfigFile(dir)).toBe(file);
+  });
+
+  it("warns about a second config in the folder, naming the one used and the one ignored", async () => {
+    const config = "export default { plugins: [] };\n";
+    writeFileSync(path.join(dir, "stateward.config.ts"), config);
+    writeFileSync(path.join(dir, "stateward.config.mjs"), config);
+    expect(await loadConfig(dir)).toMatchObject({
+      ok: true,
+      value: {
+        configFile: path.join(dir, "stateward.config.ts"),
+        warnings: [
+          "`stateward.config.mjs` is ignored: `stateward.config.ts` in the same folder is the config used; delete the one not wanted",
+        ],
+      },
+    });
+    // Named with `--config`, the other one is a choice: no warning.
+    expect(await loadConfigFile(path.join(dir, "stateward.config.mjs"))).toMatchObject({
+      ok: true,
+      value: { warnings: [] },
+    });
   });
 
   it("loads a plain .mjs config", async () => {

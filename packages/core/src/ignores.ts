@@ -1,4 +1,5 @@
 import { summaryOf, summaryValue } from "./cache.js";
+import { renamedRule } from "./renamed.js";
 import type { RuleResult } from "./cache.js";
 import type { ProjectUnit } from "./backend/typescript6.js";
 import type { MarkedComment } from "./backend/comments.js";
@@ -415,6 +416,39 @@ function judge(
           [],
         ),
       );
+    } else if (!scope.known.has(rule.id) && renamedRule(rule.id) !== undefined) {
+      // A renamed rule: the comment still works under the old id.
+      const now = renamedRule(rule.id) ?? rule.id;
+      // One cause, one message: an ignore that is not needed is removed, not renamed; two fixes on
+      // one comment would also clash in `--fix`.
+      if (!used.has(now) && scope.ran.has(now)) {
+        unused.push(rule.id);
+        if (scope.options.reportUnused !== "off") continue;
+      }
+      found.push(
+        commentFinding(
+          file,
+          rule,
+          "warning",
+          fits(
+            `\`${rule.id}\` is now \`${now}\`; rename it in this ignore`,
+            MAX_HEADLINE,
+            "ignore comment names a rule by its old id",
+          ),
+          fits(
+            `change it to \`${now}\` (quick fix); the old id still works`,
+            MAX_HINT,
+            "change it to the new id (quick fix); the old id still works",
+          ),
+          [
+            {
+              title: `Change to \`${now}\``,
+              safe: true,
+              edits: [{ location: { file, start: rule.start, end: rule.end }, newText: now }],
+            },
+          ],
+        ),
+      );
     } else if (!scope.known.has(rule.id)) {
       const guess = closest(rule.id, scope.known);
       found.push(
@@ -545,7 +579,7 @@ function coveredBy(
   let reason: string | undefined;
   for (const directive of list) {
     if (directive.file && !directive.placed) continue;
-    if (!directive.rules.some((rule) => rule.id === ruleId)) continue;
+    if (!directive.rules.some((rule) => (renamedRule(rule.id) ?? rule.id) === ruleId)) continue;
     const covers = directive.file || (directive.coverStart <= start && start <= directive.coverEnd);
     if (!covers) continue;
     const ids = used.get(directive) ?? new Set<string>();

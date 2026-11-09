@@ -3,13 +3,13 @@
 import type { RuleDeclaration } from "@stateward/core";
 
 export const RULES = {
-  "default-hides-cases": {
+  "non-exhaustive-switch": {
     kind: "file",
     meta: {
       description:
-        "A case added to the union later goes to the `default` with no compile error; listing the cases makes each switch fail to compile until it handles the new case.",
+        "Every `switch` over a union handles every case: a `switch` without a `default` lists them all, and a `default` handles only the cases it allows, so a case added later is reported where it is not handled.",
       summary:
-        "a `default` that handles cases the switch does not list, or that has no `never` check",
+        "a `switch` over a union that misses a case, or whose `default` handles a case nobody allowed",
       defaultSeverity: "error",
       tier: "core",
       group: "cases",
@@ -21,7 +21,7 @@ export const RULES = {
           min: 0,
           integer: true,
           description:
-            'A `default` that handles more unlisted cases than this is reported as info: it often means "everything else".',
+            'A `default` that handles more cases than this, none allowed, or a `switch` without one that misses more, is reported as info: it often means "everything else".',
         },
         ignore: {
           kind: "strings",
@@ -33,10 +33,14 @@ export const RULES = {
           kind: "severities",
           default: {},
           kinds: {
-            complete: "every case is listed, and the default has no check",
-            hidden: "the default handles up to maxHidden unlisted cases",
+            hidden: "the default handles up to maxHidden cases it does not allow",
             "many-hidden":
-              "the default handles more than maxHidden unlisted cases (info unless set here)",
+              "the default handles more than maxHidden cases it does not allow (info unless set here)",
+            missing:
+              "a switch without a default does not list up to maxHidden cases (TypeScript reports the rest when a function must return a value)",
+            "many-missing":
+              "a switch without a default does not list more than maxHidden cases (info unless set here)",
+            open: "a switch over an open union (`OpenUnion<T>`) has no default",
           },
           description: "A severity per kind of finding.",
         },
@@ -49,64 +53,11 @@ export const RULES = {
       },
     },
   },
-  "if-chain-misses-case": {
-    kind: "file",
-    meta: {
-      description:
-        "A case added to the union later goes to the last `else` with no compile error; testing every case and checking the rest with `never` makes the chain fail to compile.",
-      summary: "an `if` / `else if` chain over a union that misses a case or has no `never` check",
-      defaultSeverity: "error",
-      tier: "core",
-      group: "cases",
-      fixNeedsStrictNulls: true,
-      options: {
-        report: {
-          kind: "string",
-          default: "likely-mistakes",
-          oneOf: ["likely-mistakes", "all"],
-          description:
-            '"likely-mistakes": only chains that look meant to handle every case. "all": every chain that leaves a case out.',
-        },
-        maxHidden: {
-          kind: "number",
-          default: 5,
-          min: 0,
-          integer: true,
-          description:
-            'An `else` that handles more untested cases than this is reported as info: it often means "everything else".',
-        },
-        ignore: {
-          kind: "strings",
-          default: [],
-          description:
-            "Union type names (globs like *Event) whose chains are not checked: matched against the type of the value tested, or of the object whose tag is tested.",
-        },
-        severities: {
-          kind: "severities",
-          default: {},
-          kinds: {
-            complete: "every case is handled, and the else has no check",
-            missing: "a chain without an else misses cases",
-            hidden: "the else handles up to maxHidden untested cases",
-            "many-hidden":
-              "the else handles more than maxHidden untested cases (info unless set here)",
-          },
-          description: "A severity per kind of finding.",
-        },
-        projectTypesOnly: {
-          kind: "boolean",
-          default: true,
-          description:
-            "Check only unions declared in the project, not in packages or TypeScript's lib: a member a library adds later is not a state the app designed.",
-        },
-      },
-    },
-  },
-  "tag-does-not-discriminate": {
+  "ambiguous-discriminant": {
     kind: "project",
     meta: {
       description:
-        "When `kind` is `string` in one member, testing `kind` does not narrow the union, so TypeScript cannot check which properties each branch reads.",
+        "A tag like `kind` tells the members of a union apart only when every member gives it a literal; a member where it is `string` makes every test on it ambiguous.",
       summary:
         "a tag like `kind` that is `string` in one member, so a test on it does not pick a member",
       defaultSeverity: "warning",

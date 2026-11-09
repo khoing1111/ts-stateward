@@ -2,6 +2,7 @@ import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { ruleIds } from "./severity.js";
 import type { Config } from "./types.js";
+import { renamedRule } from "./renamed.js";
 
 export const ROLLOUT_FILE = "stateward.rollout.json";
 const ROLLOUT_VERSION = 1;
@@ -71,7 +72,8 @@ function parseEnabled(text: string, file: string, known: ReadonlySet<string>): r
   const seen = new Set<string>();
   const kept: string[] = [];
   for (const listed of enabled) {
-    const id = listed;
+    // A renamed rule is read under its new id; the next write saves that one.
+    const id = known.has(listed) ? listed : (renamedRule(listed) ?? listed);
     if (!known.has(id)) {
       throw broken(
         file,

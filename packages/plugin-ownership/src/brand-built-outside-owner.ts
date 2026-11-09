@@ -1,6 +1,17 @@
 import path from "node:path";
 import ts from "@stateward/core/typescript";
-import { defineRule, matchesFile, option, type FileContext, type OptionsOf } from "@stateward/core";
+import {
+  defineRule,
+  matchesFile,
+  option,
+  type FileContext,
+  type Fix,
+  type Json,
+  type OptionsOf,
+  type SymbolRef,
+} from "@stateward/core";
+import { fitted } from "./text.js";
+import { markerForms, OPAQUE_TEXT, type Edit } from "./declare-owned.js";
 
 const EXPLAIN = `# ownership/brand-built-outside-owner
 
@@ -68,8 +79,20 @@ rules: { "ownership/brand-built-outside-owner": ["error", { owners: { Sku: ["src
 \`\`\`
 `;
 
-/** A brand that a type assertion builds, and the file that may build it. */
-type BuiltBrand = { name: string; file: string; declaration: ts.TypeAliasDeclaration };
+/**
+ * A brand that a type assertion builds, and the file that may build it. `stated` when its type
+ * states the `opaque` trait (`Opaque<string, "OrderId">`): then every value of it built outside
+ * its module is reported, not only a cast.
+ */
+type BuiltBrand = {
+  name: string;
+  file: string;
+  declaration: ts.TypeAliasDeclaration;
+  stated: boolean;
+};
+
+/** The trait `Opaque<T, Name>` states: `"__guarantee:opaque"?: Name`. */
+export const OPAQUE = "opaque";
 
 /**
  * How other files get a checked brand: an exported function of the declaring file that builds it
@@ -155,14 +178,16 @@ function isUniqueSymbolKey(name: ts.PropertyName, ctx: FileContext): boolean {
 }
 
 /**
- * `__brand`, `_tag`: a property name that says it is not data. `__guarantee` is not one: it states
- * a guarantee (`RequiredContext<T>`), which is optional and builds no checked value.
+ * `__brand`, `_tag`: a property name that says it is not data. A guarantee marker is not one
+ * (`"__guarantee:owned"`, or `__guarantee` in the 1.1.0 form): it states a guarantee
+ * (`RequiredContext<T>`), which is optional and builds no checked value.
  */
 function isTagName(name: ts.PropertyName): boolean {
   return (
     (ts.isIdentifier(name) || ts.isStringLiteral(name)) &&
     name.text.startsWith("_") &&
-    name.text !== "__guarantee"
+    name.text !== "__guarantee" &&
+    !name.text.startsWith("__guarantee:")
   );
 }
 
@@ -232,15 +257,34 @@ function declaredBrand(
   depth: number,
 ): BuiltBrand | undefined {
   const symbol = ctx.types.symbolAt(name);
-  const found = symbol === undefined ? undefined : ctx.types.declarationOf(symbol);
-  if (symbol === undefined || found === undefined || !ctx.types.isOwnFile(found.file)) {
-    return undefined;
-  }
+  return symbol === undefined ? undefined : brandOfSymbol(symbol, ctx, depth);
+}
+
+/**
+ * The alias states the `opaque` trait itself (`type OrderId = Opaque<string, "OrderId">`), rather
+ * than renaming another alias that does (`type Id = OrderId`) or being the generic marker.
+ */
+function statesOpaque(declaration: ts.TypeAliasDeclaration, ctx: FileContext): boolean {
+  if (declaration.typeParameters !== undefined) return false;
+  if (!ctx.types.guaranteesOf(declaration.type).includes(OPAQUE)) return false;
+  const type = stripTypeParentheses(declaration.type);
+  if (!ts.isTypeReferenceNode(type) || type.typeArguments !== undefined) return true;
+  const target = ownDeclaration(nameOfReference(type), ctx);
+  return target === undefined || !ts.isTypeAliasDeclaration(target);
+}
+
+function brandOfSymbol(symbol: SymbolRef, ctx: FileContext, depth: number): BuiltBrand | undefined {
+  const found = ctx.types.declarationOf(symbol);
+  if (found === undefined || !ctx.types.isOwnFile(found.file)) return undefined;
   const declaration = found.node;
   if (!ts.isTypeAliasDeclaration(declaration)) return undefined;
   const parameters = (declaration.typeParameters ?? []).map((parameter) => parameter.name.text);
   const type = stripTypeParentheses(declaration.type);
-  const own = { name: symbol.name, file: slashes(found.file), declaration };
+  const own = { name: symbol.name, file: slashes(found.file), declaration, stated: false };
+  // Asking an alias for its traits checks its whole type: only when some file states `Opaque`.
+  if (ctx.types.declaresTrait(OPAQUE) && statesOpaque(declaration, ctx)) {
+    return { ...own, stated: true };
+  }
   const tag = intersectionTag(type, parameters, ctx);
   if (tag === "literal") return own;
   if (tag === "parameter") return undefined;
@@ -384,7 +428,8 @@ function brandNamed(
     constructors.set(brand.declaration, constructorOf(brand, ctx));
   }
   const checkedBy = constructors.get(brand.declaration);
-  if (checkedBy === undefined && owners === undefined) return undefined;
+  // A brand stated `Opaque` is checked whether or not its module exports a constructor.
+  if (checkedBy === undefined && owners === undefined && !brand.stated) return undefined;
   return { ...brand, checkedBy };
 }
 
@@ -482,6 +527,242 @@ function predicateHeadline(name: string | undefined, brand: BuiltBrand): string 
     : `\`${name}\` says a value is \`${brand.name}\` without its check`;
 }
 
+/**
+ * The quick fix that states an unmarked brand opaque: `number & { readonly __brand: "Positive" }`
+ * becomes `Opaque<number, "Positive">`, with `Opaque` imported from the project's guarantees file
+ * (written there when it is missing). Only for a brand written as an intersection with its tag;
+ * offered when the result compiles.
+ */
+function opaqueFix(brand: BuiltBrand, ctx: FileContext): Fix[] {
+  if (brand.stated) return [];
+  const declaration = brand.declaration;
+  const type = stripTypeParentheses(declaration.type);
+  if (!ts.isIntersectionTypeNode(type)) return [];
+  const sourceFile = declaration.getSourceFile();
+  const parameters = (declaration.typeParameters ?? []).map((parameter) => parameter.name.text);
+  if (parameters.length > 0) return [];
+  const base = type.types.filter((member) => !isTagLiteral(member, ctx));
+  if (base.length === 0 || base.length === type.types.length) return [];
+  const written = `Opaque<${base.map((member) => member.getText(sourceFile)).join(" & ")}, ${JSON.stringify(brand.name)}>`;
+  const mark: Edit = {
+    file: sourceFile.fileName,
+    start: type.getStart(sourceFile),
+    end: type.end,
+    newText: written,
+  };
+  const forms = markerForms({
+    sourceFile,
+    marker: "Opaque",
+    text: OPAQUE_TEXT,
+    mark,
+    types: ctx.types,
+  });
+  const [first, ...rest] = forms.map((edits) => ({
+    title: `State \`${brand.name}\` opaque: \`${written}\``,
+    edits: edits.map((edit) => ({
+      location: { file: edit.file, start: edit.start, end: edit.end },
+      newText: edit.newText,
+    })),
+    changesType: true as const,
+  }));
+  return first === undefined ? [] : [{ ...first, alternatives: rest }];
+}
+
+/** A `{ readonly __brand: "X" }` or `{ readonly [brand]: "X" }` member: the tag of a brand. */
+function isTagLiteral(member: ts.TypeNode, ctx: FileContext): boolean {
+  const literal = stripTypeParentheses(member);
+  return (
+    ts.isTypeLiteralNode(literal) &&
+    literal.members.some(
+      (property) =>
+        ts.isPropertySignature(property) &&
+        (isUniqueSymbolKey(property.name, ctx) || isTagName(property.name)),
+    )
+  );
+}
+
+/** The note at the declaration of a brand stated `Opaque`: where the trait is stated. */
+function statedNote(brand: BuiltBrand): readonly { node: ts.Node; message: string }[] {
+  return brand.stated
+    ? [{ node: brand.declaration, message: `\`${brand.name}\` is stated \`Opaque\` here` }]
+    : [];
+}
+
+/** Wrappers that hand their operand's value through: the operand is the place a value is built. */
+function passesThrough(node: ts.Node): boolean {
+  return (
+    ts.isParenthesizedExpression(node) ||
+    ts.isConditionalExpression(node) ||
+    ts.isNonNullExpression(node) ||
+    ts.isAsExpression(node) ||
+    ts.isTypeAssertionExpression(node) ||
+    ts.isSatisfiesExpression(node) ||
+    (ts.isBinaryExpression(node) &&
+      [
+        ts.SyntaxKind.QuestionQuestionToken,
+        ts.SyntaxKind.BarBarToken,
+        ts.SyntaxKind.AmpersandAmpersandToken,
+        ts.SyntaxKind.CommaToken,
+      ].includes(node.operatorToken.kind))
+  );
+}
+
+/**
+ * Where a value goes into a place with a declared type: an initializer, a returned value, an
+ * argument, the right side of `=`, a property or element of a literal, a JSX attribute.
+ */
+function isFlowPosition(start: ts.Expression): boolean {
+  let node: ts.Node = start;
+  // `flag ? raw : undefined`, `(raw)`, `raw ?? fallback`: the value is the branch, not the wrapper.
+  while (passesThrough(node.parent)) {
+    const wrapper = node.parent;
+    if (
+      ts.isAsExpression(wrapper) ||
+      ts.isTypeAssertionExpression(wrapper) ||
+      ts.isSatisfiesExpression(wrapper) ||
+      (ts.isConditionalExpression(wrapper) && wrapper.condition === node) ||
+      (ts.isBinaryExpression(wrapper) &&
+        wrapper.operatorToken.kind === ts.SyntaxKind.CommaToken &&
+        wrapper.left === node)
+    ) {
+      return false;
+    }
+    node = wrapper;
+  }
+  const parent = node.parent;
+  if (
+    (ts.isVariableDeclaration(parent) ||
+      ts.isPropertyDeclaration(parent) ||
+      ts.isParameter(parent) ||
+      ts.isPropertyAssignment(parent)) &&
+    parent.initializer === node
+  ) {
+    return true;
+  }
+  if (ts.isReturnStatement(parent) || ts.isJsxExpression(parent)) return true;
+  if (ts.isArrowFunction(parent)) return parent.body === node;
+  if (ts.isCallExpression(parent) || ts.isNewExpression(parent)) {
+    return parent.arguments?.some((argument) => argument === node) === true;
+  }
+  if (ts.isArrayLiteralExpression(parent) || ts.isSpreadElement(parent)) return true;
+  return (
+    ts.isBinaryExpression(parent) &&
+    parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+    parent.right === node
+  );
+}
+
+/** Types whose values are no brand at all. */
+const NOTHING: ReadonlySet<string> = new Set(["undefined", "null", "never", "void"]);
+
+/** The value as the headline names it: `"abc"`, `input.id`, a long one by its type. */
+function valueText(node: ts.Expression, ctx: FileContext): string {
+  const type = ctx.types.typeTextOf(node);
+  if (type === "any") return "an `any` value";
+  const text = node.getText(ctx.sourceFile).replace(/\s+/g, " ");
+  return text.length <= 30 ? `\`${text}\`` : `a \`${type.length <= 30 ? type : "value"}\``;
+}
+
+/**
+ * A value that becomes a brand stated `Opaque` outside its module without a cast: `"abc"` given
+ * where `OrderId` is expected, an object literal, an `any`. The marker is optional, so TypeScript
+ * accepts a plain value there; the brand's module is the only place that may build one.
+ */
+function checkBuiltValue(
+  node: ts.Expression,
+  ctx: FileContext<Settings>,
+  constructors: Constructors,
+): void {
+  if (passesThrough(node) || !isFlowPosition(node)) return;
+  const expected = ctx.types.guaranteeValuesOf(node, OPAQUE, true);
+  if (expected === undefined || expected === "not-finite") return;
+  const own = ctx.types.guaranteeValuesOf(node, OPAQUE);
+  if (
+    own !== undefined &&
+    own !== "not-finite" &&
+    own.some((value) => expected.some((wanted) => wanted.label === value.label))
+  ) {
+    return;
+  }
+  // `undefined` given where `OrderId | undefined` is expected builds no `OrderId`.
+  if (NOTHING.has(ctx.types.typeTextOf(node))) return;
+  const alias = ctx.types.contextualAliasOf(node);
+  const found = alias === undefined ? undefined : brandOfSymbol(alias, ctx, 0);
+  if (found === undefined || !found.stated || found.file === slashes(ctx.file)) return;
+  const owners = ctx.options.owners[found.name];
+  if (owners !== undefined && matchesFile(ctx.file, owners)) return;
+  if (!constructors.has(found.declaration)) {
+    constructors.set(found.declaration, constructorOf(found, ctx));
+  }
+  const brand: CheckedBrand = { ...found, checkedBy: constructors.get(found.declaration) };
+  const file = slashes(ctx.file);
+  ctx.report({
+    node,
+    message: fitted(
+      (cut) =>
+        `\`${cut.name(brand.name)}\` is built from ${valueText(node, ctx)} outside \`${cut.path(relativeTo(file, brand.file))}\``,
+    ),
+    hint: hint(brand, file),
+    related: statedNote(brand),
+  });
+}
+
+/** A place in a file, kept in a summary (JSON). */
+type Place = { file: string; start: number; end: number };
+
+/**
+ * What the rule keeps of a file for `stateward guarantees`, hover and code lens: the brands it
+ * states `Opaque`, and the places in their own module that build one (`id` is the declaration's
+ * `<file>#<offset>`).
+ */
+export type OpaqueSummary = {
+  opaque: (Place & { name: string })[];
+  builds: (Place & { id: string })[];
+};
+
+function placeOf(node: ts.Node): Place {
+  const sourceFile = node.getSourceFile();
+  return { file: slashes(sourceFile.fileName), start: node.getStart(sourceFile), end: node.end };
+}
+
+/** `<file>#<offset>` of a brand's declaration: how a build names the brand it builds. */
+export function brandId(place: Place): string {
+  return `${place.file}#${String(place.start)}`;
+}
+
+function opaqueSummary(ctx: FileContext): OpaqueSummary | undefined {
+  if (!ctx.types.declaresTrait(OPAQUE)) return undefined;
+  const summary: OpaqueSummary = { opaque: [], builds: [] };
+  const file = slashes(ctx.file);
+  const visit = (node: ts.Node): void => {
+    if (ts.isTypeAliasDeclaration(node) && statesOpaque(node, ctx)) {
+      summary.opaque.push({ name: node.name.text, ...placeOf(node) });
+    } else if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) {
+      const brand = ts.isTypeReferenceNode(node.type)
+        ? declaredBrand(nameOfReference(node.type), ctx, 0)
+        : undefined;
+      if (brand?.stated === true && brand.file === file) {
+        summary.builds.push({ ...placeOf(node), id: brandId(placeOf(brand.declaration)) });
+      }
+    } else if (ts.isExpression(node) && !passesThrough(node) && isFlowPosition(node)) {
+      const alias = ctx.types.guaranteesOf(node).includes(OPAQUE)
+        ? undefined
+        : ctx.types.contextualAliasOf(node);
+      const brand = alias === undefined ? undefined : brandOfSymbol(alias, ctx, 0);
+      if (
+        brand?.stated === true &&
+        brand.file === file &&
+        !NOTHING.has(ctx.types.typeTextOf(node))
+      ) {
+        summary.builds.push({ ...placeOf(node), id: brandId(placeOf(brand.declaration)) });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(ctx.sourceFile);
+  return summary.opaque.length > 0 || summary.builds.length > 0 ? summary : undefined;
+}
+
 export const brandBuiltOutsideOwner = defineRule({
   kind: "file",
   meta: {
@@ -499,11 +780,24 @@ export const brandBuiltOutsideOwner = defineRule({
     const visit = (node: ts.Node): void => {
       if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) {
         // `map.get(key) as Positive` from `Positive | undefined` builds nothing: it only drops undefined.
-        const brand = ctx.types.isAssignableWithoutNullish(node.expression, node.type)
-          ? undefined
-          : offendingBrand(node.type, ctx, constructors);
+        const found = offendingBrand(node.type, ctx, constructors);
+        // A brand stated `Opaque` accepts any plain value, so only a value that already is one
+        // passes; an unmarked brand rejects plain values, so being assignable says the same.
+        const already =
+          found === undefined
+            ? true
+            : found.stated
+              ? ctx.types.guaranteesOf(node.expression).includes(OPAQUE)
+              : ctx.types.isAssignableWithoutNullish(node.expression, node.type);
+        const brand = already ? undefined : found;
         if (brand !== undefined) {
-          ctx.report({ node, message: headline(brand), hint: hint(brand, slashes(ctx.file)) });
+          ctx.report({
+            node,
+            message: headline(brand),
+            hint: hint(brand, slashes(ctx.file)),
+            related: statedNote(brand),
+            fixes: opaqueFix(brand, ctx),
+          });
         }
       } else if (
         ctx.options.predicates &&
@@ -517,11 +811,19 @@ export const brandBuiltOutsideOwner = defineRule({
             node,
             message: predicateHeadline(functionName(node, ctx), brand),
             hint: hint(brand, slashes(ctx.file)),
+            related: statedNote(brand),
           });
         }
+      } else if (opaque && ts.isExpression(node)) {
+        checkBuiltValue(node, ctx, constructors);
       }
       ts.forEachChild(node, visit);
     };
+    // Every value flowing into a typed place is asked about only when some file states `Opaque`.
+    const opaque = ctx.types.declaresTrait(OPAQUE);
     visit(ctx.sourceFile);
+  },
+  summarize(ctx): Json | undefined {
+    return opaqueSummary(ctx);
   },
 });

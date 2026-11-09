@@ -1,26 +1,23 @@
 export type Status = "idle" | "uploading" | "failed";
 
+// stateward-ignore unions/default-hides-cases: a failed upload shows the default label
 export function label(status: Status): string {
   switch (status) {
     case "idle":
       return "Idle";
     case "uploading":
       return "Uploading";
-    case "failed":
-      return "Failed";
     default:
       return "Other";
   }
 }
 
+// stateward-ignore unions/default-hides-cases: only an idle upload has its own icon
 export function icon(status: Status): string {
-  if (status === "idle") {
-    return "i";
-  } else if (status === "uploading") {
-    return "u";
-  } else if (status === "failed") {
-    return "f";
-  } else {
-    return "?";
+  switch (status) {
+    case "idle":
+      return "i";
+    default:
+      return "?";
   }
 }

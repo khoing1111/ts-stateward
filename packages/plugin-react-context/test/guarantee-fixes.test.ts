@@ -20,7 +20,7 @@ const SLOW = 300_000;
 const FIXTURE = fileURLToPath(new URL("./fixtures/declare-guarded", import.meta.url));
 /** Under the package, so the copy resolves React from the package's own node_modules. */
 const SCRATCH = fileURLToPath(new URL("../.scratch/guarantee-fixes", import.meta.url));
-const DECLARE = "Declare AuthCtx required: requiredContext<User>()";
+const DECLARE = "State AuthCtx required: requiredContext<User>()";
 
 let dir = "";
 
@@ -137,7 +137,7 @@ describe("react-context: stating a guarded context required", () => {
         "react-context/provider-missing src/useAuth.ts: `useAuth` checks `AuthCtx` at run time, but every reader is proven under its Provider",
       ]);
       const fix = onlyFix(findings[0]);
-      expect(fix.title).toBe("Drop the check in useAuth");
+      expect(fix.title).toBe("Remove the run-time check in useAuth");
       apply(fix.edits);
       expect(readFileSync(src("useAuth.ts"), "utf8")).not.toContain("throw");
       expect(typeErrors(dir)).toBe("");
@@ -162,6 +162,33 @@ describe("react-context: stating a guarded context required", () => {
       apply(edits);
       expect(typeErrors(dir)).toBe("");
       expect(check.refactors(src("contexts.ts"), 0, 0)).toEqual([]);
+    },
+  );
+
+  it(
+    "rewrites a guarantees file in the 1.1.0 form to one property per trait, which compiles",
+    { timeout: SLOW },
+    () => {
+      const legacy = GUARANTEES_TEXT.replace(
+        '{ readonly "__guarantee:required-context"?: true }',
+        '{ readonly __guarantee?: "required-context" }',
+      );
+      expect(legacy).not.toBe(GUARANTEES_TEXT);
+      writeFileSync(src("guarantees.ts"), legacy);
+      const check = checker();
+      check.check();
+      const at = legacy.indexOf("__guarantee?");
+      const actions = check.refactors(src("guarantees.ts"), at, at);
+      expect(actions.map((action) => action.title)).toEqual([
+        "Rewrite the guarantee marker to the 1.2 form (one property per trait)",
+      ]);
+      apply(actions.flatMap((action) => action.edits));
+      expect(readFileSync(src("guarantees.ts"), "utf8")).toBe(GUARANTEES_TEXT);
+      expect(typeErrors(dir)).toBe("");
+      // The new form is not offered again.
+      const after = checker();
+      after.check();
+      expect(after.refactors(src("guarantees.ts"), at, at)).toEqual([]);
     },
   );
 });

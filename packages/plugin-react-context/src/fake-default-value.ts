@@ -5,7 +5,7 @@ const REACT_PACKAGE = /[\\/]node_modules[\\/](?:@types[\\/])?react[\\/]/;
 
 const EXPLAIN = `# react-context/fake-default-value
 
-A default like \`{} as Theme\` is used when the Provider is missing, so the code reads an empty object typed as a full one and fails later.
+Reports a context created with a cast or an empty object as its default (\`{} as Theme\`, \`null!\`): a component rendered outside the Provider reads that value, and its type says it is complete.
 
 \`\`\`tsx example-bad
 import { createContext, useContext } from "react";
@@ -19,7 +19,7 @@ export function Title() {
 }
 \`\`\`
 
-Create the context with \`undefined\`, so its type says the value can be missing, and read it through a hook that throws when it is:
+Create the context with \`undefined\`, so its type says the value can be missing, and read it through a hook that throws when it is missing:
 
 \`\`\`tsx example-good
 import { createContext, useContext } from "react";
@@ -39,15 +39,15 @@ export function Title() {
 }
 \`\`\`
 
-There is no quick fix, since every read changes. Once the context says it can be missing, \`react-context/provider-missing\` checks that every component reading it has a Provider above it. Its quick fix then states the context required (\`requiredContext<Theme>()\`), and the readers need no check at all.
+No quick fix makes this change, because every reader changes with it. Once the context's type says the value can be missing, \`react-context/provider-missing\` checks that every component that reads it has a Provider above it. Its quick fix can then state the context required (\`requiredContext<Theme>()\`), and the readers need no check.
 
 ## Why it matters
 
-\`createContext({} as Theme)\`, or \`createContext<Theme>(null!)\`, hands every component a fake value when the Provider is missing. The type says a theme is there; at run time it is not. \`useContext(ThemeContext).colors.text\` then throws far from where the Provider is missing, or quietly reads an empty object.
+With \`createContext({} as Theme)\` or \`createContext<Theme>(null!)\`, a component rendered without the Provider reads \`{}\` or \`null\`, while its type says it reads a \`Theme\`. \`useContext(ThemeContext).colors.text\` then throws a \`TypeError\` in that component, far from the place where the Provider is missing, or the component renders with empty values.
 
 ## What it does not catch
 
-It looks at React's \`createContext\` (also \`React.createContext\`) called with a cast (\`{} as Theme\`, \`[] as Item[]\`, \`null!\`, \`<Theme>{}\`) or an empty object \`{}\`. It is silent on:
+It reads React's \`createContext\` (also \`React.createContext\`) called with a cast (\`{} as Theme\`, \`[] as Item[]\`, \`null!\`, \`<Theme>{}\`) or an empty object \`{}\`. It does not report:
 
 - a real default: \`createContext({ colors: defaultColors })\`, or \`createContext([])\`;
 - \`createContext<Callbacks>({})\` when no property of \`Callbacks\` is required: \`{}\` is then a complete value of the type;
@@ -58,7 +58,7 @@ It looks at React's \`createContext\` (also \`React.createContext\`) called with
 
 ## Turn it on or off
 
-It shows as info under \`recommended\` (a hint in the editor that does not fail the check) and as an error under \`strict\`. Turn it off if your defaults are real values (a default theme, a logger that does nothing):
+It is an info under \`recommended\` (shown in the editor, it does not fail \`check\`) and an error under \`strict\`. Turn it off when the defaults are real values (a default theme, a logger that does nothing):
 
 \`\`\`ts
 rules: { "react-context/fake-default-value": "off" } // or "warning"
@@ -211,9 +211,11 @@ function argumentText(argument: ts.Expression, sourceFile: ts.SourceFile): strin
 }
 
 /** Code is written in backticks, so the message standard reads only the prose around it. */
-function headline(name: string, argument: string): string {
+function headline(name: string, argument: string, kind: "cast" | "empty"): string {
   const context = name === UNNAMED ? "context" : `\`${name}\``;
-  return `${context} defaults to a fake value, \`${argument}\``;
+  return kind === "cast"
+    ? `${context} defaults to \`${argument}\`, a cast that is not a real value`
+    : `${context} defaults to \`${argument}\`, an empty object typed as the full value`;
 }
 
 /**
@@ -237,7 +239,7 @@ function hint(name: string, call: ts.CallExpression, sourceFile: ts.SourceFile):
     line.length <= MAX_EXAMPLE_LINE ? line : `${line.slice(0, MAX_EXAMPLE_LINE - 1)}\u2026`,
   );
   const head =
-    "create it with `undefined` and read it in a hook that throws, so a missing Provider fails at once:";
+    "create it with `undefined`, and read it in a hook that throws when the Provider is missing:";
   return [head, ...lines].join("\n");
 }
 
@@ -273,7 +275,7 @@ function statedHint(call: ts.CallExpression, sourceFile: ts.SourceFile): string 
   const type = call.typeArguments?.[0]?.getText(sourceFile).replace(/\s+/g, " ").trim() ?? "T";
   const line = `    requiredContext<${type}>()`;
   return [
-    "create it with the helper of the guarantees file, which holds the one cast:",
+    "create it with `requiredContext` from `guarantees.ts`, which holds the only cast:",
     line.length <= MAX_EXAMPLE_LINE ? line : `${line.slice(0, MAX_EXAMPLE_LINE - 1)}\u2026`,
   ].join("\n");
 }
@@ -282,8 +284,9 @@ export const fakeDefaultValue = defineRule({
   kind: "file",
   meta: {
     description:
-      "A default like `{} as Theme` is used when the Provider is missing, so the code reads an empty object typed as a full one and fails later.",
-    summary: "a context created with a fake default like `{} as Theme` or `null!`",
+      "Reports a context created with a cast or an empty object as its default (`{} as Theme`, `null!`): a component rendered outside the Provider reads that value, and its type says it is complete.",
+    summary:
+      "a context created with a cast or `{}` as its default, such as `{} as Theme` or `null!`",
     defaultSeverity: "error",
     tier: "coverage",
     group: "defaults",
@@ -318,7 +321,7 @@ export const fakeDefaultValue = defineRule({
         ) {
           ctx.report({
             node,
-            message: headline(name, argumentText(argument, ctx.sourceFile)),
+            message: headline(name, argumentText(argument, ctx.sourceFile), kind),
             hint: statedRequired(node, ctx)
               ? statedHint(node, ctx.sourceFile)
               : hint(name, node, ctx.sourceFile),

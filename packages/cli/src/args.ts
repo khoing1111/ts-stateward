@@ -47,16 +47,39 @@ export type Command =
       /** `--verify-fixes`: with `--format json`, try each fix and say whether it compiles. */
       verifyFixes: boolean;
     }
-  | { kind: "baseline"; prune: boolean; cwd: string | undefined; config: string | undefined }
-  | { kind: "plan"; format: OutputFormat; cwd: string | undefined; config: string | undefined }
+  | {
+      kind: "baseline";
+      prune: boolean;
+      cwd: string | undefined;
+      config: string | undefined;
+      /** `--no-cache`: neither read nor write the results of earlier runs. */
+      noCache: true | undefined;
+    }
+  | {
+      kind: "plan";
+      format: OutputFormat;
+      cwd: string | undefined;
+      config: string | undefined;
+      /** `--no-cache`: neither read nor write the results of earlier runs. */
+      noCache: true | undefined;
+    }
   | {
       kind: "next";
       anyway: boolean;
       baseline: boolean;
       cwd: string | undefined;
       config: string | undefined;
+      /** `--no-cache`: neither read nor write the results of earlier runs. */
+      noCache: true | undefined;
     }
-  | { kind: "coverage"; format: OutputFormat; cwd: string | undefined; config: string | undefined }
+  | {
+      kind: "coverage";
+      format: OutputFormat;
+      cwd: string | undefined;
+      config: string | undefined;
+      /** `--no-cache`: neither read nor write the results of earlier runs. */
+      noCache: true | undefined;
+    }
   | {
       kind: "init";
       cwd: string | undefined;
@@ -75,12 +98,21 @@ export type Command =
       force: boolean;
     }
   | { kind: "explain"; ruleId: string; cwd: string | undefined; config: string | undefined }
-  | { kind: "deps"; format: OutputFormat; cwd: string | undefined; config: string | undefined }
+  | {
+      kind: "deps";
+      format: OutputFormat;
+      cwd: string | undefined;
+      config: string | undefined;
+      /** `--no-cache`: neither read nor write the results of earlier runs. */
+      noCache: true | undefined;
+    }
   | {
       kind: "guarantees";
       format: OutputFormat;
       cwd: string | undefined;
       config: string | undefined;
+      /** `--no-cache`: neither read nor write the results of earlier runs. */
+      noCache: true | undefined;
     }
   /** `--cwd`: the project whose results cache is shown or cleaned (with the shared package cache). */
   | { kind: "cache"; action: "stats" | "clean"; cwd: string | undefined }
@@ -135,7 +167,7 @@ const VALUE_OPTIONS: readonly string[] = [
   "--max-memory",
 ];
 
-/** The commands that analyse the project, where `--max-memory` applies. */
+/** The commands that analyse the project, where `--max-memory` and `--no-cache` apply. */
 const ANALYSES: readonly string[] = [
   "check",
   "baseline",
@@ -446,8 +478,11 @@ export function parseArgs(argv: readonly string[]): ParseResult<Command> {
   if (name !== "check" && group !== undefined) {
     return { ok: false, errors: ["--group only applies to check"] };
   }
-  if (name !== "check" && noCache !== undefined) {
-    return { ok: false, errors: ["--no-cache only applies to check"] };
+  if (!ANALYSES.includes(name) && noCache !== undefined) {
+    return {
+      ok: false,
+      errors: [`--no-cache only applies to ${ANALYSES.join(", ")}`],
+    };
   }
   if (name !== "check" && noBaseline !== undefined) {
     return { ok: false, errors: ["--no-baseline only applies to check"] };
@@ -567,19 +602,19 @@ export function parseArgs(argv: readonly string[]): ParseResult<Command> {
         : { ok: false, errors: [`check takes no arguments, got "${positionals.join(" ")}"`] };
     case "baseline":
       return positionals.length === 0
-        ? { ok: true, value: { kind: "baseline", prune, cwd, config } }
+        ? { ok: true, value: { kind: "baseline", prune, cwd, config, noCache } }
         : { ok: false, errors: [`baseline takes no arguments, got "${positionals.join(" ")}"`] };
     case "coverage":
       return positionals.length === 0
-        ? { ok: true, value: { kind: "coverage", format: plainFormat, cwd, config } }
+        ? { ok: true, value: { kind: "coverage", format: plainFormat, cwd, config, noCache } }
         : { ok: false, errors: [`coverage takes no arguments, got "${positionals.join(" ")}"`] };
     case "plan":
       return positionals.length === 0
-        ? { ok: true, value: { kind: "plan", format: plainFormat, cwd, config } }
+        ? { ok: true, value: { kind: "plan", format: plainFormat, cwd, config, noCache } }
         : { ok: false, errors: [`plan takes no arguments, got "${positionals.join(" ")}"`] };
     case "next":
       return positionals.length === 0
-        ? { ok: true, value: { kind: "next", anyway, baseline, cwd, config } }
+        ? { ok: true, value: { kind: "next", anyway, baseline, cwd, config, noCache } }
         : { ok: false, errors: [`next takes no arguments, got "${positionals.join(" ")}"`] };
     case "init":
       return positionals.length === 0
@@ -610,11 +645,11 @@ export function parseArgs(argv: readonly string[]): ParseResult<Command> {
     }
     case "deps":
       return positionals.length === 0
-        ? { ok: true, value: { kind: "deps", format: plainFormat, cwd, config } }
+        ? { ok: true, value: { kind: "deps", format: plainFormat, cwd, config, noCache } }
         : { ok: false, errors: [`deps takes no arguments, got "${positionals.join(" ")}"`] };
     case "guarantees":
       return positionals.length === 0
-        ? { ok: true, value: { kind: "guarantees", format: plainFormat, cwd, config } }
+        ? { ok: true, value: { kind: "guarantees", format: plainFormat, cwd, config, noCache } }
         : {
             ok: false,
             errors: [`guarantees takes no arguments, got "${positionals.join(" ")}"`],

@@ -133,105 +133,6 @@ const dependencies: Shown[] = [
   },
 ];
 
-const providers: Shown[] = [
-  {
-    rule: "react/provider-value-changes-every-render",
-    severity: "warning",
-    file: "ThemeProvider.tsx",
-    at: "{ theme, setTheme }",
-    message: "`ThemeContext` value is a new object every render: all its readers re-render",
-    hint: "wrap it in `useMemo` and pass that:\n    const themeValue = useMemo(() => ({ theme, setTheme }), [theme, setTheme]);",
-    notes: [],
-    fixes: [],
-  },
-  {
-    rule: "react/provider-value-changes-every-render",
-    severity: "warning",
-    file: "ThemeProvider.tsx",
-    at: "user",
-    message: "`UserContext` value is a new object every render: all its readers re-render",
-    hint: "wrap `user` in `useMemo` where it is created (line 18)",
-    notes: ["ThemeProvider.tsx: { name }: `user` is created on every render"],
-    fixes: [],
-  },
-  {
-    rule: "react/provider-value-changes-every-render",
-    severity: "warning",
-    file: "ThemeProvider.tsx",
-    at: "[locale, setLocale]",
-    message: "`LocaleContext` value is a new array every render: all its readers re-render",
-    hint: "wrap it in `useMemo` and pass that:\n    const localeValue = useMemo(() => [locale, setLocale], [locale, setLocale]);",
-    notes: [],
-    fixes: [],
-  },
-  {
-    rule: "react/provider-value-changes-every-render",
-    severity: "warning",
-    file: "ThemeProvider.tsx",
-    at: "() => onSave()",
-    message: "`SaveContext` value is a new function every render: all its readers re-render",
-    hint: "wrap it in `useCallback` and pass that:\n    const saveValue = useCallback(() => onSave(), [onSave]);",
-    notes: [],
-    fixes: [],
-  },
-  {
-    rule: "react/provider-value-changes-every-render",
-    severity: "warning",
-    file: "ThemeProvider.tsx",
-    at: "{ id, index }",
-    message: "`ItemContext` value is a new object every render: all its readers re-render",
-    hint: "extract the item into a component (e.g. `<ItemProvider id={id} index={index}>`) and memoize the value there",
-    notes: [],
-    fixes: [],
-  },
-  {
-    rule: "react/provider-value-changes-every-render",
-    severity: "warning",
-    file: "ThemeProvider.tsx",
-    at: "item",
-    message: "`ItemContext` value is a new object every render: all its readers re-render",
-    hint: "extract the item into a component (e.g. `<ItemProvider id={id} index={index}>`) and memoize the value there",
-    notes: ["ThemeProvider.tsx: { id, index }: `item` is created on every render"],
-    fixes: [],
-  },
-  // an input is new every render, so the fix names it first and writes no `useMemo`.
-  {
-    rule: "react/provider-value-changes-every-render",
-    severity: "warning",
-    file: "ThemeProvider.tsx",
-    at: "{ theme, toggle }",
-    message: "`ToggleContext` value is a new object every render: all its readers re-render",
-    hint: "stabilise `toggle` first (`useCallback` where it is created, line 74): it is new every render, so a memo of the value would be new too",
-    notes: ["ThemeProvider.tsx: toggle: `toggle` is created on every render"],
-    fixes: [],
-  },
-  {
-    rule: "react/provider-value-changes-every-render",
-    severity: "warning",
-    file: "ThemeProvider.tsx",
-    at: "toolbar",
-    message: "`ToggleContext` value is a new object every render: all its readers re-render",
-    hint: "stabilise `toggle` and `reset` first (`useCallback`, lines 83, 84): they are new every render, so a memo of the value would be new too",
-    notes: [
-      "ThemeProvider.tsx: { theme, toggle: () => toggle(), reset }: `toolbar` is created on every render",
-      'ThemeProvider.tsx: () => setTheme(theme === "light" ? "dark" : "light"): `toggle` is created on every render',
-      'ThemeProvider.tsx: () => setTheme("light"): `reset` is created on every render',
-    ],
-    fixes: [],
-  },
-  // real-world corpus: a rest parameter is new every render, so the memo depends on what is read from it.
-  {
-    rule: "react/provider-value-changes-every-render",
-    severity: "warning",
-    file: "ThemeProvider.tsx",
-    at: "{ name: props.name }",
-    message: "`FieldContext` value is a new object every render: all its readers re-render",
-    hint: "wrap it in `useMemo` and pass that:\n    const fieldValue = useMemo(() => ({ name: props.name }), [props.name]);",
-    notes: [],
-    fixes: [],
-  },
-];
-
 const plainCalls: Shown[] = [
   {
     rule: "react/dependency-changes-every-render",
@@ -330,12 +231,6 @@ describe("react: a hook a package makes at module level", () => {
 describe("react: a value a plain (non-hook) function returns", () => {
   it("is memoized at the call, in the component or in the hook that calls it, never inside the function", () => {
     expect(all().filter((finding) => finding.file === PLAIN)).toEqual(plainCalls);
-  });
-});
-
-describe("react/provider-value-changes-every-render", () => {
-  it("reports an inline or local value given to a Provider, with the memoized code to write", () => {
-    expect(ofRule("react/provider-value-changes-every-render")).toEqual(providers);
   });
 });
 

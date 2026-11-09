@@ -1,7 +1,15 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Status } from "../src/protocol.js";
-import { WAITING_VIEW, checkingView, statusFor, statusView, statusViewFor } from "../src/status.js";
+import {
+  WAITING_VIEW,
+  checkingView,
+  notRunningView,
+  statusFor,
+  statusView,
+  statusViewFor,
+  withNote,
+} from "../src/status.js";
 
 const off = (errors: number, warnings = 0): Status => ({
   errors,
@@ -116,5 +124,23 @@ describe("checkingView", () => {
     expect(view.tooltip).toBe(
       "Stateward is checking the project in the background; the open file's findings are up to date. Last result: Stateward: 1 error, 0 warnings, 0 infos. Click for actions.",
     );
+  });
+});
+
+describe("notRunningView and withNote", () => {
+  it("shows that the server is not running, with the reason in the tooltip", () => {
+    expect(notRunningView("Stateward's TypeScript server is not running: it stopped.")).toEqual({
+      text: "$(warning) Stateward: not running",
+      tooltip: "Stateward's TypeScript server is not running: it stopped.",
+    });
+  });
+
+  it("adds a line to the tooltip, and leaves the view as it is without one", () => {
+    const note = "Stateward is using the server from the stateward.serverPath setting: /a/bin.js";
+    expect(withNote(WAITING_VIEW, note)).toEqual({
+      text: WAITING_VIEW.text,
+      tooltip: `${WAITING_VIEW.tooltip}\n\n${note}`,
+    });
+    expect(withNote(WAITING_VIEW, undefined)).toBe(WAITING_VIEW);
   });
 });

@@ -11,10 +11,9 @@ const fixtures = fileURLToPath(new URL("fixtures", import.meta.url));
 /* The adopt fixture has 4 findings, all in src/status.ts: see adopt.test.ts. */
 const ORDER = [
   "records/duplicate-key",
-  "unions/if-chain-misses-case",
   "records/lookup-misses-key",
-  "unions/default-hides-cases",
-  "unions/tag-does-not-discriminate",
+  "unions/non-exhaustive-switch",
+  "unions/ambiguous-discriminant",
 ] as const;
 
 let work = "";
@@ -66,19 +65,19 @@ describe("stateward check and ignore comments", { timeout: 30_000 }, () => {
     const checked = await run(["check"]);
     expect(checked.code).toBe(1);
     expect(checked.stdout).not.toContain("records/lookup-misses-key");
-    expect(checked.stdout).toContain("2 errors, 1 warning in 1 file");
+    expect(checked.stdout).toContain("2 errors in 1 file");
     expect(checked.stdout).toContain(", 1 ignored in the code.");
   });
 
   it("warns about a comment with no reason, and about one that matches nothing", async () => {
     ignoreLookup("");
-    edit((text) => `// stateward-ignore unions/tag-does-not-discriminate: old\n${text}`);
+    edit((text) => `// stateward-ignore unions/ambiguous-discriminant: old\n${text}`);
     const checked = await run(["check"]);
     expect(checked.stdout).toContain(
       "warning[stateward/ignore]: ignore comment does not say why the case is fine",
     );
     expect(checked.stdout).toContain(
-      "warning[stateward/ignore]: ignore comment is not needed: `unions/tag-does-not-discriminate` finds nothing in the code it covers",
+      "warning[stateward/ignore]: ignore comment is not needed: `unions/ambiguous-discriminant` finds nothing in the code it covers",
     );
     expect(checked.stdout).toContain("1 ignored in the code");
   });
@@ -95,7 +94,7 @@ describe("stateward check and ignore comments", { timeout: 30_000 }, () => {
     ignoreLookup(": why");
     const all = await run(["check", "--no-ignores"]);
     expect(all.stdout).toContain("error[records/lookup-misses-key]");
-    expect(all.stdout).toContain("3 errors, 1 warning in 1 file");
+    expect(all.stdout).toContain("3 errors in 1 file");
     expect(all.stdout).not.toContain("ignored in the code");
   });
 
@@ -117,7 +116,7 @@ describe("stateward check and ignore comments", { timeout: 30_000 }, () => {
         ignored: { reason: "the server sends only these keys" },
       },
     ]);
-    expect(findings).toHaveLength(4);
+    expect(findings).toHaveLength(3);
   });
 
   it("is the same on a second run that reads the cache, and after editing only the comment", async () => {
@@ -154,7 +153,7 @@ describe("stateward check and ignore comments", { timeout: 30_000 }, () => {
     const checked = await run(["check"]);
     expect(checked.code).toBe(0);
     expect(checked.stdout).toContain("No problems in 1 file (");
-    expect(checked.stdout).toContain("3 baselined");
+    expect(checked.stdout).toContain("2 baselined");
     expect(checked.stdout).toContain(", 1 ignored in the code.");
   });
 

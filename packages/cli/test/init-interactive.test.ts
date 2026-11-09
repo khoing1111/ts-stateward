@@ -351,9 +351,9 @@ describe("a recorded session", () => {
         1. [x] unions         Every case of a union is handled, and its tag tells the cases apart.
         2. [x] records        Lookup tables and records keyed by a union have every key, once, under a type that names them.
         3. [x] async          An async failure is never lost: handlers catch their own, and state set before an await is set again when it fails.
-        4. [x] react-context  A component that needs a context is always rendered under its Provider.
+        4. [x] react-context  Every context reader is under its Provider, defaults are real values, and Provider values keep their identity.
         5. [x] errors         Errors are handled where they can happen: none ignored, none replaced in \`finally\`, no \`Result\` dropped.
-        6. [ ] ownership      One owner per piece of shared state and per brand: others call the owner's functions.
+        6. [ ] ownership      One owner per piece of shared state, per brand and per resource: others call the owner's functions, and what is started is released.
         7. [ ] reducers       A reducer reaches every state it declares and can leave every state it enters.
         8. [x] react          Values that effects and memoized components depend on keep their identity; effects do not copy state, loop, leak or race; state updates see the latest state; flags do not stand in for one state.
       Type numbers to toggle (for example 2 4), or press Enter to accept: 5

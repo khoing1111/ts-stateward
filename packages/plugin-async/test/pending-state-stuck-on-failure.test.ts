@@ -52,7 +52,13 @@ describe("async/pending-state-stuck-on-failure", () => {
     expect(shown(findings)).toEqual([
       leak("setLoading(true)", "search", "loading", "setLoading(false);", FIX),
       leak("this.isSaving = true", "submit", "isSaving", "this.isSaving = false;", FIX),
-      leak("state.pending = true", "api.fetchAll", "pending", "state.pending = false;", FIX),
+      {
+        ...leak("state.pending = true", "api.fetchAll", "pending", "state.pending = false;", FIX),
+        // The function also writes the data: the note points at one status union.
+        notes: [
+          "`pending` and `items` are written together here: one status union holds them without contradictions",
+        ],
+      },
       leak("setSubmitting(true)", "submit", "submitting", "setSubmitting(false);", FIX),
       leak("setBusy(true)", "search", "busy", "setBusy(false);"),
       leak("setLoading(true)", "search", "loading", "setLoading(false);"),
@@ -139,7 +145,8 @@ describe("async/pending-state-stuck-on-failure", () => {
     expect(explain).toContain("# async/pending-state-stuck-on-failure");
     expect(explain).toContain("example-bad");
     expect(explain).toContain("example-good");
-    expect(explain).toContain("Keep a request in one union");
+    expect(explain).toContain("### One state for an async result");
+    expect(explain).toContain("One union holds them without contradictions");
     expect(explain).toContain('rules: { "async/pending-state-stuck-on-failure": "off" }');
   });
 

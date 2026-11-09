@@ -4,6 +4,7 @@ import type {
   Json,
   NoOptions,
   OptionSpecs,
+  PackageFactsConfig,
   PluginOf,
   ProjectRule,
   PluginRule,
@@ -36,6 +37,7 @@ export function definePlugin<
   description: string;
   rules: R;
   editor?: EditorContributions;
+  facts?: PackageFactsConfig;
 }): PluginOf<N, R> {
   return plugin;
 }

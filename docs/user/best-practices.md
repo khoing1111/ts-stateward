@@ -18,9 +18,9 @@ on one at a time instead, and check new code from the first day.
 
    ```text
    $ npx stateward next
-   also on, nothing to fix: unions/if-chain-misses-case, records/duplicate-key, records/lookup-misses-key, ...
-   on: unions/default-hides-cases (1 finding, 1 fixable)
-   A case added to the union later goes to the `default` with no compile error; listing the cases makes each switch fail to compile until it handles the new case.
+   also on, nothing to fix: records/duplicate-key, records/lookup-misses-key, ...
+   on: unions/non-exhaustive-switch (1 finding, 1 fixable)
+   Every `switch` over a union handles every case: a `default` handles only the cases it allows, so a case added later is reported where it is not handled.
    run stateward check to see them
    ```
 
@@ -48,11 +48,12 @@ baseline, so the baseline only shrinks. More in [work-through-findings.md](work-
 stateward takes what a type states as true. The patterns below state intent in types, so a later
 change that breaks it fails to compile where the change is made.
 
-### `satisfies never` in a `default`
+### Every case in a `switch`, and the cases a `default` allows
 
 A `default` that returns "Unknown" also takes any status added later. When `"cancelled"` is added to
-the union, the label shows "Unknown" and nothing fails to compile. List the cases, and put
-`value satisfies never;` in the `default`. A new case is then a type error until it is handled.
+the union, the label shows "Unknown" and nothing fails to compile. List the cases. With
+`unions/non-exhaustive-switch` on, a new case is then reported at every `switch` that does not
+handle it. Without stateward, `status satisfies never;` in the `default` makes it a type error.
 
 ```ts
 export type OrderStatus = "pending" | "paid" | "shipped" | "refunded";
@@ -68,15 +69,15 @@ export function statusLabel(status: OrderStatus): string {
     case "refunded":
       return "Refunded";
     default:
-      status satisfies never;
       return "Unknown";
   }
 }
 ```
 
 The `default` stays for values from outside (a server that sends a new status before the app knows
-it). When some cases share the `default`, name them:
-`default: status satisfies "shipped" | "refunded";`.
+it); state such a union `OpenUnion<…>` and every `switch` on it must keep one
+([guarantees.md](guarantees.md#openunion-a-union-that-can-gain-members)). When some cases share the
+`default`, allow them there: `default: void (status satisfies "shipped" | "refunded");`.
 
 ### Tables typed `Record<Union, V>`
 
@@ -123,6 +124,25 @@ A loader without a `signal` states nothing, so stateward does not check its call
 `react/effect-race` reports the clearest cases). Adding the parameter is usually one line, and it
 also cancels the network request.
 
+### One state for an async result
+
+`loading`, `error` and `data` side by side can contradict each other: loading and failed at once,
+or the data of the previous request next to a new error. One union holds them without
+contradictions, and every screen decides what each state shows:
+
+```ts
+type Save =
+  | { status: "idle" }
+  | { status: "saving" }
+  | { status: "failed"; error: Error }
+  | { status: "saved"; savedAt: Date };
+```
+
+A data library's own status (React Query, SWR, RTK Query) is the same thing. When a function that
+`async/pending-state-stuck-on-failure` reports also writes other state, the finding's note names
+them ("`saving`, `saveError` and `savedAt` are written together here"). No rule or quick fix
+rewrites the state: which states exist is a design choice.
+
 ## State a guarantee where it holds
 
 A guarantee states a property in a type, and stateward proves it everywhere the value is used. What
@@ -133,8 +153,12 @@ it cannot prove is an error, so state a guarantee only where the property holds.
 - **`RequiredContext<T>` for a context every screen needs**: the theme, the signed-in user, the API
   client. Once every reader is proven, the hook's run-time check can be removed. Do not mark a
   context that has a real default that readers may use without a Provider.
-- **`Owned<T>` for module state with one owner**: a cache, a settings object, a list of jobs that
-  one module keeps and others change only through its functions.
+- **A read-only view for module state with one owner**, before any marker: keep the mutable value
+  private, and export a view typed `readonly` at every level with the functions that change it.
+  TypeScript then rejects a change from any other file.
+- **`Owned<T>` for module state with one owner** that is not restructured that way, or whose
+  changes `readonly` does not see (a cast, a `Map`): a cache, a settings object, a list of jobs
+  that one module keeps and others change only through its functions.
 
   ```ts
   export const cart: Owned<{ items: string[] }> = { items: [] };
@@ -161,12 +185,21 @@ it cannot prove is an error, so state a guarantee only where the property holds.
   For such a store, export functions from its module (`addToCart`), and mark the state they change;
   or leave the store unmarked, since the class's methods already control what changes it.
 
+- **`Opaque<T, Name>` for a brand built by one check**: `OrderId`, `Positive`. Every value of it
+  built outside its module, a cast or a plain value, is an error.
+- **`Release<T>` on a function whose result must be released**: a subscription, a listener, a
+  connection. A `Disposable` type states it with nothing to write, and the ownership pack knows
+  Firebase, RxJS, Redux and zustand; a `facts` line states it for another package.
+- **`Pending<T, Running>` for a state that marks work in progress**: it then settles on every way
+  out of a function that sets it, and the function does not start while it runs.
+
 `npx stateward guarantees` lists each one, whether it is proven, and the places it covers. It exits
 with 1 when one is not proven, so it can run in CI next to `check`.
 
 ![Output of npx stateward guarantees: cart, not proven, with the error in checkout.ts; ThemeContext, proven for 2 readers](images/guarantees-output.png)
 
-[guarantees.md](guarantees.md) explains each guarantee step by step.
+[guarantees.md](guarantees.md) is the catalog: for each trait, when to use it, when not, an
+example and its finding.
 
 ## Ignore with a reason
 

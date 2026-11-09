@@ -23,8 +23,7 @@ on adds no findings.
 order  rule                                  findings  fixable  protects
 
 unions/cases
-1      unions/if-chain-misses-case                   0        0  A case added to the union later goes to the last `else` with no compile error; testing every case and checking the rest with `never` makes the chain fail to compile. (nothing to fix, turns on clean)
-18     unions/default-hides-cases            1        0  A case added to the union later goes to the `default` with no compile error; listing the cases makes each switch fail to compile until it handles the new case.
+17     unions/non-exhaustive-switch          1        0  Every `switch` over a union handles every case: a `default` handles only the cases it allows, so a case added later is reported where it is not handled.
 ...
 ```
 
@@ -43,9 +42,9 @@ commit it.
 
 ```text
 $ npx stateward next
-also on, nothing to fix: unions/if-chain-misses-case, records/lookup-misses-key, ...
-on: unions/default-hides-cases (1 finding, 0 fixable)
-A case added to the union later goes to the `default` with no compile error; listing the cases makes each switch fail to compile until it handles the new case.
+also on, nothing to fix: records/lookup-misses-key, ...
+on: unions/non-exhaustive-switch (1 finding, 0 fixable)
+Every `switch` over a union handles every case: a `default` handles only the cases it allows, so a case added later is reported where it is not handled.
 ```
 
 Run `npx stateward check`, fix the findings, then run `next` again. `next` waits while the last
@@ -83,8 +82,7 @@ all again. `next --baseline` turns on the next rule and accepts its findings in 
 
 ## Fix in bulk
 
-Some fixes cannot change how the code runs, such as adding `status satisfies never;` to a
-`default`. Commit first, then preview and apply them:
+Some fixes cannot change how the code runs, such as renaming an old rule id in an ignore comment. Commit first, then preview and apply them:
 
 ```bash
 npx stateward check --fix --dry-run

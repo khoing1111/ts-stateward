@@ -87,6 +87,22 @@ describe("formatPretty", () => {
     );
   });
 
+  it("indents each way to fix under the fix, and a way's code example under it (M22)", () => {
+    const withList: Finding = {
+      ...problem,
+      related: [],
+      hint: 'one of\n- add `case "x":` with its own code\n- or allow it in `default`:\n    default: void (k satisfies "x");',
+    };
+    expect(formatPretty(result([withList]), options)).toContain(
+      [
+        "  = fix: one of",
+        '      - add `case "x":` with its own code',
+        "      - or allow it in `default`:",
+        '            default: void (k satisfies "x");',
+      ].join("\n"),
+    );
+  });
+
   it("counts places not checked in one line naming the rules, and lists them only with --verbose", () => {
     const other: Finding = { ...unknown, ruleId: "demo/other" };
     expect(formatPretty(result([unknown, other, unknown]), options)).toBe(

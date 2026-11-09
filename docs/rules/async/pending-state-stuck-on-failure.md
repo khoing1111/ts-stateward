@@ -31,6 +31,7 @@ warning[async/pending-state-stuck-on-failure]: `loading` stays `true` when `fetc
 8 |     setLoading(true);
   |     ^^^^^^^^^^^^^^^^
   = fix: set `loading` again in a `finally`, so a failure resets it too: `try { await fetch(); } finally { setLoading(false); }`
+  = note: `loading` and `results` are written together here: one status union holds them without contradictions
   = docs: stateward explain async/pending-state-stuck-on-failure
 ```
 
@@ -79,15 +80,49 @@ It guesses what the code means, so it is a warning in every preset, and it is wr
 
 ## Getting the best from it
 
-Keep a request in one union instead of separate flags: `{ kind: "idle" } | { kind: "loading" } | { kind: "failed"; error: Error } | { kind: "ready"; data: T }`, and set its failed case in a `catch`. Then "loading but also failed" cannot happen, and every screen decides what a failure shows.
+### State it: `Pending`
 
-Say what cannot fail, and the rule believes it: `facts: { "my-client": { save: { rejects: [] } } }` for a package function, a JSDoc `/** @neverRejects */` on your own function (not looked into any deeper), or a setter whose type has a member nothing can fill (`| { status: "failed"; error: never }`). Say what a package function does reject with `facts: { "my-client": { save: { rejects: ["Error"] } } }`.
+The checks above read the shape of the code. A state stated `Pending` says which of its values mean "in progress", and the rule then proves two things for every function that sets it to one, with no guessing:
+
+```ts
+// src/guarantees.ts
+export type Pending<T, Running extends T = Extract<T, true>> = T & {
+  readonly "__guarantee:pending"?: Running;
+};
+
+const [saving, setSaving] = useState<Pending<boolean>>(false); // true means running
+status: Pending<"idle" | "saving" | "saved" | "failed", "saving"> = "idle"; // "saving" means running
+```
+
+- **It settles:** every way out of the function (success, a failed `await`, an early `return`, a `throw`) leaves a value that is not running. Every `await` counts as one that can fail, except of a promise a `facts` line states `neverRejects: true`. The fix names the value the declaration starts with, in `finally`; for a union, each other value that is not running (`"failed"`) in a `catch`.
+- **It does not start twice:** an async function that sets it returns early while it runs, `if (savingRef.current) return;` (a ref, because a state value read in a handler can be one render old, so two quick clicks both see `false`), or the control is disabled with it (`disabled={saving}` in the same file).
+
+For `boolean` the running value is `true`; for any other type, name it: a `Pending` with no running value is reported. These findings are errors, since the guarantee is stated and proven strictly (the kind `stated` under `severities` changes that); unmarked state keeps the checks above, as warnings.
+
+### One state for an async result
+
+`loading`, `error` and `data` side by side can contradict each other: loading and failed at once, data from the previous request next to a new error. One union holds them without contradictions:
+
+```ts
+type Save =
+  | { status: "idle" }
+  | { status: "saving" }
+  | { status: "failed"; error: Error }
+  | { status: "saved"; savedAt: Date };
+```
+
+A data library's own status (React Query, SWR, RTK Query) is the same thing. When the function a finding is about also writes other state, its note names them: "`saving`, `saveError` and `savedAt` are written together here". Nothing rewrites the state for you: which states exist is a design choice.
+
+### Say what cannot fail
+
+Say what cannot fail, and the rule believes it: `facts: { "my-client": { save: { neverRejects: true } } }` for a package function or a promise property (shipped for RTK Query's `cacheEntryRemoved`), a JSDoc `/** @neverRejects */` on your own function (not looked into any deeper), or a setter whose type has a member nothing can fill (`| { status: "failed"; error: never }`). Say what a package function does reject with `facts: { "my-client": { save: { rejects: ["Error"] } } }`.
 
 ## Turn it on or off
 
 ```ts
 rules: { "async/pending-state-stuck-on-failure": "off" } // or "error"
 rules: { "async/pending-state-stuck-on-failure": ["warning", { ignore: ["*Draft"] }] } // states set again elsewhere
+rules: { "async/pending-state-stuck-on-failure": ["warning", { severities: { stated: "warning" } }] } // stated ones as warnings too
 ```
 
 Options, set as `rules: { "async/pending-state-stuck-on-failure": ["warning", { … }] }`:
@@ -95,5 +130,6 @@ Options, set as `rules: { "async/pending-state-stuck-on-failure": ["warning", { 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `ignore` | list of strings | `[]` | State names (globs like *Busy) that are set again somewhere this rule cannot see. |
+| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of finding. Kinds: `stated`: a state stated `Pending` that does not settle, starts twice, or names no running value: an error unless set here; `shape`: unmarked state read from the shape of the code: the rule's severity (a warning). |
 
 Core rule: warning under `recommended` and `strict`. It judges from patterns in the code, not only from types, so it can be wrong: it is never an error unless you make it one. Group: `async/failures`.

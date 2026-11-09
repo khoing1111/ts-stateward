@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { limitFindings } from "./engine.js";
+import { renamedRule } from "./renamed.js";
 import type { CheckResult, Config, Finding } from "./types.js";
 
 export const BASELINE_FILE = "stateward.baseline.json";
@@ -363,6 +364,15 @@ function parseEntry(value: unknown, file: string, version: number): RawEntry {
     entryFile,
     typeof fingerprint === "string" ? fingerprint : "",
   ]);
+  // An entry of a renamed rule: its fingerprint hashed the old id, so it is matched by rule and
+  // file, under the new id, until the next `baseline` writes it again.
+  const renamed = renamedRule(ruleId);
+  if (renamed !== undefined) {
+    return {
+      entry: { kind: "legacy", ruleId: renamed, file: entryFile, message, count },
+      key: raw,
+    };
+  }
   if (!old && typeof fingerprint === "string") {
     return {
       entry: { kind: "fingerprint", ruleId, file: entryFile, fingerprint, message, count },

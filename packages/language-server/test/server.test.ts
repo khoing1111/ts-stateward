@@ -117,8 +117,11 @@ const FIXING_CONFIG = [
 /** A plugin whose one rule reports every top-level statement, each with a fix that deletes it. */
 const FIXING_ALL_CONFIG = FIXING_CONFIG.replace(
   'const node = ctx.sourceFile.statements[0];\n    if (node === undefined) return;\n    const location = { file: ctx.file, start: node.getStart(), end: node.getEnd() };\n    const fix = { title: "Fix it", edits: [{ location, newText: "" }] };\n    ctx.report({ message: "m", hint: "h", node, fixes: [fix] });',
-  'for (const node of ctx.sourceFile.statements) {\n    const location = { file: ctx.file, start: node.getStart(), end: node.getEnd() };\n    const fix = { title: "Fix it", edits: [{ location, newText: "" }] };\n    ctx.report({ message: "m", hint: "h", node, fixes: [fix] });\n  }',
+  'for (const node of ctx.sourceFile.statements) {\n    const location = { file: ctx.file, start: node.getStart(), end: node.getEnd() };\n    const fix = { title: "Fix it", edits: [{ location, newText: "" }], safe: true };\n    ctx.report({ message: "m", hint: "h", node, fixes: [fix] });\n  }',
 );
+
+/** The same rule with fixes that need review: not `safe`. */
+const FIXING_ALL_UNSAFE_CONFIG = FIXING_ALL_CONFIG.replace(", safe: true }", " }");
 
 function configText(rules: string): string {
   return [
@@ -303,6 +306,16 @@ describe("language server", { timeout: 20_000 }, () => {
     });
     expect(hover).toBeNull();
     expect(tokens).toMatchObject({ data: [] });
+  });
+
+  it("answers a request it does not implement with MethodNotFound, the code the extension reads", async () => {
+    // The extension tells an older server from a failing one by this code (-32601), not the text.
+    const client = await start(example);
+    const answer: unknown = await client.sendRequest("stateward/not-a-request", {}).then(
+      () => "answered",
+      (error: unknown) => error,
+    );
+    expect(answer).toMatchObject({ code: -32601 });
   });
 
   it("logs one line and shows no popup when the folder has no config", async () => {
@@ -837,6 +850,39 @@ describe("language server", { timeout: 20_000 }, () => {
     await fresh;
     const [after] = await ask(["source.fixAll"]);
     expect(after?.edit?.documentChanges?.[0]?.textDocument).toEqual({ uri: theme, version: 2 });
+  });
+
+  it("keeps fixes that need review out of source.fixAll, which runs on save, and offers them in the quick fix", async () => {
+    const dir = scratchProject("ls-", {
+      ...PROJECT,
+      "stateward.config.ts": FIXING_ALL_UNSAFE_CONFIG,
+    });
+    const never = 60 * 60 * 1000;
+    const inbox = collect(connect(dir, [dir], {}, { fastMs: never, fullMs: never }));
+    inbox.client.sendNotification("initialized", {}).catch(rethrow);
+    const theme = pathToFileURL(path.join(dir, "src", "theme.tsx")).href;
+    await inbox.client.sendNotification("textDocument/didOpen", {
+      textDocument: { uri: theme, languageId: "typescriptreact", version: 1, text: themeText },
+    });
+    await inbox.client.sendNotification("textDocument/didSave", { textDocument: { uri: theme } });
+    await inbox.until(() => inbox.diagnostics.at(-1)?.diagnostics.length === 2);
+    const diagnostics = inbox.diagnostics.at(-1)?.diagnostics ?? [];
+    const ask = async (only: readonly string[]): Promise<readonly CodeActionShape[]> => {
+      const answer: unknown = await inbox.client.sendRequest("textDocument/codeAction", {
+        textDocument: { uri: theme },
+        range: { start: { line: 1, character: 0 }, end: { line: 1, character: 1 } },
+        context: { diagnostics, only },
+      });
+      return Array.isArray(answer)
+        ? answer.flatMap((item: unknown) => (isAction(item) ? [item] : []))
+        : [];
+    };
+    expect(await ask(["source.fixAll"])).toEqual([]);
+    const quick = await ask(["quickfix"]);
+    const all = quick.find((action) => action.title === "Fix all stateward problems in the file");
+    expect(all?.edit?.documentChanges?.[0]?.edits.map((edit) => edit.range.start.line)).toEqual([
+      0, 1,
+    ]);
   });
 });
 
@@ -1690,6 +1736,23 @@ const GUARANTEES: Readonly<Record<string, string>> = {
     "  return createContext<T>(undefined as never);",
     "}",
     'export type Owned<T> = T & { readonly __guarantee?: "owned" };',
+    'export type SingleProvider<T = unknown> = T & { readonly "__guarantee:single-provider"?: true };',
+    'export type Stable<T = unknown> = T & { readonly "__guarantee:stable"?: true };',
+    "",
+  ].join("\n"),
+  "src/stores.ts": [
+    'import { createContext, type Context } from "react";',
+    'import type { SingleProvider, Stable } from "./guarantees";',
+    'export const ModeContext: Context<string> & SingleProvider & Stable = createContext("light");',
+    "",
+  ].join("\n"),
+  "src/Providers.tsx": [
+    'import { useState, type ReactNode } from "react";',
+    'import { ModeContext } from "./stores";',
+    "export function ModeProvider({ children }: { children: ReactNode }) {",
+    '  const [mode, setMode] = useState("light");',
+    '  return <ModeContext.Provider value={mode}><button onClick={() => setMode("dark")} />{children}</ModeContext.Provider>;',
+    "}",
     "",
   ].join("\n"),
   "src/contexts.ts": [
@@ -1745,7 +1808,7 @@ describe("language server: stated guarantees", { timeout: 20_000 }, () => {
     const inbox = collect(connect(dir));
     inbox.client.sendNotification("initialized", {}).catch(rethrow);
     const uri = (file: string): string => pathToFileURL(path.join(dir, file)).href;
-    for (const file of ["src/contexts.ts", "src/session.ts", "src/main.tsx"]) {
+    for (const file of ["src/contexts.ts", "src/session.ts", "src/main.tsx", "src/stores.ts"]) {
       await inbox.client.sendNotification("textDocument/didOpen", {
         textDocument: {
           uri: uri(file),
@@ -1828,6 +1891,21 @@ describe("language server: stated guarantees", { timeout: 20_000 }, () => {
     expect(contexts[2]?.command?.command).toBe("");
     const session = await lenses("src/session.ts");
     expect(session.map((lens) => lens.command?.title)).toEqual(["1 not proven · 2 writers · show"]);
+  });
+
+  it("shows each trait of a context that states several, in the hover and a lens each", async () => {
+    const { hover, lenses } = await opened();
+    const mode = (await hover("src/stores.ts", 2, 15)) ?? "";
+    expect(mode).toContain(
+      "**Guaranteed:** its Provider appears once on any render path (`SingleProvider`); proven for 1 Provider",
+    );
+    expect(mode).toContain(
+      "**Guaranteed:** the value its Provider gives never changes (`Stable`); not proven: 1 error",
+    );
+    expect((await lenses("src/stores.ts")).map((lens) => lens.command?.title)).toEqual([
+      "SingleProvider: 1 Provider proven · show",
+      "Stable: 1 not proven · 1 Provider · show",
+    ]);
   });
 
   it("offers Show proof path on an error about a guarantee, walking from the error to the declaration", async () => {

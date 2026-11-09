@@ -182,11 +182,48 @@ export type Summary = {
   /** Run-time checks of stated contexts in hooks. */
   guards: Guard[];
   /**
-   * The contexts this file declares at its top level whose type states `required-context`, read
-   * or not (`marker`: the declaration's type as written): what `stateward guarantees` lists. The
-   * proof reads `contexts`, never this.
+   * The contexts this file declares at its top level whose type states a trait (`RequiredContext`,
+   * `SingleProvider`, `Stable`), read or not: what `stateward guarantees` lists. The proof reads
+   * `contexts`, never this.
    */
   declared: StatedDeclaration[];
+  /**
+   * The Providers in this file of contexts stated `SingleProvider` or `Stable`: what `stateward
+   * guarantees` lists for those traits (`provider-nested` reads `providers`, never this).
+   */
+  statedProviders: { context: string; name: string; loc: Loc }[];
+  /** The Providers of contexts stated `SingleProvider` in this file. */
+  providers: ProviderSite[];
+  /** The contexts stated `SingleProvider` those Providers are of, each once, with their declaration. */
+  singles: { id: string; name: string; loc: Loc }[];
 };
 
-export type StatedDeclaration = { id: string; name: string; loc: Loc; marker: string };
+/**
+ * A top-level context that states a trait: `marker` is its type as written (for a required
+ * context), `traits` the traits it states (`CONTEXT_TRAITS`).
+ */
+export type StatedDeclaration = {
+  id: string;
+  name: string;
+  loc: Loc;
+  marker: string;
+  traits: string[];
+};
+
+/**
+ * A Provider of a context stated `SingleProvider` (`provider-nested`), where it stands: in the
+ * component `owner` (null: in a `createRoot(…).render(…)` call; `""`: in neither, so where it
+ * renders is not followed). `span` is the whole element, so a render inside it is found;
+ * `outer` is a Provider of the same context around it in the same JSX, if any.
+ */
+export type ProviderSite = {
+  owner: string | null;
+  context: string;
+  /** The tag as written: `StoreContext.Provider`. */
+  name: string;
+  loc: Loc;
+  span: Loc;
+  under: string[];
+  via: SlotRef[];
+  outer: Loc | null;
+};

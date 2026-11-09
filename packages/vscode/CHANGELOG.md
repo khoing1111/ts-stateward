@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0 (unreleased)
+
+- The log and the status bar tooltip say when the `stateward.serverPath` setting is used. When the
+  project also has its own server, a notification offers to use it and removes the setting.
+- A server older than the extension gets a message naming it and the fix, instead of "Unhandled
+  method".
+- In a TypeScript project, commands never go to a Python folder's server. When the TypeScript
+  server is not running, the message and the status bar say why.
+
 ## 1.1.0
 
 - Hover a declaration typed `RequiredContext` or `Owned` to see whether it is proven, and for

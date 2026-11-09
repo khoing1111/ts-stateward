@@ -1,0 +1,1 @@
+{ "name": "@reduxjs/toolkit", "version": "2.5.0", "exports": { "./query/react": { "types": "./query/react/index.d.ts" } } }

@@ -20,6 +20,17 @@ export const RULES = {
           description:
             "State names (globs like *Busy) that are set again somewhere this rule cannot see.",
         },
+        severities: {
+          kind: "severities",
+          default: {},
+          kinds: {
+            stated:
+              "a state stated `Pending` that does not settle, starts twice, or names no running value: an error unless set here.",
+            shape:
+              "unmarked state read from the shape of the code: the rule's severity (a warning).",
+          },
+          description: "A severity per kind of finding.",
+        },
       },
       needsJsDoc: true,
     },

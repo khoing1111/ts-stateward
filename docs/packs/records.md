@@ -18,9 +18,30 @@ Each rule's page has its options and what it does not catch. One rule or a whole
 
 | Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
 | --- | --- | --- | --- | --- | --- |
+| [ambiguous-table](../rules/records/ambiguous-table.md) | a lookup table typed `Record<string, V>` that says neither "all keys" nor "keys from outside" | A table typed `Record<string, V>` does not say whether its keys are fixed or come from outside, so a misspelt or missing key compiles and the read gives `undefined`. | Core | error | error |
 | [duplicate-key](../rules/records/duplicate-key.md) | the same key twice in a `new Map([...])` or `new Set([...])` written out in code | The same key twice in a `new Map([...])` or `new Set([...])` keeps only the last entry, so the first one has no effect. | Core | error | error |
 | [lookup-misses-key](../rules/records/lookup-misses-key.md) | a lookup like `labels[status]` with no entry for some value of the key | A lookup like `labels[status]` is typed as always present; a value with no entry gives `undefined`, and the page shows "undefined" or the next call throws. | Core | error | error |
-| [table-type-too-loose](../rules/records/table-type-too-loose.md) | a lookup table typed `Record<string, V>` that says neither "all keys" nor "keys from outside" | A table typed `Record<string, V>` lets a misspelt or missing key compile; typing its keys, or its reads as possibly missing, lets TypeScript check each read. | Core | error | error |
+| [unchecked-key](../rules/records/unchecked-key.md) | a key cast (`as keyof typeof LABELS`) or `in` test used to read a table without an own-key check | A cast such as `status as keyof typeof LABELS` tells TypeScript that `status` is a key of `LABELS` without checking it, so `LABELS[status]` compiles and can give `undefined` or an inherited value. | Add-on `unchecked-key` | warning | warning |
+
+## [ambiguous-table](../rules/records/ambiguous-table.md)
+
+A table typed `Record<string, V>` does not say whether its keys are fixed or come from outside, so a misspelt or missing key compiles and the read gives `undefined`.
+
+```ts
+const labels: Record<string, string> = { idle: "Idle", done: "Done" };
+
+export function label(status: string): string {
+  return labels[status];
+}
+```
+
+```text
+error[records/ambiguous-table]: `labels` accepts any string key, so a misspelt or missing key still compiles
+```
+
+Fix: say which table it is. A fixed table read with a key type declared apart from it.
+
+Core rule: error under `recommended` and `strict`. Group: `records/keys`.
 
 ## [duplicate-key](../rules/records/duplicate-key.md)
 
@@ -60,26 +81,32 @@ export function title(status: Status): string {
 error[records/lookup-misses-key]: `labels[status]` can be missing, but its type says it never is
 ```
 
-Fix: give the table an entry for every value, and say so with `satisfies`, so a missing one fails to compile where the table is written.
+Fix: give the table an entry for every value. When the key's type is declared apart from the table, say so with `as const satisfies`, so a missing entry fails to compile where the table is written.
 
 Core rule: error under `recommended` and `strict`. Group: `records/keys`.
 
-## [table-type-too-loose](../rules/records/table-type-too-loose.md)
+## [unchecked-key](../rules/records/unchecked-key.md)
 
-A table typed `Record<string, V>` lets a misspelt or missing key compile; typing its keys, or its reads as possibly missing, lets TypeScript check each read.
+A cast such as `status as keyof typeof LABELS` tells TypeScript that `status` is a key of `LABELS` without checking it, so `LABELS[status]` compiles and can give `undefined` or an inherited value.
 
 ```ts
-const labels: Record<string, string> = { idle: "Idle", done: "Done" };
+const LABELS = { draft: "Draft", sent: "Sent" } as const;
 
 export function label(status: string): string {
-  return labels[status];
+  return LABELS[status as keyof typeof LABELS];
 }
 ```
 
 ```text
-error[records/table-type-too-loose]: `labels` accepts any string key, so a misspelt or missing key still compiles
+warning[records/unchecked-key]: the cast to `keyof typeof LABELS` does not check that `status` is a key of `LABELS`
 ```
 
-Fix: say which table it is. A fixed table, read with keys of a known type.
+Fix: check the key before reading. The quick fix "Check the key with isKeyOf" writes the helper once, in `src/keys.ts` (or uses the project's own `isKeyOf`), and rewrites the read.
 
-Core rule: error under `recommended` and `strict`. Group: `records/keys`.
+Add-on rule, off until you list `records/unchecked-key` in `addons`; then warning under `recommended` and `strict`. Group: `records/keys`.
+
+## Add-ons
+
+List an add-on in `addons` to turn on its rules: `addons: ["records/<add-on>"]`.
+
+- `records/unchecked-key`: `unchecked-key`

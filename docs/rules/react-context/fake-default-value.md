@@ -2,7 +2,7 @@
 
 # react-context/fake-default-value
 
-A default like `{} as Theme` is used when the Provider is missing, so the code reads an empty object typed as a full one and fails later.
+Reports a context created with a cast or an empty object as its default (`{} as Theme`, `null!`): a component rendered outside the Provider reads that value, and its type says it is complete.
 
 ```tsx
 import { createContext, useContext } from "react";
@@ -19,18 +19,18 @@ export function Title() {
 `stateward check` prints:
 
 ```text
-info[react-context/fake-default-value]: `ThemeContext` defaults to a fake value, `{} as Theme`
+info[react-context/fake-default-value]: `ThemeContext` defaults to `{} as Theme`, a cast that is not a real value
  --> example.tsx:5:22
   |
 5 | const ThemeContext = createContext({} as Theme);
   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  = fix: create it with `undefined` and read it in a hook that throws, so a missing Provider fails at once:
+  = fix: create it with `undefined`, and read it in a hook that throws when the Provider is missing:
         const ThemeContext = createContext<Theme | undefined>(undefined);
         // in useTheme(): if (value === undefined) throw new Error("ThemeContext needs a Provider");
   = docs: stateward explain react-context/fake-default-value
 ```
 
-Create the context with `undefined`, so its type says the value can be missing, and read it through a hook that throws when it is:
+Create the context with `undefined`, so its type says the value can be missing, and read it through a hook that throws when it is missing:
 
 ```tsx
 import { createContext, useContext } from "react";
@@ -50,15 +50,15 @@ export function Title() {
 }
 ```
 
-There is no quick fix, since every read changes. Once the context says it can be missing, `react-context/provider-missing` checks that every component reading it has a Provider above it. Its quick fix then states the context required (`requiredContext<Theme>()`), and the readers need no check at all.
+No quick fix makes this change, because every reader changes with it. Once the context's type says the value can be missing, `react-context/provider-missing` checks that every component that reads it has a Provider above it. Its quick fix can then state the context required (`requiredContext<Theme>()`), and the readers need no check.
 
 ## Why it matters
 
-`createContext({} as Theme)`, or `createContext<Theme>(null!)`, hands every component a fake value when the Provider is missing. The type says a theme is there; at run time it is not. `useContext(ThemeContext).colors.text` then throws far from where the Provider is missing, or quietly reads an empty object.
+With `createContext({} as Theme)` or `createContext<Theme>(null!)`, a component rendered without the Provider reads `{}` or `null`, while its type says it reads a `Theme`. `useContext(ThemeContext).colors.text` then throws a `TypeError` in that component, far from the place where the Provider is missing, or the component renders with empty values.
 
 ## What it does not catch
 
-It looks at React's `createContext` (also `React.createContext`) called with a cast (`{} as Theme`, `[] as Item[]`, `null!`, `<Theme>{}`) or an empty object `{}`. It is silent on:
+It reads React's `createContext` (also `React.createContext`) called with a cast (`{} as Theme`, `[] as Item[]`, `null!`, `<Theme>{}`) or an empty object `{}`. It does not report:
 
 - a real default: `createContext({ colors: defaultColors })`, or `createContext([])`;
 - `createContext<Callbacks>({})` when no property of `Callbacks` is required: `{}` is then a complete value of the type;
@@ -69,7 +69,7 @@ It looks at React's `createContext` (also `React.createContext`) called with a c
 
 ## Turn it on or off
 
-It shows as info under `recommended` (a hint in the editor that does not fail the check) and as an error under `strict`. Turn it off if your defaults are real values (a default theme, a logger that does nothing):
+It is an info under `recommended` (shown in the editor, it does not fail `check`) and an error under `strict`. Turn it off when the defaults are real values (a default theme, a logger that does nothing):
 
 ```ts
 rules: { "react-context/fake-default-value": "off" } // or "warning"

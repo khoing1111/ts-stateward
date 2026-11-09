@@ -1,7 +1,8 @@
 import ts from "@stateward/core/typescript";
 import type { FileContext } from "@stateward/core";
 import { shapeOf, type Shape } from "./shapes.js";
-import { classifyUse, type Use } from "./uses.js";
+import { declaredKeyType } from "./key-type.js";
+import { classifyUse, handlesMissing, type Use } from "./uses.js";
 
 /**
  * Where the quick fixes edit: delete `[removeStart, removeEnd)` (the annotation with its colon)
@@ -56,7 +57,16 @@ export type Candidate = {
  * file that declares it, its members, and where the table's file imports it from (null when it is
  * declared in the table's own file).
  */
-export type KeyType = { name: string; file: string; keys: string[]; specifier: string | null };
+export type KeyType = {
+  name: string;
+  file: string;
+  keys: string[];
+  specifier: string | null;
+  /** Every read with this type handles a missing entry (`labels[status] ?? "Unknown"`). */
+  fallback: boolean;
+  /** The alias's name where it is declared, when the read's annotation names it; else null. */
+  declaredAt: { file: string; start: number; end: number } | null;
+};
 
 /** Everything one file does to the fixed-key variables it can see, summed per variable. */
 export type UseSummary = {
@@ -118,10 +128,15 @@ function emptyUse(id: string): UseSummary {
 function addKeyType(collector: Collector, id: string, keyType: KeyType): void {
   const sum = collector.uses.get(id);
   if (sum === undefined) return;
-  if (sum.keyTypes.some((known) => known.name === keyType.name && known.file === keyType.file)) {
+  const known = sum.keyTypes.find(
+    (type) => type.name === keyType.name && type.file === keyType.file,
+  );
+  if (known === undefined) {
+    sum.keyTypes.push(keyType);
     return;
   }
-  sum.keyTypes.push(keyType);
+  known.fallback &&= keyType.fallback;
+  known.declaredAt ??= keyType.declaredAt;
 }
 
 /**
@@ -139,9 +154,24 @@ function keyTypeOf(
   const alias = ctx.types.typeAliasOf(key);
   const keys = alias && unionKeys(key, ctx);
   if (alias === undefined || keys === undefined) return undefined;
-  if (alias.file === tableFile) return { ...alias, keys: [...keys], specifier: null };
+  const declared = declaredKeyType(key, ctx);
+  const found = {
+    name: alias.name,
+    file: alias.file,
+    keys: [...keys],
+    fallback: handlesMissing(access, reference, key, ctx.types),
+    declaredAt:
+      declared === undefined
+        ? null
+        : {
+            file: declared.file,
+            start: declared.node.getStart(),
+            end: declared.node.getEnd(),
+          },
+  };
+  if (alias.file === tableFile) return { ...found, specifier: null };
   const specifier = ctx.types.importSpecifierFor(alias, tableFile);
-  return specifier === undefined ? undefined : { ...alias, keys: [...keys], specifier };
+  return specifier === undefined ? undefined : { ...found, specifier };
 }
 
 function addUse(collector: Collector, id: string, use: Use): void {
@@ -252,7 +282,7 @@ function candidateOf(
 type KeyUnion = { name: string; keys: readonly string[]; declared: string; file: string };
 
 /** After the last import, else after the directives (`"use client"`), else the start of the file. */
-function importPlace(sourceFile: ts.SourceFile): number {
+export function importPlace(sourceFile: ts.SourceFile): number {
   let at = 0;
   for (const statement of sourceFile.statements) {
     const directive =

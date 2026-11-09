@@ -39,7 +39,7 @@ A mistake in the file stops `stateward` with a message that names the key and sa
 | `exclude`   | tests, test helpers, stories, `node_modules` | files to skip                                     |
 | `ignores`   | reason required, unused ignore a warning     | how strict `stateward-ignore` comments are        |
 | `rollout`   | `false`                                      | run only the rules `stateward next` turned on     |
-| `facts`     | `{}`                                         | what library functions throw, for the errors pack |
+| `facts`     | `{}`                                         | what library functions throw, reject and return   |
 | `maxMemory` | 4096, or 3/4 of the machine's memory         | the memory (MB) the command may use               |
 
 ### plugins
@@ -223,6 +223,19 @@ it to tell whether a `catch` is complete; `stateward deps` lists the calls still
 ```ts
 facts: { axios: { get: { throws: ["AxiosError"] } } },
 ```
+
+Each function (by its path in the package's types, `Observable.subscribe`, or its own name) takes:
+
+| Fact | Says | Read by |
+| --- | --- | --- |
+| `throws: ["AxiosError"]` | the classes the call throws | the errors pack |
+| `rejects: ["AxiosError"]` | the classes its promise rejects with; `[]`: it never fails | the errors and async packs |
+| `returns: "release"` or `returns: { release: "unsubscribe" }` | what it returns must be released: call it, or call that method | `ownership/resource-not-released`, `react/effect-missing-cleanup` |
+| `neverRejects: true` | its promise only resolves, for a function or a promise property (`cacheEntryRemoved`) | `ownership/resource-not-released`, `async/pending-state-stuck-on-failure` |
+
+An `await` of a promise stated `neverRejects` is not a way out of the function: a release or a
+reset after it runs. stateward ships `neverRejects` for RTK Query's `cacheEntryRemoved`
+(`@reduxjs/toolkit`); a config line for the same name wins.
 
 ## Monorepos
 

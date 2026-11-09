@@ -5,7 +5,8 @@ import {
   type CodeLens,
   type Range,
 } from "vscode-languageserver/node";
-import { describeStatus, displayPath } from "@stateward/core/internal";
+import { describeTraitSource } from "@stateward/core";
+import { counted, describeStatus, displayPath } from "@stateward/core/internal";
 import type { Finding, GuaranteeProof, Location } from "@stateward/core/internal";
 import { buildLineIndex, toRange, type LineIndex } from "./mapping.js";
 
@@ -117,7 +118,8 @@ function errorsOf(proof: GuaranteeProof): readonly Problem[] {
 
 /**
  * The hover on a marked declaration: "Guaranteed: <what>; proven for N readers", or the first
- * error and its path when it is not proven. Undefined when `offset` is on no declaration.
+ * error and its path when it is not proven; one part per trait the declaration states
+ * (`SingleProvider` and `Stable` on one context). Undefined when `offset` is on no declaration.
  */
 export function guaranteeHover(
   view: ProofView,
@@ -125,12 +127,20 @@ export function guaranteeHover(
   text: string,
   offset: number,
 ): string | undefined {
-  const proof = declaredIn(view, file, text).find(
+  const proofs = declaredIn(view, file, text).filter(
     ({ stated }) => offset >= stated.location.start && offset <= stated.location.end,
   );
-  if (proof === undefined) return undefined;
+  if (proofs.length === 0) return undefined;
+  return proofs.map((proof) => hoverOf(view, proof)).join("\n\n---\n\n");
+}
+
+function hoverOf(view: ProofView, proof: GuaranteeProof): string {
   const { stated } = proof;
-  const head = `**Guaranteed:** ${stated.promise} (\`${stated.marker}\`); ${describeStatus(proof)}`;
+  const source =
+    stated.source === undefined || stated.source.kind === "marker"
+      ? ""
+      : `, stated by ${describeTraitSource(stated.source)}`;
+  const head = `**Guaranteed:** ${stated.promise} (\`${stated.marker}\`${source}); ${describeStatus(proof)}`;
   const first = errorsOf(proof)[0];
   if (first === undefined) return head;
   const index = indexer(view);
@@ -158,12 +168,11 @@ export function guaranteeHover(
 function lensTitle(proof: GuaranteeProof): string {
   const { stated, status } = proof;
   const count = stated.covered.length;
-  const covers = count === 1 ? stated.covers.replace(/s$/, "") : stated.covers;
   switch (status.kind) {
     case "proven":
-      return `${String(count)} ${covers} proven · show`;
+      return `${counted(count, stated.covers)} proven · show`;
     case "unproven":
-      return `${String(status.errors.length)} not proven · ${String(count)} ${covers} · show`;
+      return `${String(status.errors.length)} not proven · ${counted(count, stated.covers)} · show`;
     case "unused":
     case "off":
       return describeStatus(proof);
@@ -174,10 +183,21 @@ function lensTitle(proof: GuaranteeProof): string {
   }
 }
 
-/** A code lens above each marked declaration of `file`: what it covers, and a command that lists it. */
+/**
+ * A code lens above each marked declaration of `file`: what it covers, and a command that lists
+ * it. A declaration that states several traits has a lens for each, headed by its marker.
+ */
 export function guaranteeLenses(view: ProofView, file: string, text: string): CodeLens[] {
   const index = indexer(view);
-  return declaredIn(view, file, text).map((proof) => {
+  const declared = declaredIn(view, file, text);
+  const shared = (proof: GuaranteeProof): boolean =>
+    declared.some(
+      (other) =>
+        other !== proof &&
+        other.stated.location.start === proof.stated.location.start &&
+        other.stated.location.file === proof.stated.location.file,
+    );
+  return declared.map((proof) => {
     const { stated } = proof;
     const places = [
       ...errorsOf(proof).map((error) =>
@@ -190,7 +210,7 @@ export function guaranteeLenses(view: ProofView, file: string, text: string): Co
     return {
       range: { start: range.start, end: range.start },
       command: {
-        title: lensTitle(proof),
+        title: shared(proof) ? `${stated.marker}: ${lensTitle(proof)}` : lensTitle(proof),
         // A lens with nothing to list is a label: no command runs when it is clicked.
         command: places.length === 0 ? "" : SHOW_COVERS_COMMAND,
         arguments: places.length === 0 ? [] : [argument],

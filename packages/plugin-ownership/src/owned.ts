@@ -1,6 +1,6 @@
 /**
  * Values stated owned: a declaration whose type states the `owned` guarantee
- * (`type Owned<T> = T & { readonly __guarantee?: "owned" }`). Only the declaring module may change
+ * (`type Owned<T> = T & { readonly "__guarantee:owned"?: true }`). Only the declaring module may change
  * one, and stateward proves it: every change from another module is reported, and every place it
  * cannot follow is reported too, with why. Read per file, so the summary is JSON.
  */
@@ -842,6 +842,23 @@ export function scanOwned(ctx: FileContext): OwnedSummary {
   return { owned, ownerFns: fns, declared, ownerWrites };
 }
 
+/** Whether an expression reads a value that exists already: a name, or a member or element of one. */
+function isCopy(expression: ts.Expression): boolean {
+  if (
+    ts.isParenthesizedExpression(expression) ||
+    ts.isAsExpression(expression) ||
+    ts.isSatisfiesExpression(expression) ||
+    ts.isNonNullExpression(expression)
+  ) {
+    return isCopy(expression.expression);
+  }
+  if (ts.isIdentifier(expression) || expression.kind === ts.SyntaxKind.ThisKeyword) return true;
+  if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
+    return isCopy(expression.expression);
+  }
+  return false;
+}
+
 /**
  * The module-level variables and static fields this file states owned, changed or not: a marker
  * nothing changes is listed too. One type query per module-level name.
@@ -853,7 +870,17 @@ function declaredOwned(ctx: FileContext): OwnedDeclaration[] {
     name: ts.Identifier | ts.PrivateIdentifier,
     shown: string,
     type: ts.TypeNode | undefined,
+    initializer: ts.Expression | undefined,
   ): void => {
+    // A copy of a value stated owned (`export const current = settings;`) is that value under
+    // another name: only a declaration that writes the marker, or makes the value, states it.
+    if (
+      initializer !== undefined &&
+      isCopy(initializer) &&
+      (type === undefined || !types.guaranteesOf(type).includes(OWNED))
+    ) {
+      return;
+    }
     const symbol = types.symbolAt(name);
     if (symbol === undefined || !types.guaranteesOf(symbol).includes(OWNED)) return;
     const text = type?.getText(sourceFile) ?? "";
@@ -868,7 +895,7 @@ function declaredOwned(ctx: FileContext): OwnedDeclaration[] {
     if (ts.isVariableStatement(statement)) {
       for (const declaration of statement.declarationList.declarations) {
         if (ts.isIdentifier(declaration.name)) {
-          add(declaration.name, declaration.name.text, declaration.type);
+          add(declaration.name, declaration.name.text, declaration.type, declaration.initializer);
         }
       }
     } else if (ts.isClassDeclaration(statement)) {
@@ -877,7 +904,7 @@ function declaredOwned(ctx: FileContext): OwnedDeclaration[] {
         if (!ts.isIdentifier(member.name) && !ts.isPrivateIdentifier(member.name)) continue;
         const owner = statement.name?.text;
         const shown = owner === undefined ? member.name.text : `${owner}.${member.name.text}`;
-        add(member.name, shown, member.type);
+        add(member.name, shown, member.type, member.initializer);
       }
     }
   }

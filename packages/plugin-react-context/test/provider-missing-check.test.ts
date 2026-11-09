@@ -60,6 +60,9 @@ const empty: Summary = {
   externalContexts: [],
   guards: [],
   declared: [],
+  providers: [],
+  statedProviders: [],
+  singles: [],
 };
 
 function component(id: string, over: Partial<ComponentSummary> = {}): ComponentSummary {

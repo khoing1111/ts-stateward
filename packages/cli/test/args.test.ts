@@ -27,7 +27,7 @@ describe("parseArgs", () => {
     expect(parseArgs(["check", "--verify-fixes"])).toMatchObject({ ok: false });
   });
 
-  it("parses --no-cache for check only", () => {
+  it("parses --no-cache for every command that checks, and only for those", () => {
     expect(parseArgs(["check", "--no-cache"])).toEqual({
       ok: true,
       value: {
@@ -43,9 +43,18 @@ describe("parseArgs", () => {
         noCache: true,
       },
     });
-    expect(parseArgs(["plan", "--no-cache"])).toEqual({
+    for (const command of ["baseline", "coverage", "plan", "next", "deps", "guarantees"]) {
+      expect(parseArgs([command, "--no-cache"])).toMatchObject({
+        ok: true,
+        value: { kind: command, noCache: true },
+      });
+      expect(parseArgs([command])).toMatchObject({ ok: true, value: { noCache: undefined } });
+    }
+    expect(parseArgs(["explain", "unions/non-exhaustive-switch", "--no-cache"])).toEqual({
       ok: false,
-      errors: ["--no-cache only applies to check"],
+      errors: [
+        "--no-cache only applies to check, baseline, coverage, plan, next, deps, guarantees",
+      ],
     });
   });
 

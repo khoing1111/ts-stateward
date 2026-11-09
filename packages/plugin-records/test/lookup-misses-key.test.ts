@@ -8,8 +8,14 @@ function unchecked(_map: string, _type: string, access: string): string {
   return `\`${access}\` can be missing, but its type says it never is`;
 }
 
-function declare(map: string, key: string): string {
-  return `declare \`${map}\` with \`satisfies Record<…>\` over its real keys, or type \`${key}\` so a missing key is handled`;
+/** The key is typed with a separately declared union or enum: the table can be checked against it. */
+function declare(map: string, key: string, type: string): string {
+  return `declare \`${map}\` with \`as const satisfies Record<${type}, …>\`, or type \`${key}\` so a missing key is handled`;
+}
+
+/** The key's type is not declared apart from the table: there is no union to check it against. */
+function give(map: string, key: string): string {
+  return `give \`${map}\` its real keys, or type \`${key}\` so a missing key is handled`;
 }
 
 /** A constant key on a record with no fixed keys: type its keys, there is no entry to add. */
@@ -27,22 +33,22 @@ describe(`records/${RULE}: flagged`, () => {
       says(
         "records.ts",
         unchecked("labels", "Record<string, string>", "labels[status]"),
-        declare("labels", "status"),
+        declare("labels", "status", "Status"),
       ),
       says(
         "records.ts",
         unchecked("partial", "{ [key: string]: string; idle…", "partial[status]"),
-        declare("partial", "status"),
+        declare("partial", "status", "Status"),
       ),
       says(
         "records.ts",
         unchecked("labels", "Record<string, string>", "labels[job.kind]"),
-        declare("labels", "job.kind"),
+        declare("labels", "job.kind", "Status"),
       ),
       says(
         "records.ts",
         unchecked("labels", "Record<string, string>", "labels[ status ]"),
-        declare("labels", "status"),
+        declare("labels", "status", "Status"),
       ),
     ]);
   });
@@ -52,22 +58,22 @@ describe(`records/${RULE}: flagged`, () => {
       says(
         "other-keys.ts",
         unchecked("names", "Record<string, string>", "names[color]"),
-        declare("names", "color"),
+        declare("names", "color", "Color"),
       ),
       says(
         "other-keys.ts",
         unchecked("sizes", "Record<number, string>", "sizes[level]"),
-        declare("sizes", "level"),
+        give("sizes", "level"),
       ),
       says(
         "other-keys.ts",
         unchecked("names", "Record<string, string>", "names[word]"),
-        declare("names", "word"),
+        give("names", "word"),
       ),
       says(
         "other-keys.ts",
         unchecked("map", "Record<string, string>", "map[key]"),
-        declare("map", "key"),
+        give("map", "key"),
       ),
       says(
         "other-keys.ts",
@@ -77,12 +83,12 @@ describe(`records/${RULE}: flagged`, () => {
       says(
         "other-keys.ts",
         unchecked("names", "Record<string, string>", "names[color]"),
-        declare("names", "color"),
+        declare("names", "color", "Color"),
       ),
       says(
         "other-keys.ts",
         unchecked("names", "Record<string, string>", "names[color]"),
-        declare("names", "color"),
+        declare("names", "color", "Color"),
       ),
       says(
         "other-keys.ts",
@@ -128,13 +134,19 @@ describe(`records/${RULE}: flagged`, () => {
     ]);
   });
 
-  it("is an error on the access, without a quick fix", () => {
+  it("is an error on the access, without a quick fix, with a note at the declared key type", () => {
     const [first] = checkOnly(fixture(`${RULE}/flagged`), RULE);
     expect(first).toMatchObject({
       kind: "problem",
       ruleId: `records/${RULE}`,
       severity: "error",
-      related: [],
+      related: [
+        {
+          location: { start: 5, end: 11 },
+          message:
+            "`labelsForEveryStatusOfTheUploadPipelineInTheApp` is read with `Status` keys, declared here",
+        },
+      ],
       fixes: [],
     });
   });

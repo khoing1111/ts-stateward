@@ -1,5 +1,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -86,5 +94,30 @@ describe("a git hook for a project in a folder with such a name", () => {
     const probe = hook.replace("npx --no stateward check --staged", "pwd");
     const result = spawnSync("sh", ["-c", probe], { cwd: root, encoding: "utf8" });
     expect(same(result.stdout.trim(), project)).toBe(true);
+  });
+});
+
+describe("a git hook for a project reached through a link", () => {
+  // macOS's `/tmp` is a link to `/private/tmp`, and git prints the real path: the hook changed to
+  // `../../<link>`, a folder that does not exist from the repository's root.
+  it("changes to the project's folder inside the repository, and names the hook from there", () => {
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    const project = path.join(root, "app");
+    mkdirSync(project);
+    writeFileSync(path.join(project, "package.json"), "{}");
+    const outside = realpathSync.native(mkdtempSync(path.join(tmpdir(), "stateward-link-")));
+    try {
+      const link = path.join(outside, "app");
+      symlinkSync(project, link, "dir");
+      const result = writeHook(link);
+      expect(result.ok).toBe(true);
+      expect(result.text).toContain("Wrote ../.git/hooks/pre-commit: it runs `cd 'app' && ");
+      const hook = readFileSync(path.join(root, ".git", "hooks", "pre-commit"), "utf8");
+      const probe = hook.replace("npx --no stateward check --staged", "pwd");
+      const run = spawnSync("sh", ["-c", probe], { cwd: root, encoding: "utf8" });
+      expect(same(run.stdout.trim(), project)).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

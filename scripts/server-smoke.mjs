@@ -16,7 +16,7 @@ const rpc = fromServer("vscode-jsonrpc/node");
 const server = path.join(root, "packages", "vscode", "dist", "server.cjs");
 const app = path.join(root, "examples", "basic");
 const file = path.join(app, "src", "status.ts");
-const EXPECTED = ["unions/default-hides-cases", "records/lookup-misses-key"];
+const EXPECTED = ["unions/non-exhaustive-switch", "records/lookup-misses-key"];
 const TIMEOUT_MS = 30_000;
 
 const child = spawn(process.execPath, [server, "--stdio"], { stdio: ["pipe", "pipe", "inherit"] });

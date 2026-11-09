@@ -181,6 +181,8 @@ const steps = [
     name: "snapshot",
     args: ["exec", "node", "scripts/publish-snapshot.mjs"],
   },
+  // Names that differ only by case, or by .ts and .tsx: one file on macOS and Windows.
+  { name: "file names", args: ["exec", "node", "scripts/file-names.mjs"] },
   // stateward checks its own source with the built CLI (docs/quality.md); warm cache: a few seconds.
   {
     name: "self-check",

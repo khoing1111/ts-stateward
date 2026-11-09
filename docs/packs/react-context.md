@@ -2,7 +2,7 @@
 
 # react-context
 
-A component that needs a context is always rendered under its Provider.
+Every context reader is under its Provider, defaults are real values, and Provider values keep their identity.
 
 ## Turn it on
 
@@ -18,12 +18,15 @@ Each rule's page has its options and what it does not catch. One rule or a whole
 
 | Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
 | --- | --- | --- | --- | --- | --- |
-| [fake-default-value](../rules/react-context/fake-default-value.md) | a context created with a fake default like `{} as Theme` or `null!` | A default like `{} as Theme` is used when the Provider is missing, so the code reads an empty object typed as a full one and fails later. | Coverage | info | error |
-| [provider-missing](../rules/react-context/provider-missing.md) | a component that reads a required context, rendered with no Provider above it | A component that reads a required context outside its Provider gets the default value or an error at run time; the finding shows the render path without it. | Core | error | error |
+| [fake-default-value](../rules/react-context/fake-default-value.md) | a context created with a cast or `{}` as its default, such as `{} as Theme` or `null!` | Reports a context created with a cast or an empty object as its default (`{} as Theme`, `null!`): a component rendered outside the Provider reads that value, and its type says it is complete. | Coverage | info | error |
+| [provider-missing](../rules/react-context/provider-missing.md) | a component that reads a required context, rendered with no Provider above it | Reports a component that reads a required context and is rendered with no Provider of that context above it; the notes show the render path from the entry point. | Core | error | error |
+| [provider-nested](../rules/react-context/provider-nested.md) | a Provider of a context stated `SingleProvider`, rendered under another one | Reports a Provider of a context stated `SingleProvider` that is rendered under another Provider of the same context; the outer one is a note. | Core | error | error |
+| [provider-value-changes-every-render](../rules/react-context/provider-value-changes-every-render.md) | a Provider given a new object or function on every render, or a value that can change for a context stated `Stable` | Reports a Provider whose value is a new object, array or function on every render, which re-renders every reader of the context; for a context stated `Stable`, any value that can change is an error. | Core | error | error |
+| [value-changed-by-reader](../rules/react-context/value-changed-by-reader.md) | a write to the value read from a context, in a component or hook that reads it | Reports a component or hook that changes the value it reads from a context (assigns or deletes a property, or calls `push`, `set` or `add` on an array, Map or Set in it): React re-renders the readers only when the Provider passes a new value, so the change does not show. | Add-on `value-changed-by-reader` | error | error |
 
 ## [fake-default-value](../rules/react-context/fake-default-value.md)
 
-A default like `{} as Theme` is used when the Provider is missing, so the code reads an empty object typed as a full one and fails later.
+Reports a context created with a cast or an empty object as its default (`{} as Theme`, `null!`): a component rendered outside the Provider reads that value, and its type says it is complete.
 
 ```tsx
 import { createContext, useContext } from "react";
@@ -38,16 +41,16 @@ export function Title() {
 ```
 
 ```text
-info[react-context/fake-default-value]: `ThemeContext` defaults to a fake value, `{} as Theme`
+info[react-context/fake-default-value]: `ThemeContext` defaults to `{} as Theme`, a cast that is not a real value
 ```
 
-Fix: create the context with `undefined`, so its type says the value can be missing, and read it through a hook that throws when it is.
+Fix: create the context with `undefined`, so its type says the value can be missing, and read it through a hook that throws when it is missing.
 
 Coverage rule (it points at code whose types do not say enough to check it): info under `recommended`, error under `strict`. Group: `react-context/defaults`.
 
 ## [provider-missing](../rules/react-context/provider-missing.md)
 
-A component that reads a required context outside its Provider gets the default value or an error at run time; the finding shows the render path without it.
+Reports a component that reads a required context and is rendered with no Provider of that context above it; the notes show the render path from the entry point.
 
 ```tsx
 // …
@@ -72,9 +75,82 @@ Fix: render the component under the Provider.
 
 Core rule: error under `recommended` and `strict`. It checks more with the add-ons `react-context/react-router`, `react-context/dynamic-components`. Group: `react-context/providers`.
 
+## [provider-nested](../rules/react-context/provider-nested.md)
+
+Reports a Provider of a context stated `SingleProvider` that is rendered under another Provider of the same context; the outer one is a note.
+
+```tsx
+// …
+function Cart() {
+  return (
+    <StoreProvider>
+      <CartCount />
+    </StoreProvider>
+  );
+}
+// …
+```
+
+```text
+error[react-context/provider-nested]: `<StoreProvider>` renders a second `StoreContext` Provider under the first
+```
+
+Fix: `<Cart>` creates a second store, so `<CartCount>` reads an empty cart while the rest of the app reads the real one. Render the store's Provider once, at the top.
+
+Core rule: error under `recommended` and `strict`. It checks more with the add-ons `react-context/react-router`, `react-context/dynamic-components`. Group: `react-context/providers`.
+
+## [provider-value-changes-every-render](../rules/react-context/provider-value-changes-every-render.md)
+
+Reports a Provider whose value is a new object, array or function on every render, which re-renders every reader of the context; for a context stated `Stable`, any value that can change is an error.
+
+```tsx
+import { createContext, useState, type ReactNode } from "react";
+
+type Theme = { theme: string; setTheme: (theme: string) => void };
+const ThemeContext = createContext<Theme | undefined>(undefined);
+
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  const [theme, setTheme] = useState("light");
+  return <ThemeContext.Provider value={{ theme, setTheme }}>{children}</ThemeContext.Provider>;
+}
+```
+
+```text
+warning[react-context/provider-value-changes-every-render]: `ThemeContext` value is a new object every render: all its readers re-render
+```
+
+Fix: wrap the value in `useMemo`, with what it reads as dependencies.
+
+Core rule: error under `recommended` and `strict`. Group: `react-context/providers`.
+
+## [value-changed-by-reader](../rules/react-context/value-changed-by-reader.md)
+
+Reports a component or hook that changes the value it reads from a context (assigns or deletes a property, or calls `push`, `set` or `add` on an array, Map or Set in it): React re-renders the readers only when the Provider passes a new value, so the change does not show.
+
+```tsx
+import { createContext, useContext } from "react";
+
+type Cart = { items: string[] };
+const CartContext = createContext<Cart>({ items: [] });
+
+export function AddButton({ item }: { item: string }) {
+  const cart = useContext(CartContext);
+  return <button onClick={() => cart.items.push(item)}>Add</button>;
+}
+```
+
+```text
+error[react-context/value-changed-by-reader]: `cart.items.push(…)` changes the `CartContext` value outside its Provider
+```
+
+Fix: put a function in the context that sets the Provider's state, and call it.
+
+Add-on rule, off until you list `react-context/value-changed-by-reader` in `addons`; then error under `recommended` and `strict`. Group: `react-context/readers`.
+
 ## Add-ons
 
 List an add-on in `addons` to turn on its rules: `addons: ["react-context/<add-on>"]`.
 
-- `react-context/dynamic-components`: `provider-missing` (checks more with it)
-- `react-context/react-router`: `provider-missing` (checks more with it)
+- `react-context/dynamic-components`: `provider-missing` (checks more with it), `provider-nested` (checks more with it)
+- `react-context/react-router`: `provider-missing` (checks more with it), `provider-nested` (checks more with it)
+- `react-context/value-changed-by-reader`: `value-changed-by-reader`

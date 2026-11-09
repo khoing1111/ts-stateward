@@ -7,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,13 +24,12 @@ import type { CliEnv, ExitCode } from "../src/main.js";
 const fixtures = fileURLToPath(new URL("fixtures", import.meta.url));
 
 const ORDER = [
-  "unions/if-chain-misses-case",
   "records/lookup-misses-key",
-  "unions/default-hides-cases",
-  "unions/tag-does-not-discriminate",
+  "unions/non-exhaustive-switch",
+  "unions/ambiguous-discriminant",
 ] as const;
 
-/** A function whose switch has a default over a union: one finding of default-hides-cases. */
+/** A function whose switch has a default over a union: one finding of non-exhaustive-switch. */
 const BAD = `import type { Status } from "./status.js";
 
 export function shout(status: Status): string {
@@ -138,7 +138,7 @@ describe("check --changed and --staged", () => {
     expect(stdout).toContain("src/other.ts");
     expect(stdout).not.toContain("src/status.ts");
     expect(stdout).toMatch(
-      /1 error in 1 changed file \(4 problems elsewhere not shown, [\d.]+ s\)\./,
+      /1 error in 1 changed file \(3 problems elsewhere not shown, [\d.]+ s\)\./,
     );
   });
 
@@ -177,7 +177,7 @@ describe("check --changed and --staged", () => {
     expect(code).toBe(1);
     expect(stdout).toContain("src/other.ts");
     expect(stdout).not.toContain("src/status.ts");
-    expect(stdout).toMatch(/"changed": \{\s+"files": 1,\s+"elsewhere": 4\s+\}/);
+    expect(stdout).toMatch(/"changed": \{\s+"files": 1,\s+"elsewhere": 3\s+\}/);
   });
 
   it("with --staged, checks the staged text, not later edits that are not staged", async () => {
@@ -194,6 +194,26 @@ describe("check --changed and --staged", () => {
     git(work, "add", "src/other.ts");
     writeFileSync(other, BAD);
     expect((await run(["check", "--staged"], work)).code).toBe(0);
+  });
+
+  it("with --staged, checks the staged text when the project is reached through a link", async () => {
+    // As every folder under macOS's `/tmp` is: git names the files by their real path, the
+    // program by the link, and the staged text was keyed by the first.
+    // The link sits next to the project, so the config still finds the packs installed above it.
+    const linked = `${work}-link`;
+    try {
+      symlinkSync(work, linked, "dir");
+      const other = path.join(work, "src", "other.ts");
+      writeFileSync(other, BAD);
+      git(work, "add", "src/other.ts");
+      writeFileSync(other, "export const other = 2;\n");
+      const staged = await run(["check", "--staged"], linked);
+      expect(staged.stderr).toBe("");
+      expect(staged.code).toBe(1);
+      expect(staged.stdout).toContain("src/other.ts:7:5");
+    } finally {
+      rmSync(linked, { force: true });
+    }
   });
 
   it("with --staged and nothing staged, passes", async () => {

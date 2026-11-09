@@ -16,7 +16,7 @@ export const HELPER = "requiredContext";
 
 /** What the fix writes in the guarantees file when there is none. */
 export const GUARANTEES_TEXT = `// Stated guarantees: types that say what the code promises, so stateward proves it instead of
-// guessing. Each marker has an optional \`__guarantee\` property that exists only in the type:
+// guessing. Each marker has an optional \`"__guarantee:<name>"\` property that exists only in the type:
 // nothing here adds code at run time. See https://github.com/khoing1111/ts-stateward/blob/main/docs/user/guarantees.md
 import { createContext, type Context } from "react";
 
@@ -25,7 +25,7 @@ import { createContext, type Context } from "react";
  * reads it is rendered under its Provider, and reports any it cannot prove. Readers need no check
  * for a missing Provider.
  */
-export type RequiredContext<T> = Context<T> & { readonly __guarantee?: "required-context" };
+export type RequiredContext<T> = Context<T> & { readonly "__guarantee:required-context"?: true };
 
 /** Creates a \`RequiredContext\`: it has no default, since no reader can run without a Provider. */
 export function ${HELPER}<T>(): RequiredContext<T> {

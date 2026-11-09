@@ -1,6 +1,10 @@
 import { describeStatus, type GuaranteeProof } from "@stateward/core/internal";
 import type { Location } from "@stateward/core/internal";
+import { describeTraitSource, type TraitSource } from "@stateward/core";
 import { plural } from "./format.js";
+
+/** A guarantee whose plugin names no source is stated by the project's marker type. */
+const MARKER: TraitSource = { kind: "marker" };
 
 /**
  * `stateward guarantees`: every guarantee the code states, where, whether it is proven, and the
@@ -43,7 +47,7 @@ export function formatGuaranteesPretty(proofs: readonly GuaranteeProof[], locate
   if (proofs.length === 0) {
     return [
       "No guarantee is stated in this project.",
-      "A guarantee is a type that states a promise, such as `RequiredContext` (the react-context pack) or `Owned` (the ownership pack): stateward then proves it everywhere. See docs/user/guarantees.md.",
+      "A guarantee is a trait the code states, such as `RequiredContext` (the react-context pack), `Owned` or `Release` (the ownership pack): stateward then proves it everywhere. See docs/user/guarantees.md.",
       "",
     ].join("\n");
   }
@@ -51,6 +55,7 @@ export function formatGuaranteesPretty(proofs: readonly GuaranteeProof[], locate
     const { stated, status } = proof;
     const lines = [
       `${stated.name}: ${stated.marker}  ${at(locate(stated.location))}`,
+      `  stated by ${describeTraitSource(stated.source ?? MARKER)}`,
       `  ${describeStatus(proof)}`,
     ];
     if (status.kind === "unproven") {
@@ -59,7 +64,7 @@ export function formatGuaranteesPretty(proofs: readonly GuaranteeProof[], locate
       );
     }
     if (stated.covered.length > 0 && status.kind !== "unused") {
-      lines.push(`  ${stated.covers}:`);
+      lines.push(`  ${stated.covers.many}:`);
       lines.push(
         ...listed(stated.covered, (place) => `    ${place.name}  ${at(locate(place.location))}`),
       );
@@ -81,6 +86,7 @@ export function formatGuaranteesPretty(proofs: readonly GuaranteeProof[], locate
 export function formatGuaranteesJson(proofs: readonly GuaranteeProof[], locate: Locate): string {
   const guarantees = proofs.map(({ stated, status }) => ({
     guarantee: stated.guarantee,
+    source: stated.source ?? MARKER,
     marker: stated.marker,
     name: stated.name,
     ...locate(stated.location),
@@ -90,7 +96,7 @@ export function formatGuaranteesJson(proofs: readonly GuaranteeProof[], locate: 
       status.kind === "unproven"
         ? status.errors.map((error) => ({ ...locate(error.location), message: error.message }))
         : [],
-    covers: stated.covers,
+    covers: stated.covers.many,
     covered: stated.covered.map((place) => ({ name: place.name, ...locate(place.location) })),
   }));
   return JSON.stringify({ guarantees, summary: countsOf(proofs) }, null, 2);

@@ -18,63 +18,39 @@ Each rule's page has its options and what it does not catch. One rule or a whole
 
 | Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
 | --- | --- | --- | --- | --- | --- |
-| [default-hides-cases](../rules/unions/default-hides-cases.md) | a `default` that handles cases the switch does not list, or that has no `never` check | A case added to the union later goes to the `default` with no compile error; listing the cases makes each switch fail to compile until it handles the new case. | Core | error | error |
-| [if-chain-misses-case](../rules/unions/if-chain-misses-case.md) | an `if` / `else if` chain over a union that misses a case or has no `never` check | A case added to the union later goes to the last `else` with no compile error; testing every case and checking the rest with `never` makes the chain fail to compile. | Core | error | error |
-| [tag-does-not-discriminate](../rules/unions/tag-does-not-discriminate.md) | a tag like `kind` that is `string` in one member, so a test on it does not pick a member | When `kind` is `string` in one member, testing `kind` does not narrow the union, so TypeScript cannot check which properties each branch reads. | Coverage | info | error |
+| [non-exhaustive-switch](../rules/unions/non-exhaustive-switch.md) | a `switch` over a union that misses a case, or whose `default` handles a case nobody allowed | Every `switch` over a union handles every case: a `switch` without a `default` lists them all, and a `default` handles only the cases it allows, so a case added later is reported where it is not handled. | Core | error | error |
+| [ambiguous-discriminant](../rules/unions/ambiguous-discriminant.md) | a tag like `kind` that is `string` in one member, so a test on it does not pick a member | A tag like `kind` tells the members of a union apart only when every member gives it a literal; a member where it is `string` makes every test on it ambiguous. | Coverage | info | error |
 
-## [default-hides-cases](../rules/unions/default-hides-cases.md)
+## [non-exhaustive-switch](../rules/unions/non-exhaustive-switch.md)
 
-A case added to the union later goes to the `default` with no compile error; listing the cases makes each switch fail to compile until it handles the new case.
+Every `switch` over a union handles every case: a `switch` without a `default` lists them all, and a `default` handles only the cases it allows, so a case added later is reported where it is not handled.
 
 ```ts
-type UploadStatus = "idle" | "uploading" | "failed";
+type Folder = "inbox" | "archive" | "newsletters";
 
-export function label(status: UploadStatus): string {
-  switch (status) {
-    case "idle":
-      return "Choose a file";
+export function title(folder: Folder): string {
+  switch (folder) {
+    case "inbox":
+      return "Inbox";
+    case "archive":
+      return "Archive";
     default:
-      return "Uploading…";
+      return "Mail";
   }
 }
 ```
 
 ```text
-error[unions/default-hides-cases]: "failed" and "uploading" of `status` are not listed; `default` handles them
+error[unions/non-exhaustive-switch]: `switch` on `folder` does not handle "newsletters"
 ```
 
-Fix: give each case its own branch, and put `status satisfies never;` in the `default` so a case added later stops the build here.
+Fix: give the case its own `case`.
 
 Core rule: error under `recommended` and `strict`. Group: `unions/cases`.
 
-## [if-chain-misses-case](../rules/unions/if-chain-misses-case.md)
+## [ambiguous-discriminant](../rules/unions/ambiguous-discriminant.md)
 
-A case added to the union later goes to the last `else` with no compile error; testing every case and checking the rest with `never` makes the chain fail to compile.
-
-```ts
-// …
-export function describe(job: Job): string {
-  if (job.kind === "idle") {
-    return "Waiting";
-  } else if (job.kind === "running") {
-    return `${String(job.progress)}%`;
-  } else {
-    return "Done";
-  }
-}
-```
-
-```text
-warning[unions/if-chain-misses-case]: "failed" of `job.kind` is not tested; `else` handles it
-```
-
-Fix: test every case, and end the chain with an `else` that checks for `never`.
-
-Core rule: error under `recommended` and `strict`. Group: `unions/cases`.
-
-## [tag-does-not-discriminate](../rules/unions/tag-does-not-discriminate.md)
-
-When `kind` is `string` in one member, testing `kind` does not narrow the union, so TypeScript cannot check which properties each branch reads.
+A tag like `kind` tells the members of a union apart only when every member gives it a literal; a member where it is `string` makes every test on it ambiguous.
 
 ```ts
 export type Message =
@@ -83,9 +59,9 @@ export type Message =
 ```
 
 ```text
-info[unions/tag-does-not-discriminate]: `kind` does not tell the members of `Message` apart: one member has "chat", another `string`
+info[unions/ambiguous-discriminant]: `kind` does not tell the members of `Message` apart: one member has `string`
 ```
 
-Fix: give every member its own literal, and keep the catch-all apart from the union.
+Fix: give the catch-all member its own tag, and keep the value that came in in another field. One function where the data comes in maps it.
 
 Coverage rule (it points at code whose types do not say enough to check it): info under `recommended`, error under `strict`. Group: `unions/cases`.

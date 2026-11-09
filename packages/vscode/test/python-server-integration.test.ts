@@ -172,7 +172,12 @@ describe.skipIf(server === undefined)(
       expect(ruleId).toBe(RULE);
 
       // Explain goes to the server of the active Python document: this one.
-      expect(routeFor({ fsPath: file, languageId: "python" }, [folder], true)).toEqual({
+      expect(
+        routeFor({ fsPath: file, languageId: "python" }, [folder], {
+          running: true,
+          project: true,
+        }),
+      ).toEqual({
         kind: "python",
         folder,
       });

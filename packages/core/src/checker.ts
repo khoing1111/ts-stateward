@@ -5,6 +5,7 @@ import { emptyCache } from "./cache.js";
 import type { ResultCache } from "./cache.js";
 import type { TimingRecorder } from "./timing.js";
 import { reviewFixes, verifyFixSet } from "./fixes.js";
+import { legacyMarkerRewrite } from "./guarantee-markers.js";
 import {
   drain,
   filePhaseRun,
@@ -389,16 +390,21 @@ export function createChecker({
     refactors(file, start, end) {
       const found = lookup(file);
       if (found === undefined) return [];
-      const offered = config.plugins.flatMap(
-        (plugin) =>
-          plugin.editor?.codeActions?.({
-            file,
-            start,
-            end,
-            ...found,
-            projectSummaries: (ruleId) => summaries.get(ruleId)?.(),
-          }) ?? [],
-      );
+      const rewrite = legacyMarkerRewrite(found.sourceFile, start, end);
+      const offered = [
+        ...config.plugins.flatMap(
+          (plugin) =>
+            plugin.editor?.codeActions?.({
+              file,
+              start,
+              end,
+              ...found,
+              projectSummaries: (ruleId) => summaries.get(ruleId)?.(),
+            }) ?? [],
+        ),
+        // Core reads both marker forms, so it offers the rewrite itself: the markers are no pack's.
+        ...(rewrite === undefined ? [] : [rewrite]),
+      ];
       // A finding only to reuse the fix review: it is never reported.
       const findings: Finding[] = offered.map((action) => ({
         kind: "problem",

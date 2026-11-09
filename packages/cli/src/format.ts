@@ -4,6 +4,7 @@ import {
   compareFindings,
   displayPath,
   ignoreFix,
+  laidOutHint,
 } from "@stateward/core/internal";
 import type {
   CheckNotes,
@@ -510,7 +511,7 @@ export function formatPretty(result: CheckResult, options: FormatOptions): strin
       `${paint(color, `${label}[${finding.ruleId}]`)}${paint("bold", `: ${finding.message}`)}`,
       `${pad}${paint("blue", "-->")} ${where(finding.location)}`,
       ...frame(finding.location, color, pad),
-      detail("fix", finding.hint.split("\n").join(`\n${pad}   `)),
+      detail("fix", laidOutHint(finding.hint, `${pad}   `)),
       ...related.map((entry) => {
         // The frame above already shows this line: the note does not repeat where it is.
         const here =

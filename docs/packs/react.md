@@ -25,7 +25,6 @@ Each rule's page has its options and what it does not catch. One rule or a whole
 | [timer-runs-after-unmount](../rules/react/timer-runs-after-unmount.md) | a timer kept in a ref, never cleared on unmount, that navigates or calls out later | A timer kept in a ref and not cleared on unmount still runs after the component is gone, and can navigate or call out from a page the user left. | Core | warning | warning |
 | [dependency-changes-every-render](../rules/react/dependency-changes-every-render.md) | an effect or memo dependency that a hook in the project creates anew on every render | A dependency that a hook in the project creates on every render makes the effect or `useMemo` run on every render, and a `memo` child render every time. | Core | warning | warning |
 | [index-key-on-reordered-list](../rules/react/index-key-on-reordered-list.md) | `key={index}` on a list that is filtered, sorted or added to at the front (guess) | With `key={index}` on a list that is filtered or reordered, React keeps each row's state by position, so the state moves to a different item. | Core | warning | warning |
-| [provider-value-changes-every-render](../rules/react/provider-value-changes-every-render.md) | a context Provider given a new object or function on every render | A Provider value created on every render re-renders every component that reads the context, even when nothing in the value changed. | Core | warning | warning |
 | [closure-reads-stale-state](../rules/react/closure-reads-stale-state.md) | a timer, listener or callback that sets state from a value captured in an old render | A timer or listener created in an earlier render reads the state of that render; setting state from it overwrites newer values, which an updater avoids. | Core | warning | warning |
 | [state-copies-prop](../rules/react/state-copies-prop.md) | a state copied from a prop and kept in sync by an effect | A state that copies a prop, kept in sync by an effect, differs from the prop for one render after each change and can overwrite what the user typed. | Core | warning | warning |
 
@@ -201,30 +200,6 @@ warning[react/index-key-on-reordered-list]: list keyed by index, but `todos` is 
 Fix: key each row by something that belongs to the item and does not change.
 
 Core rule: warning under `recommended` and `strict`. It judges from patterns in the code, not only from types, so it can be wrong: it is never an error unless you make it one. Group: `react/render`.
-
-## [provider-value-changes-every-render](../rules/react/provider-value-changes-every-render.md)
-
-A Provider value created on every render re-renders every component that reads the context, even when nothing in the value changed.
-
-```tsx
-import { createContext, useState, type ReactNode } from "react";
-
-type Theme = { theme: string; setTheme: (theme: string) => void };
-const ThemeContext = createContext<Theme | undefined>(undefined);
-
-export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState("light");
-  return <ThemeContext.Provider value={{ theme, setTheme }}>{children}</ThemeContext.Provider>;
-}
-```
-
-```text
-warning[react/provider-value-changes-every-render]: `ThemeContext` value is a new object every render: all its readers re-render
-```
-
-Fix: wrap the value in `useMemo`, with what it reads as dependencies.
-
-Core rule: warning under `recommended` and `strict`. Group: `react/render`.
 
 ## [closure-reads-stale-state](../rules/react/closure-reads-stale-state.md)
 

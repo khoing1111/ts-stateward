@@ -44,7 +44,7 @@ It checks the staged version of each staged file, and reports only findings in s
 point into one:
 
 ```text
-error[unions/default-hides-cases]: "failed" of `status` is not listed; `default` handles it
+error[unions/non-exhaustive-switch]: `switch` on `status` does not handle "failed"
  --> src/status.ts:9:5
 ...
 1 error in 1 changed file (4 problems elsewhere not shown, 0.4 s).

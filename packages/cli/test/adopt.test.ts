@@ -18,16 +18,15 @@ const fixtures = fileURLToPath(new URL("fixtures", import.meta.url));
 
 /*
  * The fixture lives in a work folder inside the package so its config finds
- * @stateward/plugin-unions and @stateward/plugin-records. Findings: if-chain 1, lookup 1, default-hides-cases 2,
- * table-type-too-loose and tag-does-not-discriminate 0 (the plan order); the rule ids are written out so the order is visible.
+ * @stateward/plugin-unions and @stateward/plugin-records. Findings: lookup 1, non-exhaustive-switch 2,
+ * ambiguous-table, duplicate-key and ambiguous-discriminant 0 (the plan order; unchecked-key is an add-on); the rule ids are written out so the order is visible.
  */
 const ORDER = [
+  "records/ambiguous-table",
   "records/duplicate-key",
-  "records/table-type-too-loose",
-  "unions/if-chain-misses-case",
   "records/lookup-misses-key",
-  "unions/default-hides-cases",
-  "unions/tag-does-not-discriminate",
+  "unions/non-exhaustive-switch",
+  "unions/ambiguous-discriminant",
 ] as const;
 
 let work = "";
@@ -80,25 +79,24 @@ describe("stateward plan", { timeout: 20_000 }, () => {
     expect(code).toBe(0);
     expect(stderr).toBe("");
     const lines = stdout.split("\n");
-    expect(lines[0]).toMatch(/^order {2}rule {30}findings {2}fixable {2}protects$/);
+    expect(lines[0]).toMatch(/^order {2}rule {27}findings {2}fixable {2}protects$/);
     // Rules sit under their group; groups come in the order of their first rule, and the order
-    // numbers stay the plan's own (rule 5 is the second of "cases").
-    const shape = lines.slice(1, 11).map((line) => line.split(/\s{2,}/).slice(0, 4));
+    // numbers stay the plan's own.
+    const shape = lines.slice(1, 10).map((line) => line.split(/\s{2,}/).slice(0, 4));
     expect(shape).toEqual([
       [""],
       ["records/keys"],
       ["1", ORDER[0], "0", "0"],
       ["2", ORDER[1], "0", "0"],
-      ["4", ORDER[3], "1", "0"],
+      ["3", ORDER[2], "1", "0"],
       [""],
       ["unions/cases"],
-      ["3", ORDER[2], "1", "0"],
-      ["5", ORDER[4], "2", "2"],
-      ["6", ORDER[5], "0", "0"],
+      ["4", ORDER[3], "2", "2"],
+      ["5", ORDER[4], "0", "0"],
     ]);
     expect(lines[3]).toContain("(nothing to fix, turns on clean)");
-    expect(lines[10]).toContain("(nothing to fix, turns on clean)");
-    expect(lines.slice(11)).toEqual([
+    expect(lines[9]).toContain("(nothing to fix, turns on clean)");
+    expect(lines.slice(10)).toEqual([
       "",
       "on: none yet",
       `next: run \`stateward next\` to turn on rule 3 (${ORDER[2]}).`,
@@ -108,12 +106,12 @@ describe("stateward plan", { timeout: 20_000 }, () => {
   });
 
   it("gives the same as data with --format json, ignoring the rollout file", async () => {
-    writeEnabled([ORDER[4]]);
+    writeEnabled([ORDER[3]]);
     const { code, stdout } = await run(["plan", "--format", "json"]);
     expect(code).toBe(0);
     expect(JSON.parse(stdout)).toMatchObject({
       rollout: true,
-      enabled: [ORDER[4]],
+      enabled: [ORDER[3]],
       rules: [
         {
           order: 1,
@@ -124,12 +122,11 @@ describe("stateward plan", { timeout: 20_000 }, () => {
           fixable: 0,
         },
         { order: 2, ruleId: ORDER[1], group: "records/keys", findings: 0 },
-        { order: 3, ruleId: ORDER[2], group: "unions/cases", findings: 1 },
-        { order: 4, ruleId: ORDER[3], findings: 1 },
-        { order: 5, ruleId: ORDER[4], findings: 2 },
-        { order: 6, ruleId: ORDER[5], tier: "coverage", findings: 0 },
+        { order: 3, ruleId: ORDER[2], group: "records/keys", findings: 1 },
+        { order: 4, ruleId: ORDER[3], group: "unions/cases", findings: 2 },
+        { order: 5, ruleId: ORDER[4], tier: "coverage", findings: 0 },
       ],
-      next: `fix the 2 findings of \`${ORDER[4]}\`, then run \`stateward next\``,
+      next: `fix the 2 findings of \`${ORDER[3]}\`, then run \`stateward next\``,
     });
   });
 
@@ -178,16 +175,16 @@ describe("stateward next", { timeout: 40_000 }, () => {
     expect(code).toBe(0);
     expect(stdout).toBe(
       [
-        `also on, nothing to fix: ${ORDER[0]}, ${ORDER[1]}, ${ORDER[5]}`,
+        `also on, nothing to fix: ${ORDER[0]}, ${ORDER[1]}, ${ORDER[4]}`,
         `on: ${ORDER[2]} (1 finding, 0 fixable)`,
-        "A case added to the union later goes to the last `else` with no compile error; testing every case and checking the rest with `never` makes the chain fail to compile.",
+        'A lookup like `labels[status]` is typed as always present; a value with no entry gives `undefined`, and the page shows "undefined" or the next call throws.',
         "run stateward check to see them",
         "",
       ].join("\n"),
     );
     expect(enabledOnDisk()).toEqual({
       version: 1,
-      enabled: [ORDER[0], ORDER[1], ORDER[5], ORDER[2]],
+      enabled: [ORDER[0], ORDER[1], ORDER[4], ORDER[2]],
     });
   });
 
@@ -207,7 +204,7 @@ describe("stateward next", { timeout: 40_000 }, () => {
     );
     expect(enabledOnDisk()).toEqual({
       version: 1,
-      enabled: [ORDER[0], ORDER[1], ORDER[5], ORDER[2]],
+      enabled: [ORDER[0], ORDER[1], ORDER[4], ORDER[2]],
     });
   });
 
@@ -215,15 +212,15 @@ describe("stateward next", { timeout: 40_000 }, () => {
     await run(["next"]);
     const { code, stdout } = await run(["next", "--anyway"]);
     expect(code).toBe(0);
-    expect(stdout).toContain(`on: ${ORDER[3]} (1 finding, 0 fixable)`);
+    expect(stdout).toContain(`on: ${ORDER[3]} (2 findings, 2 fixable)`);
     expect(enabledOnDisk()).toEqual({
       version: 1,
-      enabled: [ORDER[0], ORDER[1], ORDER[5], ORDER[2], ORDER[3]],
+      enabled: [ORDER[0], ORDER[1], ORDER[4], ORDER[2], ORDER[3]],
     });
   });
 
   it("moves on without --anyway once the last rule has no findings", async () => {
-    writeEnabled([ORDER[5]]);
+    writeEnabled([ORDER[4]]);
     const { code, stdout } = await run(["next"]);
     expect(code).toBe(0);
     expect(stdout).toContain(`on: ${ORDER[2]} (1 finding, 0 fixable)`);
@@ -270,13 +267,13 @@ describe("stateward check with a rollout file", { timeout: 20_000 }, () => {
 describe("stateward check --rule", { timeout: 20_000 }, () => {
   it("runs that rule alone, pretty and JSON, whatever the rollout says", async () => {
     writeEnabled([ORDER[2]]);
-    const pretty = await run(["check", "--rule", ORDER[4]]);
+    const pretty = await run(["check", "--rule", ORDER[3]]);
     expect(pretty.code).toBe(1);
-    expect(pretty.stdout).toContain(`error[${ORDER[4]}]`);
+    expect(pretty.stdout).toContain(`error[${ORDER[3]}]`);
     expect(pretty.stdout).not.toContain(`[${ORDER[2]}]`);
     expect(pretty.stdout).toContain("2 errors in 1 file");
-    const json = await run(["check", "--rule", ORDER[4], "--format", "json"]);
-    expect(ruleIdsIn(json.stdout)).toEqual([ORDER[4]]);
+    const json = await run(["check", "--rule", ORDER[3], "--format", "json"]);
+    expect(ruleIdsIn(json.stdout)).toEqual([ORDER[3]]);
   });
 
   it("exits 2 for an unknown rule and lists the known ones", async () => {
@@ -284,7 +281,7 @@ describe("stateward check --rule", { timeout: 20_000 }, () => {
     expect(code).toBe(2);
     expect(stdout).toBe("");
     expect(stderr).toBe(
-      `stateward: unknown rule "guards/nope"; known rules: ${[...ORDER].sort().join(", ")}\n`,
+      `stateward: unknown rule "guards/nope"; known rules: ${[...ORDER, "records/unchecked-key"].sort().join(", ")}\n`,
     );
   });
 
@@ -314,15 +311,14 @@ describe("an old id from the betas", { timeout: 20_000 }, () => {
 
 describe("stateward check --group", { timeout: 20_000 }, () => {
   it("runs the rules of that group alone, whatever the rollout says", async () => {
-    writeEnabled([ORDER[3]]);
+    writeEnabled([ORDER[2]]);
     const pretty = await run(["check", "--group", "unions/cases"]);
     expect(pretty.code).toBe(1);
-    expect(pretty.stdout).toContain(`[${ORDER[4]}]`);
-    expect(pretty.stdout).toContain(`[${ORDER[2]}]`);
-    expect(pretty.stdout).not.toContain(`[${ORDER[3]}]`);
+    expect(pretty.stdout).toContain(`[${ORDER[3]}]`);
+    expect(pretty.stdout).not.toContain(`[${ORDER[2]}]`);
     expect(pretty.stdout).not.toContain("rollout:");
     const json = await run(["check", "--group", "records/keys", "--format", "json"]);
-    expect(ruleIdsIn(json.stdout)).toEqual([ORDER[3]]);
+    expect(ruleIdsIn(json.stdout)).toEqual([ORDER[2]]);
   });
 
   it("combines with --max", async () => {
@@ -357,7 +353,7 @@ describe("stateward check --group", { timeout: 20_000 }, () => {
     );
     const { code, stdout } = await run(["check", "--group", "unions/cases"]);
     expect(code).toBe(0);
-    expect(stdout).toContain(`warning[${ORDER[4]}]`);
+    expect(stdout).toContain(`warning[${ORDER[3]}]`);
   });
 });
 
@@ -404,7 +400,7 @@ describe("stateward init on a project with many findings", { timeout: 20_000 }, 
       ].join("\n"),
     );
     expect(stdout).toContain(
-      "  29 findings across 3 rules: turning on one rule at a time (stateward plan, stateward next)",
+      "  28 findings across 2 rules: turning on one rule at a time (stateward plan, stateward next)",
     );
     expect(stdout).toContain(NEXT_FIRST_RULE);
     // The generated config works: plan reads it and nothing is on yet.
@@ -413,8 +409,8 @@ describe("stateward init on a project with many findings", { timeout: 20_000 }, 
     expect(plan.stdout).toContain("on: none yet");
   });
 
-  it("leaves rollout off at exactly 20 problems (4 in the fixture, 16 more)", async () => {
-    legacyProject(16);
+  it("leaves rollout off at exactly 20 problems (3 in the fixture, 17 more)", async () => {
+    legacyProject(17);
     const { stdout } = await run(["init", "--packs", "unions,records"]);
     expect(readFileSync(path.join(work, "stateward.config.ts"), "utf8")).not.toContain("rollout");
     expect(stdout).not.toContain("one rule at a time");

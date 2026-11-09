@@ -7,8 +7,11 @@ import type { CliEnv, ExitCode } from "../src/main.js";
 
 /**
  * A project with three `RequiredContext`s: `ThemeContext`, proven for two readers; `AuthContext`,
- * read by `<Profile>` with no Provider above it; and `LocaleContext`, read by nothing. And two
+ * read by `<Profile>` with no Provider above it; and `LocaleContext`, read by nothing. Two
  * `Owned` values: `settings`, changed only by its own module; `session`, changed by `toolbar.ts`.
+ * And `watchFeed`, stated `Release`, whose one caller hands what it returns on. `StoreContext`,
+ * stated `SingleProvider` and `Stable`, provided once with a module constant; `ModeContext`, stated
+ * `Stable`, provided with state in another file.
  */
 const fixture = fileURLToPath(new URL("fixtures/guarantees", import.meta.url));
 const scratchRoot = fileURLToPath(new URL("fixtures", import.meta.url));
@@ -42,21 +45,31 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
     expect(stdout).toBe(
       [
         "ThemeContext: RequiredContext<Theme>  src/contexts.ts:6",
+        "  stated by the project's marker",
         "  proven for 2 readers",
         "  readers:",
         "    <Header>  src/Readers.tsx:4",
         "    <Footer>  src/Readers.tsx:8",
         "",
         "AuthContext: RequiredContext<User>  src/contexts.ts:7",
+        "  stated by the project's marker",
         "  not proven: 1 error",
         "    src/main.tsx:4  `<App>` is rendered without `AuthContext.Provider`",
         "  readers:",
         "    <Profile>  src/Readers.tsx:12",
         "",
         "LocaleContext: RequiredContext<string>  src/contexts.ts:8",
+        "  stated by the project's marker",
         "  unused: no reader, so nothing to prove; use it or drop the marker",
         "",
+        "watchFeed: Release  src/feed.ts:3",
+        "  stated by the project's marker",
+        "  proven for 1 caller",
+        "  callers:",
+        "    feed.ts  src/feed.ts:9",
+        "",
         "session: Owned<{ user: string | null }>  src/session.ts:3",
+        "  stated by the project's marker",
         "  not proven: 1 error",
         "    src/toolbar.ts:9  `session` is changed outside its owner, `src/session.ts`",
         "  writers:",
@@ -64,11 +77,32 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
         "    toolbar.ts  src/toolbar.ts:9",
         "",
         "settings: Owned<{ theme: string }>  src/settings.ts:3",
+        "  stated by the project's marker",
         "  proven for 1 writer",
         "  writers:",
         "    settings.ts  src/settings.ts:6",
         "",
-        "5 guarantees: 2 proven, 2 not proven, 1 unused. `stateward check` shows each error with the path to it.",
+        "StoreContext: SingleProvider  src/stores.ts:6",
+        "  stated by the project's marker",
+        "  proven for 1 Provider",
+        "  Providers:",
+        "    <StoreContext.Provider>  src/Providers.tsx:7",
+        "",
+        "StoreContext: Stable  src/stores.ts:6",
+        "  stated by the project's marker",
+        "  proven for 1 Provider",
+        "  Providers:",
+        "    <StoreContext.Provider>  src/Providers.tsx:7",
+        "",
+        // Provided in another file than the context: the error is counted by the Provider it is in.
+        "ModeContext: Stable  src/stores.ts:7",
+        "  stated by the project's marker",
+        "  not proven: 1 error",
+        "    src/Providers.tsx:13  `ModeContext` is stated `Stable`, but its value changes when `mode` changes",
+        "  Providers:",
+        "    <ModeContext.Provider>  src/Providers.tsx:13",
+        "",
+        "9 guarantees: 5 proven, 3 not proven, 1 unused. `stateward check` shows each error with the path to it.",
         "",
       ].join("\n"),
     );
@@ -83,6 +117,7 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
       guarantees: [
         {
           guarantee: "required-context",
+          source: { kind: "marker" },
           marker: "RequiredContext<Theme>",
           name: "ThemeContext",
           file: "src/contexts.ts",
@@ -98,6 +133,7 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
         },
         {
           guarantee: "required-context",
+          source: { kind: "marker" },
           marker: "RequiredContext<User>",
           name: "AuthContext",
           file: "src/contexts.ts",
@@ -116,6 +152,7 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
         },
         {
           guarantee: "required-context",
+          source: { kind: "marker" },
           marker: "RequiredContext<string>",
           name: "LocaleContext",
           file: "src/contexts.ts",
@@ -127,7 +164,21 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
           covered: [],
         },
         {
+          guarantee: "release",
+          source: { kind: "marker" },
+          marker: "Release",
+          name: "watchFeed",
+          file: "src/feed.ts",
+          line: 3,
+          rule: "ownership/resource-not-released",
+          status: "proven",
+          errors: [],
+          covers: "callers",
+          covered: [{ name: "feed.ts", file: "src/feed.ts", line: 9 }],
+        },
+        {
           guarantee: "owned",
+          source: { kind: "marker" },
           marker: "Owned<{ user: string | null }>",
           name: "session",
           file: "src/session.ts",
@@ -149,6 +200,7 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
         },
         {
           guarantee: "owned",
+          source: { kind: "marker" },
           marker: "Owned<{ theme: string }>",
           name: "settings",
           file: "src/settings.ts",
@@ -159,8 +211,54 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
           covers: "writers",
           covered: [{ name: "settings.ts", file: "src/settings.ts", line: 6 }],
         },
+        {
+          guarantee: "single-provider",
+          source: { kind: "marker" },
+          marker: "SingleProvider",
+          name: "StoreContext",
+          file: "src/stores.ts",
+          line: 6,
+          rule: "react-context/provider-nested",
+          status: "proven",
+          errors: [],
+          covers: "Providers",
+          covered: [{ name: "<StoreContext.Provider>", file: "src/Providers.tsx", line: 7 }],
+        },
+        {
+          guarantee: "stable",
+          source: { kind: "marker" },
+          marker: "Stable",
+          name: "StoreContext",
+          file: "src/stores.ts",
+          line: 6,
+          rule: "react-context/provider-value-changes-every-render",
+          status: "proven",
+          errors: [],
+          covers: "Providers",
+          covered: [{ name: "<StoreContext.Provider>", file: "src/Providers.tsx", line: 7 }],
+        },
+        {
+          guarantee: "stable",
+          source: { kind: "marker" },
+          marker: "Stable",
+          name: "ModeContext",
+          file: "src/stores.ts",
+          line: 7,
+          rule: "react-context/provider-value-changes-every-render",
+          status: "unproven",
+          errors: [
+            {
+              file: "src/Providers.tsx",
+              line: 13,
+              message:
+                "`ModeContext` is stated `Stable`, but its value changes when `mode` changes",
+            },
+          ],
+          covers: "Providers",
+          covered: [{ name: "<ModeContext.Provider>", file: "src/Providers.tsx", line: 13 }],
+        },
       ],
-      summary: { proven: 2, unproven: 2, unused: 1, off: 0 },
+      summary: { proven: 5, unproven: 3, unused: 1, off: 0 },
     });
   });
 
@@ -178,16 +276,16 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
     );
     const { code, stdout } = await run(["guarantees"], dir);
     expect(stdout).toContain(
-      "ThemeContext: RequiredContext<Theme>  src/contexts.ts:6\n  not checked: react-context/provider-missing is not on\n",
+      "ThemeContext: RequiredContext<Theme>  src/contexts.ts:6\n  stated by the project's marker\n  not checked: react-context/provider-missing is not on\n",
     );
-    expect(stdout).toContain("5 guarantees: 0 proven, 5 not checked.");
+    expect(stdout).toContain("9 guarantees: 0 proven, 9 not checked.");
     expect(code).toBe(0);
   });
 
   it("says when the project states no guarantee", async () => {
     const { code, stdout } = await run(["guarantees"], path.join(scratchRoot, "recommended"));
     expect(stdout).toBe(
-      "No guarantee is stated in this project.\nA guarantee is a type that states a promise, such as `RequiredContext` (the react-context pack) or `Owned` (the ownership pack): stateward then proves it everywhere. See docs/user/guarantees.md.\n",
+      "No guarantee is stated in this project.\nA guarantee is a trait the code states, such as `RequiredContext` (the react-context pack), `Owned` or `Release` (the ownership pack): stateward then proves it everywhere. See docs/user/guarantees.md.\n",
     );
     expect(code).toBe(0);
   });

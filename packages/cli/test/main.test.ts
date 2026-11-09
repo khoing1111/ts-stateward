@@ -55,30 +55,36 @@ describe("stateward check", { timeout: 20_000 }, () => {
           "        type SystemEvent = Load \\| Timeout \\| …;",
           "  = docs: stateward explain team/max-union-members",
           "",
-          'error\\[unions/default-hides-cases\\]: "failed" of `status` is not listed; `default` handles it',
+          'error\\[unions/non-exhaustive-switch\\]: `switch` on `status` does not handle "failed"',
           " --> src/status.ts:9:5",
           "  \\|",
           "9 \\|     default:",
           "  \\| {5}\\^{7}",
-          "  = fix: list the case, then put `status satisfies never;` in the `default`; or name it in the `default` instead, if that is where it belongs:",
-          '        default: status satisfies "failed";',
-          "  = docs: stateward explain unions/default-hides-cases",
+          "  = fix: one of",
+          '      - add `case "failed":` with its own code',
+          '      - or allow it in `default`: `default: void \\(status satisfies "failed"\\);`',
+          "  = docs: stateward explain unions/non-exhaustive-switch",
           "",
-          "error\\[records/table-type-too-loose\\]: `labels` accepts any string key, so a misspelt or missing key still compiles",
+          "error\\[records/ambiguous-table\\]: `labels` accepts any string key, so a misspelt or missing key still compiles",
           "  --> src/status.ts:14:7",
           "   \\|",
           '14 \\| const labels: Record<string, string> = \\{ idle: "Idle", uploading: "Uploading" \\};',
           "   \\| {7}\\^{6}",
-          "   = fix: use `Partial<Record<string, string>>` for keys from outside; for fixed keys, look keys up as `keyof typeof labels` and use `satisfies`",
+          "   = fix: one of",
+          "       - type it `Partial<Record<string, string>>`, so each read handles a missing key",
+          "       - or use a `Map`, whose `get` returns `undefined` for a missing key",
+          "       - or build it with `Object.create\\(null\\)`, so it has no inherited keys such as `toString`",
+          "       - or check the key with `isKeyOf\\(labels, key\\)` before reading",
+          "       - or, for fixed keys, look keys up as `keyof typeof labels`, then remove the type and add `as const`",
           '   = note: keys: "idle", "uploading"',
-          "   = docs: stateward explain records/table-type-too-loose",
+          "   = docs: stateward explain records/ambiguous-table",
           "",
-          "error\\[react-context/fake-default-value\\]: `ThemeContext` defaults to a fake value, `\\{\\}`",
+          "error\\[react-context/fake-default-value\\]: `ThemeContext` defaults to `\\{\\}`, an empty object typed as the full value",
           " --> src/theme.tsx:5:29",
           "  \\|",
           "5 \\| export const ThemeContext = createContext\\(\\{\\}\\);",
           "  \\| {29}\\^{17}",
-          "  = fix: create it with `undefined` and read it in a hook that throws, so a missing Provider fails at once:",
+          "  = fix: create it with `undefined`, and read it in a hook that throws when the Provider is missing:",
           "        const ThemeContext = createContext<Theme \\| undefined>\\(undefined\\);",
           '        // in useTheme\\(\\): if \\(value === undefined\\) throw new Error\\("ThemeContext needs a Provider"\\);',
           "  = docs: stateward explain react-context/fake-default-value",
@@ -102,8 +108,8 @@ describe("stateward check", { timeout: 20_000 }, () => {
     expect(parsed).toMatchObject({
       findings: [
         { ruleId: "team/max-union-members", severity: "warning" },
-        { ruleId: "unions/default-hides-cases", severity: "error" },
-        { ruleId: "records/table-type-too-loose", severity: "error" },
+        { ruleId: "unions/non-exhaustive-switch", severity: "error" },
+        { ruleId: "records/ambiguous-table", severity: "error" },
         { ruleId: "react-context/fake-default-value", severity: "error" },
       ],
     });
@@ -126,19 +132,27 @@ describe("stateward check", { timeout: 20_000 }, () => {
         },
         {
           kind: "problem",
-          ruleId: "unions/default-hides-cases",
-          hint: 'list the case, then put `status satisfies never;` in the `default`; or name it in the `default` instead, if that is where it belongs:\n    default: status satisfies "failed";',
+          ruleId: "unions/non-exhaustive-switch",
+          hint: 'one of\n- add `case "failed":` with its own code\n- or allow it in `default`: `default: void (status satisfies "failed");`',
         },
         {
           kind: "problem",
-          ruleId: "records/table-type-too-loose",
-          hint: "use `Partial<Record<string, string>>` for keys from outside; for fixed keys, look keys up as `keyof typeof labels` and use `satisfies`\nno automatic fix: Type 'string | undefined' is not assignable to type 'string'.",
+          ruleId: "records/ambiguous-table",
+          hint: [
+            "one of",
+            "- type it `Partial<Record<string, string>>`, so each read handles a missing key",
+            "- or use a `Map`, whose `get` returns `undefined` for a missing key",
+            "- or build it with `Object.create(null)`, so it has no inherited keys such as `toString`",
+            "- or check the key with `isKeyOf(labels, key)` before reading",
+            "- or, for fixed keys, look keys up as `keyof typeof labels`, then remove the type and add `as const`",
+            "no automatic fix: Type 'string | undefined' is not assignable to type 'string'.",
+          ].join("\n"),
         },
         {
           kind: "problem",
           ruleId: "react-context/fake-default-value",
           hint: [
-            "create it with `undefined` and read it in a hook that throws, so a missing Provider fails at once:",
+            "create it with `undefined`, and read it in a hook that throws when the Provider is missing:",
             "    const ThemeContext = createContext<Theme | undefined>(undefined);",
             '    // in useTheme(): if (value === undefined) throw new Error("ThemeContext needs a Provider");',
           ].join("\n"),
@@ -238,7 +252,7 @@ describe("stateward check", { timeout: 20_000 }, () => {
     const { code, stdout, stderr } = await run(["check"], path.join(fixtures, "vite-solution"));
     expect(stderr).toBe("");
     expect(stdout).toContain(
-      "error[react-context/fake-default-value]: `ThemeContext` defaults to a fake value, `null!`",
+      "error[react-context/fake-default-value]: `ThemeContext` defaults to `null!`, a cast that is not a real value",
     );
     expect(stdout).toContain(" --> src/theme.ts:3:29");
     expect(stdout).toMatch(/1 error in 1 file/);
@@ -343,10 +357,10 @@ describe("stateward coverage", { timeout: 20_000 }, () => {
     expect(code).toBe(0);
     expect(stdout).toBe(
       [
-        "react-context: A component that needs a context is always rendered under its Provider.",
+        "react-context: Every context reader is under its Provider, defaults are real values, and Provider values keep their identity.",
         "1 place it cannot check yet",
-        "  src/theme.tsx:5:29  `ThemeContext` defaults to a fake value, `{}`",
-        "      fix: create it with `undefined` and read it in a hook that throws, so a missing Provider fails at once:",
+        "  src/theme.tsx:5:29  `ThemeContext` defaults to `{}`, an empty object typed as the full value",
+        "      fix: create it with `undefined`, and read it in a hook that throws when the Provider is missing:",
         "    const ThemeContext = createContext<Theme | undefined>(undefined);",
         '    // in useTheme(): if (value === undefined) throw new Error("ThemeContext needs a Provider");',
         "0 problems",
@@ -576,7 +590,7 @@ describe("stateward explain", { timeout: 20_000 }, () => {
     const { code, stderr } = await run(["explain", "react-context/nope"], example);
     expect(code).toBe(2);
     expect(stderr).toBe(
-      'stateward: unknown rule "react-context/nope"; known rules: react-context/fake-default-value, react-context/provider-missing, unions/default-hides-cases, unions/if-chain-misses-case, unions/tag-does-not-discriminate, records/lookup-misses-key, records/table-type-too-loose, records/duplicate-key, team/max-union-members\n',
+      'stateward: unknown rule "react-context/nope"; known rules: react-context/fake-default-value, react-context/provider-missing, react-context/provider-nested, react-context/provider-value-changes-every-render, react-context/value-changed-by-reader, unions/non-exhaustive-switch, unions/ambiguous-discriminant, records/lookup-misses-key, records/ambiguous-table, records/duplicate-key, records/unchecked-key, team/max-union-members\n',
     );
   });
 });

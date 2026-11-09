@@ -183,6 +183,14 @@ if (vendored && !options.install) {
   process.exit(0);
 }
 
+if (!vendored) {
+  // The paths name this clone's artifacts/ folder: on another machine, or in CI, they name nothing.
+  console.log(
+    `\nThe file: paths written (package.json${manager === "pnpm" ? ", pnpm-workspace.yaml" : ""} and the lockfile) point at ${path.join(root, "artifacts")}\n` +
+      `and work only on this machine: do not commit them. For a team or CI, run this again with --vendor.\n`,
+  );
+}
+
 const [program, args] = vendored ? plainInstallCommand(manager) : installCommand(manager, map);
 console.log(
   `$ ${program} ${args[0]} ... (${String(Object.keys(map).length)} stateward packages, ${manager})`,

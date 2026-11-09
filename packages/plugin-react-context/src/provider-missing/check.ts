@@ -28,7 +28,7 @@ type ConfiguredEntries = {
 };
 
 /** Matches the `entries` option against components (by file and export) and context names. */
-function configuredEntries(graph: Graph, entries: readonly EntryPoint[]): ConfiguredEntries {
+export function configuredEntries(graph: Graph, entries: readonly EntryPoint[]): ConfiguredEntries {
   const sites: Site[] = [];
   const problems: ConfiguredEntries["problems"] = [];
   for (const entry of entries) {
@@ -64,7 +64,7 @@ function configuredEntries(graph: Graph, entries: readonly EntryPoint[]): Config
   return { sites, problems };
 }
 
-function entrySites(graph: Graph): Site[] {
+export function entrySites(graph: Graph): Site[] {
   return graph.entries.flatMap(({ render }): Site[] => {
     if (render.kind !== "component") return [];
     const target = graph.resolve(render.id);
@@ -133,11 +133,7 @@ function reportMissingProviders(
     const info = graph.contexts.get(context);
     if (target === undefined || info === undefined) continue;
     if (matchesName(info.name, strict.ignored)) continue;
-    const text = message.missingProvider(
-      site.name,
-      info.name,
-      info.stated ? undefined : info.declare?.call,
-    );
+    const text = message.missingProvider(site.name, info.name);
     const trail = limitNotes([
       ...slotNote(graph, site.via, context),
       ...originNote(site.origin, target),

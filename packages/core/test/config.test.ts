@@ -143,9 +143,90 @@ describe("parseConfig", () => {
       errors: [
         'facts["a"] must be an object of functions',
         'facts["b"]["f"].throws must be an array of class names',
-        'facts["b"]["g"]: unknown fact "returns"; facts are "throws" or "rejects"',
-        'facts["b"]["h"] must be an object: { throws: [...], rejects: [...] }',
+        'facts["b"]["g"].returns must be "release" (call the returned function) or { release: "<method>" }',
+        'facts["b"]["h"] must be an object: { throws: [...], rejects: [...], returns: "release", neverRejects: true }',
       ],
+    });
+  });
+
+  it("keeps the release trait of package functions, and names each malformed one", () => {
+    const facts = {
+      "firebase/firestore": { onSnapshot: { returns: "release" } },
+      rxjs: { "Observable.subscribe": { returns: { release: "unsubscribe" } } },
+    };
+    expect(parseConfig({ plugins: [probe], facts }, dir)).toMatchObject({
+      ok: true,
+      value: { facts },
+    });
+    const result = parseConfig(
+      {
+        plugins: [probe],
+        facts: {
+          lib: {
+            a: { returns: "released" },
+            b: { returns: { release: "" } },
+            c: { returns: { release: "close", extra: 1 } },
+            d: { returns: { release: "un subscribe" } },
+            e: { unknown: [] },
+          },
+        },
+      },
+      dir,
+    );
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        'facts["lib"]["a"].returns must be "release" (call the returned function) or { release: "<method>" }',
+        'facts["lib"]["b"].returns.release must be a method name, such as "unsubscribe"',
+        'facts["lib"]["c"].returns must be "release" (call the returned function) or { release: "<method>" }',
+        'facts["lib"]["d"].returns.release must be a method name, such as "unsubscribe"',
+        'facts["lib"]["e"]: unknown fact "unknown"; facts are "throws", "rejects", "returns" or "neverRejects"',
+      ],
+    });
+  });
+
+  it("keeps `neverRejects: true`, and names a malformed or contradicted one", () => {
+    const facts = { "@reduxjs/toolkit": { cacheEntryRemoved: { neverRejects: true } } };
+    expect(parseConfig({ plugins: [probe], facts }, dir)).toMatchObject({
+      ok: true,
+      value: { facts },
+    });
+    const result = parseConfig(
+      {
+        plugins: [probe],
+        facts: {
+          lib: {
+            a: { neverRejects: false },
+            b: { neverRejects: "yes" },
+            c: { neverRejects: true, rejects: ["TimeoutError"] },
+            d: { neverRejects: true, rejects: [] },
+          },
+        },
+      },
+      dir,
+    );
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        'facts["lib"]["a"].neverRejects must be true (leave it out when it can reject)',
+        'facts["lib"]["b"].neverRejects must be true (leave it out when it can reject)',
+        'facts["lib"]["c"]: neverRejects and a non-empty rejects list contradict each other',
+      ],
+    });
+  });
+
+  it("checks the facts a plugin ships as the config's", () => {
+    const shipping = { ...probe, name: "shipping", facts: { lib: { a: { returns: 1 } } } };
+    expect(parseConfig({ plugins: [shipping] }, dir)).toEqual({
+      ok: false,
+      errors: [
+        'plugin "shipping": facts["lib"]["a"].returns must be "release" (call the returned function) or { release: "<method>" }',
+      ],
+    });
+    const good = { ...probe, name: "shipping", facts: { lib: { a: { returns: "release" } } } };
+    expect(parseConfig({ plugins: [good] }, dir)).toMatchObject({
+      ok: true,
+      value: { plugins: [{ facts: { lib: { a: { returns: "release" } } } }] },
     });
   });
 
@@ -175,7 +256,7 @@ describe("parseConfig", () => {
     expect(result).toEqual({
       ok: false,
       errors: [
-        'rules: unknown rule id "probe/nope"',
+        'rules: unknown rule id "probe/nope"; rules of the loaded plugins: probe/calls',
         'rules["probe/calls"] must be "error", "warning", "info", "off", or [severity, { options }]',
       ],
     });

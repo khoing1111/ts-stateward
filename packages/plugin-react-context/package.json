@@ -1,7 +1,7 @@
 {
   "name": "@stateward/plugin-react-context",
-  "version": "1.1.0",
-  "description": "stateward rules for React context: a component that needs a context is always rendered under its Provider.",
+  "version": "1.2.0",
+  "description": "stateward rules for React context: every reader is under its Provider, defaults are real values, Provider values keep their identity, and stated traits are proven.",
   "license": "MIT",
   "repository": {
     "type": "git",

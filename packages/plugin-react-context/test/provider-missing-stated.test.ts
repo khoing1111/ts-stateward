@@ -6,6 +6,9 @@ import type { Finding, Location } from "@stateward/core";
 import { checkFixture, expectMessageStandard } from "@stateward/core/testing";
 import { reactContext } from "../src/index.js";
 
+/** The Provider-value rule reads the same fixtures; its findings are tested in provider-value.test.ts. */
+const PROVIDER_RULES_ONLY = { "react-context/provider-value-changes-every-render": "off" } as const;
+
 const SLOW = 300_000;
 const FIXTURES = fileURLToPath(new URL("./fixtures/provider-missing", import.meta.url));
 
@@ -25,7 +28,7 @@ function show(finding: Finding, dir: string): string[] {
 
 function run(name: string, addons: readonly string[] = []): string[][] {
   const dir = path.join(FIXTURES, name);
-  const { findings } = checkFixture(dir, [reactContext()], {}, addons);
+  const { findings } = checkFixture(dir, [reactContext()], PROVIDER_RULES_ONLY, addons);
   expectMessageStandard(findings);
   return findings.map((finding) => show(finding, dir));
 }
@@ -35,7 +38,7 @@ const STATED = (file: string, context: string): string =>
 
 const missing = (site: string, tag: string, context: string): string[] => [
   `error ${site}: \`<${tag}>\` is rendered without \`${context}.Provider\``,
-  `fix: wrap it in \`<${context}.Provider value={…}>\`, or render it inside a component that provides it`,
+  `fix: one of\n- wrap it in \`<${context}.Provider value={…}>\`\n- or render it inside a component that provides \`${context}\``,
 ];
 
 describe("react-context/provider-missing: a context stated required", () => {
@@ -46,7 +49,7 @@ describe("react-context/provider-missing: a context stated required", () => {
       expect(run("stated-proven")).toEqual([
         [
           "info src/useTheme.ts:6: `useTheme` checks `ThemeCtx` at run time, but every reader is proven under its Provider",
-          "fix: drop the check: `ThemeCtx` is stated required, so its value is always there",
+          "fix: remove the check: `ThemeCtx` is stated required, so its value is always there",
         ],
       ]);
     },
@@ -76,12 +79,12 @@ describe("react-context/provider-missing: a context stated required", () => {
       expect(run("stated-dynamic")).toEqual([
         [
           "error src/Panels.tsx:4: `Settings` reads `ThemeCtx` (stated required), but no entry point renders it",
-          "fix: render it from your app under the Provider, or list it in `entries` in the react-context options",
+          "fix: one of\n- render it from the app, under the Provider\n- or list it in `entries` in the react-context options",
           STATED("src/contexts.ts:5", "ThemeCtx"),
         ],
         [
           "error src/Panels.tsx:16: `ThemeCtx` (stated required) is not proven: the component behind `<Panel>` cannot be followed",
-          "fix: pass the value as a prop, or render the component directly; constant maps are checked by the dynamic-components add-on",
+          "fix: one of\n- render the component directly; constant maps are checked by the dynamic-components add-on\n- or pass the value to the component as a prop instead of through the context",
           "note src/main.tsx:8: `<App>` is rendered",
           "note src/main.tsx:5: `<Dashboard>` is rendered",
           STATED("src/contexts.ts:5", "ThemeCtx"),
@@ -105,7 +108,7 @@ describe("react-context/provider-missing: a context stated required", () => {
       expect(run("stated-recognition")).toEqual([
         [
           "error src/main.tsx:5: `Unreached` reads `AuthCtx` (stated required), but no entry point renders it",
-          "fix: render it from your app under the Provider, or list it in `entries` in the react-context options",
+          "fix: one of\n- render it from the app, under the Provider\n- or list it in `entries` in the react-context options",
           STATED("src/contexts.ts:9", "AuthCtx"),
         ],
         [
@@ -135,7 +138,7 @@ describe("react-context/provider-missing: a context stated required", () => {
     expect(run("stated-no-entry")).toEqual([
       [
         "error src/contexts.ts:5: `ThemeCtx` (stated required) cannot be proven: no entry point is found",
-        "fix: render your app with `createRoot(…).render(<App/>)`, or list it in `entries` in the react-context options",
+        "fix: one of\n- render the app with `createRoot(…).render(<App/>)`\n- or list the entry point in `entries` in the react-context options",
         STATED("src/contexts.ts:5", "ThemeCtx"),
       ],
     ]);

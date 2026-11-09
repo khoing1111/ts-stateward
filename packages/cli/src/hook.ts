@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { displayPath } from "@stateward/core/internal";
+import { realPath } from "./real-path.js";
 import { describeScriptRun, projectScripts, scriptRunningStateward } from "./scripts.js";
 
 /**
@@ -187,32 +188,35 @@ export function shellQuoted(text: string): string {
 }
 
 function gitHook(cwd: string, spec: Spec, force: boolean): HookResult {
+  // git prints real paths: the project's folder takes that form too, so `cd` names the folder
+  // inside the repository, not a way back out of it through a link.
+  const here = realPath(cwd);
   let hookPath: string;
   let root: string;
   try {
     const git = (args: string[]): string =>
       execFileSync("git", args, {
-        cwd,
+        cwd: here,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       }).trim();
-    root = git(["rev-parse", "--show-toplevel"]);
-    hookPath = path.resolve(cwd, git(["rev-parse", "--git-path", `hooks/${spec.name}`]));
+    root = realPath(git(["rev-parse", "--show-toplevel"]));
+    hookPath = path.resolve(here, git(["rev-parse", "--git-path", `hooks/${spec.name}`]));
   } catch {
     return {
       ok: false,
       text: `No ${spec.name} hook written: ${cwd} is not inside a git repository. Run \`git init\` first, then \`stateward init --hook\`.\n`,
     };
   }
-  const inside = path.relative(root, cwd).split(path.sep).join("/");
+  const inside = path.relative(root, here).split(path.sep).join("/");
   // A hook runs from the repository root; the project may be a folder in it.
   const command = inside === "" ? spec.command : `cd ${shellQuoted(inside)} && ${spec.command}`;
-  const display = displayPath(cwd, hookPath);
+  const display = displayPath(here, hookPath);
   const existing = readText(hookPath);
   const found =
     existing === undefined
       ? undefined
-      : viaScript(display, existing, projectScripts(root, cwd), force);
+      : viaScript(display, existing, projectScripts(root, here), force);
   if (found !== undefined) return { ok: true, text: found };
   if (existing !== undefined) {
     return {

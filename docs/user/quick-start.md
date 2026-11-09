@@ -45,14 +45,15 @@ For yarn, pnpm or bun, and the VS Code extension, see [install.md](install.md). 
 
 ```text
 $ npx stateward check
-error[unions/default-hides-cases]: "failed", "loading" and "ready" of `status` are not listed; `default` handles them
+error[unions/non-exhaustive-switch]: `switch` on `status` does not handle "failed", "loading" and "ready"
  --> src/status.ts:7:5
   |
 7 |     default:
   |     ^^^^^^^
-  = fix: list the cases, then put `status satisfies never;` in the `default`; or name the 3 cases in the `default` if they all mean the same:
-        default: status satisfies "failed" | "loading" | "ready";
-  = docs: stateward explain unions/default-hides-cases
+  = fix: one of
+      - add `case "failed":`, `case "loading":` and `case "ready":` with their own code
+      - or allow them in `default`: `default: void (status satisfies "failed" | "loading" | "ready");`
+  = docs: stateward explain unions/non-exhaustive-switch
 
 1 error, 2 warnings in 3 files (1.0 s). Run `stateward explain <rule>` for details.
 ```

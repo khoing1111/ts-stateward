@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { realpathSync } from "node:fs";
 import path from "node:path";
 import { toTypeScriptPath } from "@stateward/core/internal";
 import type { CheckResult, Finding } from "@stateward/core/internal";
+import { realPath } from "./real-path.js";
 
 /** Which files `check` reports on: those changed since a base, or those staged for commit. */
 export type Scope = { kind: "changed"; base: string | undefined } | { kind: "staged" };
@@ -88,19 +88,11 @@ function splitNul(text: string): string[] {
   return text.split("\0").filter((name) => name !== "");
 }
 
-function real(file: string): string {
-  try {
-    return realpathSync.native(file);
-  } catch {
-    return path.resolve(file);
-  }
-}
-
 /** The root of the git repository `cwd` is in (real path), or undefined when it is in none or git is missing. */
 export function gitRoot(cwd: string): string | undefined {
   try {
     const top = attempt(gitIn(cwd), ["rev-parse", "--show-toplevel"]);
-    return top === undefined || top === "" ? undefined : real(top);
+    return top === undefined || top === "" ? undefined : realPath(top);
   } catch (error) {
     if (error instanceof GitError) return undefined;
     throw error;
@@ -150,7 +142,7 @@ export function changedFiles(cwd: string, scope: Scope): Changed {
   if (top === undefined || top === "") {
     throw new GitError(`${flag} needs a git repository, and ${cwd} is not inside one`);
   }
-  const root = real(top);
+  const root = realPath(top);
   const git = gitIn(root);
   let names: string[];
   let base: string | undefined;
@@ -172,16 +164,19 @@ export function changedFiles(cwd: string, scope: Scope): Changed {
       ...splitNul(git(["ls-files", "--others", "--exclude-standard", "-z"])),
     ];
   }
-  const project = real(cwd);
+  const project = realPath(cwd);
   const inProject = (file: string): boolean => !path.relative(project, file).startsWith("..");
-  const files = names.map((name) => real(path.join(root, name))).filter(inProject);
+  const files = names.map((name) => realPath(path.join(root, name))).filter(inProject);
+  // The program reads the project's files as `cwd` spells them, which may go through a link: the
+  // staged texts are keyed the same way, or the program never finds them.
+  const asProgramReads = (file: string): string => path.resolve(cwd, path.relative(project, file));
   return {
     files: new Set(files),
     base,
     overlays: new Map(
       [...overlays]
         .filter(([file]) => inProject(file))
-        .map(([file, text]) => [toTypeScriptPath(file), text] as const),
+        .map(([file, text]) => [toTypeScriptPath(asProgramReads(file)), text] as const),
     ),
   };
 }
@@ -214,7 +209,7 @@ export function scopeResult(result: CheckResult, changed: ReadonlySet<string>): 
   const isChanged = (file: string): boolean => {
     const known = cache.get(file);
     if (known !== undefined) return known;
-    const answer = changed.has(real(file));
+    const answer = changed.has(realPath(file));
     cache.set(file, answer);
     return answer;
   };

@@ -1,6 +1,8 @@
 import ts from "@stateward/core/typescript";
 import { defineRule, matchesName, option, type FileContext } from "@stateward/core";
 import { checkedThroughConst } from "./uses.js";
+import { declaredKeyType, type DeclaredKeyType } from "./key-type.js";
+import { isWriteTarget, ownKeyTest, skipParentheses, stripParentheses } from "./syntax.js";
 import {
   INSERTED_MAX,
   compactText,
@@ -24,19 +26,28 @@ export function title(status: Status): string {
 }
 \`\`\`
 
-Give the table an entry for every value, and say so with \`satisfies\`, so a missing one fails to compile where the table is written:
+Give the table an entry for every value. When the key's type is declared apart from the table, say so with \`as const satisfies\`, so a missing entry fails to compile where the table is written:
 
 \`\`\`ts example-good
 type Status = "idle" | "failed";
 
-const labels = { idle: "Idle", failed: "Failed" } satisfies Record<Status, string>;
+const labels = { idle: "Idle", failed: "Failed" } as const satisfies Record<Status, string>;
 
 export function title(status: Status): string {
   return labels[status].toUpperCase();
 }
 \`\`\`
 
-When the table's own keys leave some values out, the message names the missing entries (the first 3, then a count). When the table has no fixed keys at all, as above (\`Record<string, string>\`, a registry a hook returns, a server response), it asks you to give the table its real keys or to handle a missing entry. When the table comes from a cast (\`(value as Record<string, T>)[key]\`), it points at the cast, which drops the keys. There is no quick fix, since the values are yours to write.
+The message names the missing entries (the first 3, then a count). The fix line follows what the code shows:
+
+| The code | The fix line suggests |
+| --- | --- |
+| the key is typed with a union or enum declared apart from the table (\`status: Status\`) | \`as const satisfies Record<Status, …>\`, with a note where \`Status\` is declared |
+| the key's type is not declared apart (an inline union, an inferred type) | the missing entries, or real keys for the table |
+| one known key (\`HttpCode.Ok\`) on a table with no fixed keys | real keys for the table, or \`?.\` or \`??\` for a missing entry |
+| the table comes from a cast (\`(value as Record<string, T>)[key]\`) | a type where the value is made, or \`??\` |
+
+There is no quick fix: the values are the code's own. A read with a fallback (\`labels[status] ?? "Unknown"\`) is not reported; for a table partial on purpose, \`as const satisfies Partial<Record<Status, V>>\` states it.
 
 ## Why it matters
 
@@ -61,47 +72,6 @@ rules: { "records/lookup-misses-key": "off" } // or "warning"
 rules: { "records/lookup-misses-key": ["error", { ignore: ["*_LABELS"] }] } // tables checked elsewhere
 \`\`\`
 `;
-
-function skipParentheses(node: ts.Node): ts.Node {
-  let current = node;
-  while (ts.isParenthesizedExpression(current.parent)) current = current.parent;
-  return current;
-}
-
-/** `a[k] = v`, `a[k]++`, `delete a[k]`, `[a[k]] = list`, `for (a[k] of list)`: not a read. */
-function isWriteTarget(access: ts.Node): boolean {
-  let current = skipParentheses(access);
-  for (;;) {
-    const parent = current.parent;
-    const inPattern =
-      ts.isArrayLiteralExpression(parent) ||
-      ts.isObjectLiteralExpression(parent) ||
-      ts.isSpreadElement(parent) ||
-      ts.isShorthandPropertyAssignment(parent) ||
-      (ts.isPropertyAssignment(parent) && parent.initializer === current);
-    if (!inPattern) break;
-    current = skipParentheses(parent);
-  }
-  const parent = current.parent;
-  if (ts.isBinaryExpression(parent)) {
-    const { kind } = parent.operatorToken;
-    return (
-      parent.left === current &&
-      kind >= ts.SyntaxKind.FirstAssignment &&
-      kind <= ts.SyntaxKind.LastAssignment
-    );
-  }
-  if (ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) {
-    return (
-      parent.operator === ts.SyntaxKind.PlusPlusToken ||
-      parent.operator === ts.SyntaxKind.MinusMinusToken
-    );
-  }
-  if (ts.isDeleteExpression(parent)) return true;
-  return (
-    (ts.isForInStatement(parent) || ts.isForOfStatement(parent)) && parent.initializer === current
-  );
-}
 
 function isNothing(expression: ts.Expression): boolean {
   return (
@@ -173,11 +143,26 @@ function missingHeadline(map: string, missing: readonly string[], access: string
   );
 }
 
-function missingHint(map: string): string {
+/**
+ * Entries to add; with a separately declared key type (`Status`), also the declaration that makes
+ * a missing one fail to compile. Without one, `satisfies` would only restate the keys written.
+ */
+function missingHint(map: string, declared: DeclaredKeyType | undefined): string {
+  if (declared === undefined) return fitted((cut) => `add the missing keys to \`${cut(map)}\``);
   return fitted(
     (cut) =>
-      `add the missing key, or declare \`${cut(map)}\` with \`satisfies Record<…, …>\` so a missing key fails to compile`,
+      `add the missing keys, and declare \`${cut(map)}\` with \`as const satisfies Record<${cut(declared.name)}, …>\` so a missing key fails to compile`,
   );
+}
+
+/** The note at a declared key type: what the table is read with, where that type is declared. */
+function keyTypeNote(map: string, declared: DeclaredKeyType): { node: ts.Node; message: string } {
+  return {
+    node: declared.node,
+    message: fitted(
+      (cut) => `\`${cut(map)}\` is read with \`${cut(declared.name)}\` keys, declared here`,
+    ),
+  };
 }
 
 /** A key that is one known value (`HttpCode.Ok`): there is nothing to type, only an entry to add. */
@@ -224,16 +209,22 @@ function indexedHeadline(access: string): string {
   return fitted((cut) => `\`${cut(access)}\` can be missing, but its type says it never is`);
 }
 
-function indexedHint(map: string, key: string): string {
+function indexedHint(map: string, key: string, declared: DeclaredKeyType | undefined): string {
+  if (declared === undefined) {
+    return fitted(
+      (cut) =>
+        `give \`${cut(map)}\` its real keys, or type \`${cut(key)}\` so a missing key is handled`,
+    );
+  }
   return fitted(
     (cut) =>
-      `declare \`${cut(map)}\` with \`satisfies Record<…>\` over its real keys, or type \`${cut(key)}\` so a missing key is handled`,
+      `declare \`${cut(map)}\` with \`as const satisfies Record<${cut(declared.name)}, …>\`, or type \`${cut(key)}\` so a missing key is handled`,
   );
 }
 
 /**
  * The name the table is declared with (`labels` in `const labels: Record<string, string> = …`),
- * where `records/table-type-too-loose` reports a table typed too loosely.
+ * where `records/ambiguous-table` reports a table typed too loosely.
  */
 function tableDeclaration(table: ts.Expression, ctx: FileContext): ts.Node | undefined {
   const symbol = ctx.types.symbolAt(stripParentheses(table));
@@ -248,30 +239,6 @@ function isEnumObject(object: ts.Expression, ctx: FileContext): boolean {
   const symbol = ctx.types.symbolAt(stripParentheses(object));
   const declaration = symbol === undefined ? undefined : ctx.types.declarationOf(symbol);
   return declaration !== undefined && ts.isEnumDeclaration(declaration.node);
-}
-
-function stripParentheses(node: ts.Expression): ts.Expression {
-  return ts.isParenthesizedExpression(node) ? stripParentheses(node.expression) : node;
-}
-
-/** The `[object, key]` a call such as `Object.hasOwn(o, k)` or `o.hasOwnProperty(k)` asks about. */
-function ownKeyTest(call: ts.CallExpression): readonly [ts.Expression, ts.Expression] | undefined {
-  const callee = stripParentheses(call.expression);
-  if (!ts.isPropertyAccessExpression(callee)) return undefined;
-  const [first, second] = call.arguments;
-  const target = stripParentheses(callee.expression);
-  if (callee.name.text === "hasOwn" && ts.isIdentifier(target) && target.text === "Object") {
-    return first !== undefined && second !== undefined ? [first, second] : undefined;
-  }
-  if (callee.name.text === "hasOwnProperty") {
-    return first !== undefined && second === undefined ? [target, first] : undefined;
-  }
-  // `Object.prototype.hasOwnProperty.call(o, k)` passes the object first.
-  const viaCall =
-    callee.name.text === "call" &&
-    ts.isPropertyAccessExpression(target) &&
-    target.name.text === "hasOwnProperty";
-  return viaCall && first !== undefined && second !== undefined ? [first, second] : undefined;
 }
 
 /**
@@ -500,6 +467,7 @@ function checkAccess(
     }
     const [only] = keys;
     const table = tableDeclaration(node.expression, ctx);
+    const declared = keys.length === 1 ? undefined : declaredKeyType(node.argumentExpression, ctx);
     ctx.report({
       node,
       ...(table === undefined ? {} : { about: table }),
@@ -507,10 +475,12 @@ function checkAccess(
       hint:
         keys.length === 1 && only !== undefined
           ? registryHint(map, only.label)
-          : indexedHint(map, key),
+          : indexedHint(map, key, declared),
+      related: declared === undefined ? [] : [keyTypeNote(map, declared)],
     });
     return;
   }
+  const declared = keys.length === 1 ? undefined : declaredKeyType(node.argumentExpression, ctx);
   ctx.report({
     node,
     message: missingHeadline(
@@ -518,7 +488,8 @@ function checkAccess(
       missing.map((key) => key.label),
       access,
     ),
-    hint: keys.length === 1 ? constantKeyHint(map) : missingHint(map),
+    hint: keys.length === 1 ? constantKeyHint(map) : missingHint(map, declared),
+    related: declared === undefined ? [] : [keyTypeNote(map, declared)],
   });
 }
 
@@ -533,7 +504,7 @@ export const lookupMissesKey = defineRule({
     group: "keys",
     fixNeedsStrictNulls: true,
     // A table typed too loosely is one cause: its fix makes every lookup into it checked.
-    yieldsTo: ["table-type-too-loose"],
+    yieldsTo: ["ambiguous-table"],
     options: {
       ignore: option.strings({
         default: [],

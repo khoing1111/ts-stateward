@@ -29,8 +29,8 @@ previous page cannot overwrite the current one.
 code's own names. Where stateward could not check something, it says so ("not checked") and what would
 let it. In VS Code, an error against a guarantee shows the steps that lead to it.
 
-**Intentional.** Intent is written in plain TypeScript, such as a union,
-`satisfies never` or a loader that takes an `AbortSignal`. For a promise such as "this context always
+**Intentional.** Intent is written in plain TypeScript, such as a union, a `satisfies` check of the
+cases a `default` allows, or a loader that takes an `AbortSignal`. For a promise such as "this context always
 has a Provider" or "only this module changes the cart", a small type in the project
 (`RequiredContext`, `Owned`) states it, and stateward proves every use; what it cannot prove is an
 error. The developer decides what to state and what to change.
@@ -56,7 +56,9 @@ root.render(location.pathname === "/settings" ? <Settings /> : <App />);
 ```text
 error[react-context/provider-missing]: `<Settings>` is rendered without `ThemeContext.Provider`
  --> src/main.tsx:5:49
-  = fix: wrap it in `<ThemeContext.Provider value={…}>`, or render it inside a component that provides it
+  = fix: one of
+      - wrap it in `<ThemeContext.Provider value={…}>`
+      - or render it inside a component that provides `ThemeContext`
   = note: src/App.tsx:25: `<Footer>` is rendered
   = note: src/App.tsx:11: `Footer` reads `ThemeContext`
 ```
@@ -203,14 +205,14 @@ Rules come in packs, each its own package. Turn on the ones that fit your app.
 
 | Pack | What it promises | Package | Rules |
 | --- | --- | --- | --- |
-| [unions](docs/packs/unions.md) | Every case of a union is handled, and its tag tells the cases apart. | `@stateward/plugin-unions` | 3 |
-| [records](docs/packs/records.md) | Lookup tables and records keyed by a union have every key, once, under a type that names them. | `@stateward/plugin-records` | 3 |
+| [unions](docs/packs/unions.md) | Every case of a union is handled, and its tag tells the cases apart. | `@stateward/plugin-unions` | 2 |
+| [records](docs/packs/records.md) | Lookup tables and records keyed by a union have every key, once, under a type that names them. | `@stateward/plugin-records` | 4 |
 | [async](docs/packs/async.md) | An async failure is never lost: handlers catch their own, and state set before an await is set again when it fails. | `@stateward/plugin-async` | 2 |
-| [react-context](docs/packs/react-context.md) | A component that needs a context is always rendered under its Provider. | `@stateward/plugin-react-context` | 2 |
+| [react-context](docs/packs/react-context.md) | Every context reader is under its Provider, defaults are real values, and Provider values keep their identity. | `@stateward/plugin-react-context` | 5 |
 | [errors](docs/packs/errors.md) | Errors are handled where they can happen: none ignored, none replaced in `finally`, no `Result` dropped. | `@stateward/plugin-errors` | 9 |
-| [ownership](docs/packs/ownership.md) | One owner per piece of shared state and per brand: others call the owner's functions. | `@stateward/plugin-ownership` | 2 |
+| [ownership](docs/packs/ownership.md) | One owner per piece of shared state, per brand and per resource: others call the owner's functions, and what is started is released. | `@stateward/plugin-ownership` | 3 |
 | [reducers](docs/packs/reducers.md) | A reducer reaches every state it declares and can leave every state it enters. | `@stateward/plugin-reducers` | 3 |
-| [react](docs/packs/react.md) | Values that effects and memoized components depend on keep their identity; effects do not copy state, loop, leak or race; state updates see the latest state; flags do not stand in for one state. | `@stateward/plugin-react` | 10 |
+| [react](docs/packs/react.md) | Values that effects and memoized components depend on keep their identity; effects do not copy state, loop, leak or race; state updates see the latest state; flags do not stand in for one state. | `@stateward/plugin-react` | 9 |
 
 <!-- /generated:packs -->
 
@@ -233,9 +235,8 @@ Every case of a union is handled, and its tag tells the cases apart. Package: `@
 
 | Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
 | --- | --- | --- | --- | --- | --- |
-| [default-hides-cases](docs/rules/unions/default-hides-cases.md) | a `default` that handles cases the switch does not list, or that has no `never` check | A case added to the union later goes to the `default` with no compile error; listing the cases makes each switch fail to compile until it handles the new case. | Core | error | error |
-| [if-chain-misses-case](docs/rules/unions/if-chain-misses-case.md) | an `if` / `else if` chain over a union that misses a case or has no `never` check | A case added to the union later goes to the last `else` with no compile error; testing every case and checking the rest with `never` makes the chain fail to compile. | Core | error | error |
-| [tag-does-not-discriminate](docs/rules/unions/tag-does-not-discriminate.md) | a tag like `kind` that is `string` in one member, so a test on it does not pick a member | When `kind` is `string` in one member, testing `kind` does not narrow the union, so TypeScript cannot check which properties each branch reads. | Coverage | info | error |
+| [non-exhaustive-switch](docs/rules/unions/non-exhaustive-switch.md) | a `switch` over a union that misses a case, or whose `default` handles a case nobody allowed | Every `switch` over a union handles every case: a `switch` without a `default` lists them all, and a `default` handles only the cases it allows, so a case added later is reported where it is not handled. | Core | error | error |
+| [ambiguous-discriminant](docs/rules/unions/ambiguous-discriminant.md) | a tag like `kind` that is `string` in one member, so a test on it does not pick a member | A tag like `kind` tells the members of a union apart only when every member gives it a literal; a member where it is `string` makes every test on it ambiguous. | Coverage | info | error |
 
 ### [records](docs/packs/records.md)
 
@@ -243,9 +244,10 @@ Lookup tables and records keyed by a union have every key, once, under a type th
 
 | Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
 | --- | --- | --- | --- | --- | --- |
+| [ambiguous-table](docs/rules/records/ambiguous-table.md) | a lookup table typed `Record<string, V>` that says neither "all keys" nor "keys from outside" | A table typed `Record<string, V>` does not say whether its keys are fixed or come from outside, so a misspelt or missing key compiles and the read gives `undefined`. | Core | error | error |
 | [duplicate-key](docs/rules/records/duplicate-key.md) | the same key twice in a `new Map([...])` or `new Set([...])` written out in code | The same key twice in a `new Map([...])` or `new Set([...])` keeps only the last entry, so the first one has no effect. | Core | error | error |
 | [lookup-misses-key](docs/rules/records/lookup-misses-key.md) | a lookup like `labels[status]` with no entry for some value of the key | A lookup like `labels[status]` is typed as always present; a value with no entry gives `undefined`, and the page shows "undefined" or the next call throws. | Core | error | error |
-| [table-type-too-loose](docs/rules/records/table-type-too-loose.md) | a lookup table typed `Record<string, V>` that says neither "all keys" nor "keys from outside" | A table typed `Record<string, V>` lets a misspelt or missing key compile; typing its keys, or its reads as possibly missing, lets TypeScript check each read. | Core | error | error |
+| [unchecked-key](docs/rules/records/unchecked-key.md) | a key cast (`as keyof typeof LABELS`) or `in` test used to read a table without an own-key check | A cast such as `status as keyof typeof LABELS` tells TypeScript that `status` is a key of `LABELS` without checking it, so `LABELS[status]` compiles and can give `undefined` or an inherited value. | Add-on `unchecked-key` | warning | warning |
 
 ### [async](docs/packs/async.md)
 
@@ -258,12 +260,15 @@ An async failure is never lost: handlers catch their own, and state set before a
 
 ### [react-context](docs/packs/react-context.md)
 
-A component that needs a context is always rendered under its Provider. Package: `@stateward/plugin-react-context`.
+Every context reader is under its Provider, defaults are real values, and Provider values keep their identity. Package: `@stateward/plugin-react-context`.
 
 | Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
 | --- | --- | --- | --- | --- | --- |
-| [fake-default-value](docs/rules/react-context/fake-default-value.md) | a context created with a fake default like `{} as Theme` or `null!` | A default like `{} as Theme` is used when the Provider is missing, so the code reads an empty object typed as a full one and fails later. | Coverage | info | error |
-| [provider-missing](docs/rules/react-context/provider-missing.md) | a component that reads a required context, rendered with no Provider above it | A component that reads a required context outside its Provider gets the default value or an error at run time; the finding shows the render path without it. | Core | error | error |
+| [fake-default-value](docs/rules/react-context/fake-default-value.md) | a context created with a cast or `{}` as its default, such as `{} as Theme` or `null!` | Reports a context created with a cast or an empty object as its default (`{} as Theme`, `null!`): a component rendered outside the Provider reads that value, and its type says it is complete. | Coverage | info | error |
+| [provider-missing](docs/rules/react-context/provider-missing.md) | a component that reads a required context, rendered with no Provider above it | Reports a component that reads a required context and is rendered with no Provider of that context above it; the notes show the render path from the entry point. | Core | error | error |
+| [provider-nested](docs/rules/react-context/provider-nested.md) | a Provider of a context stated `SingleProvider`, rendered under another one | Reports a Provider of a context stated `SingleProvider` that is rendered under another Provider of the same context; the outer one is a note. | Core | error | error |
+| [provider-value-changes-every-render](docs/rules/react-context/provider-value-changes-every-render.md) | a Provider given a new object or function on every render, or a value that can change for a context stated `Stable` | Reports a Provider whose value is a new object, array or function on every render, which re-renders every reader of the context; for a context stated `Stable`, any value that can change is an error. | Core | error | error |
+| [value-changed-by-reader](docs/rules/react-context/value-changed-by-reader.md) | a write to the value read from a context, in a component or hook that reads it | Reports a component or hook that changes the value it reads from a context (assigns or deletes a property, or calls `push`, `set` or `add` on an array, Map or Set in it): React re-renders the readers only when the Provider passes a new value, so the change does not show. | Add-on `value-changed-by-reader` | error | error |
 
 ### [errors](docs/packs/errors.md)
 
@@ -283,11 +288,12 @@ Errors are handled where they can happen: none ignored, none replaced in `finall
 
 ### [ownership](docs/packs/ownership.md)
 
-One owner per piece of shared state and per brand: others call the owner's functions. Package: `@stateward/plugin-ownership`.
+One owner per piece of shared state, per brand and per resource: others call the owner's functions, and what is started is released. Package: `@stateward/plugin-ownership`.
 
 | Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
 | --- | --- | --- | --- | --- | --- |
 | [brand-built-outside-owner](docs/rules/ownership/brand-built-outside-owner.md) | a cast to a checked brand like `as Positive` outside the file that owns its check | A cast to a checked brand like `Positive` outside its check skips the validation the brand stands for, so the type promises more than the value holds. | Core | error | error |
+| [resource-not-released](docs/rules/ownership/resource-not-released.md) | a subscription, listener or connection stated to need releasing that is never released | A value with the release trait (a subscription, a listener, a connection) that a function starts and never releases keeps running, and the leak shows far from its cause. | Core | error | error |
 | [state-written-outside-owner](docs/rules/ownership/state-written-outside-owner.md) | shared module state changed by a file other than the one that declares it | When several modules change the same module-level state, each change must be read to know its value; one owning module with functions keeps that in one place. | Core | error | error |
 
 ### [reducers](docs/packs/reducers.md)
@@ -313,7 +319,6 @@ Values that effects and memoized components depend on keep their identity; effec
 | [timer-runs-after-unmount](docs/rules/react/timer-runs-after-unmount.md) | a timer kept in a ref, never cleared on unmount, that navigates or calls out later | A timer kept in a ref and not cleared on unmount still runs after the component is gone, and can navigate or call out from a page the user left. | Core | warning | warning |
 | [dependency-changes-every-render](docs/rules/react/dependency-changes-every-render.md) | an effect or memo dependency that a hook in the project creates anew on every render | A dependency that a hook in the project creates on every render makes the effect or `useMemo` run on every render, and a `memo` child render every time. | Core | warning | warning |
 | [index-key-on-reordered-list](docs/rules/react/index-key-on-reordered-list.md) | `key={index}` on a list that is filtered, sorted or added to at the front (guess) | With `key={index}` on a list that is filtered or reordered, React keeps each row's state by position, so the state moves to a different item. | Core | warning | warning |
-| [provider-value-changes-every-render](docs/rules/react/provider-value-changes-every-render.md) | a context Provider given a new object or function on every render | A Provider value created on every render re-renders every component that reads the context, even when nothing in the value changed. | Core | warning | warning |
 | [closure-reads-stale-state](docs/rules/react/closure-reads-stale-state.md) | a timer, listener or callback that sets state from a value captured in an old render | A timer or listener created in an earlier render reads the state of that render; setting state from it overwrites newer values, which an updater avoids. | Core | warning | warning |
 | [state-copies-prop](docs/rules/react/state-copies-prop.md) | a state copied from a prop and kept in sync by an effect | A state that copies a prop, kept in sync by an effect, differs from the prop for one render after each change and can overwrite what the user typed. | Core | warning | warning |
 

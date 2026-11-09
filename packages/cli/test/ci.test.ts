@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -64,7 +65,7 @@ describe("check --format github", () => {
       "::warning file=src/events.ts,line=2,col=13,endLine=2,endColumn=21,title=team/max-union-members::`AppEvent` has 13 members; above 12, switches over it get hard to keep complete — split it into nested unions by kind",
     );
     expect(lines[1]).toMatch(
-      /^::error file=src\/status\.ts,line=9,col=5,endLine=9,endColumn=12,title=unions\/default-hides-cases::"failed" of `status` is not listed; `default` handles it — list the case, then put `status satisfies never;` in the `default`; or name it in the `default` instead, if that is where it belongs$/,
+      /^::error file=src\/status\.ts,line=9,col=5,endLine=9,endColumn=12,title=unions\/non-exhaustive-switch::`switch` on `status` does not handle "failed" — one of%0A- add `case "failed":` with its own code%0A- or allow it in `default`: `default: void \(status satisfies "failed"\);`$/,
     );
     expect(lines.slice(0, -1).every((line) => line.startsWith("::"))).toBe(true);
     expect(lines.at(-1)).toMatch(/^3 errors, 1 warning in 5 files/);
@@ -128,6 +129,30 @@ describe("check --format github", () => {
         "::error file=src/a%3Ab%2Cc.ts,line=1,col=1,endLine=1,endColumn=4,title=r/multi::50%25 done%0Anext — first",
         "",
       ].join("\n"),
+    );
+  });
+
+  it("shows each way to fix on its own line, without code examples (M22)", () => {
+    const location = { file: "/repo/src/a.ts", start: 0, end: 3 };
+    const result: CheckResult = {
+      findings: [
+        {
+          kind: "problem",
+          ruleId: "r/list",
+          severity: "error",
+          message: "m",
+          hint: 'one of\n- add `case "x":` with its own code\n- or allow it in `default`:\n    default: void (k satisfies "x");',
+          location,
+          related: [],
+          fixes: [],
+        },
+      ],
+      hidden: [],
+      stats: { files: 1, durationMs: 0 },
+    };
+    const text = formatGitHub(result, { root: "/repo", readText: () => "abc" });
+    expect(text).toBe(
+      '::error file=src/a.ts,line=1,col=1,endLine=1,endColumn=4,title=r/list::m — one of%0A- add `case "x":` with its own code%0A- or allow it in `default`\n',
     );
   });
 
@@ -464,6 +489,30 @@ describe("init --ci github", () => {
     );
     expect(text).toContain("          path: packages/app/node_modules/.cache/stateward\n");
     expect(text).toContain("hashFiles('packages/app/stateward.config.*')");
+  });
+
+  it("names the workflow from the package when the repository is reached through a link", async () => {
+    // As every folder under macOS's `/tmp` is: git gives the real root, and the message named the
+    // file from the link, `../../../../private/…`.
+    writeFileSync(path.join(dir, "pnpm-lock.yaml"), "");
+    const app = path.join(dir, "packages", "app");
+    mkdirSync(path.join(app, "src"), { recursive: true });
+    writeFileSync(path.join(app, "package.json"), JSON.stringify({ name: "app" }));
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    const outside = mkdtempSync(path.join(tmpdir(), "stateward-ci-link-"));
+    try {
+      symlinkSync(dir, path.join(outside, "repo"), "dir");
+      const linked = path.join(outside, "repo", "packages", "app");
+      const { code, stdout } = await run(["init", "--yes", "--ci", "github"], linked);
+      expect(code).toBe(0);
+      expect(stdout).toContain(
+        "Wrote ../../.github/workflows/stateward.yml, at the root of the repository where GitHub looks for it",
+      );
+      expect(stdout).toContain("in packages/app,");
+      expect(workflow()).toContain("        working-directory: packages/app\n");
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it("only accepts github", () => {

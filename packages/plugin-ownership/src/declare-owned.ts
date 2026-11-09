@@ -22,7 +22,7 @@ export const GUARANTEES_FILE = "guarantees.ts";
 
 /** The header of the guarantees file, as the first fix that writes it writes it. */
 const HEADER = `// Stated guarantees: types that say what the code promises, so stateward proves it instead of
-// guessing. Each marker has an optional \`__guarantee\` property that exists only in the type:
+// guessing. Each marker has an optional \`"__guarantee:<name>"\` property that exists only in the type:
 // nothing here adds code at run time. See https://github.com/khoing1111/ts-stateward/blob/main/docs/user/guarantees.md
 `;
 
@@ -31,7 +31,15 @@ export const OWNED_TEXT = `/**
  * A module-level value that only the module declaring it changes: stateward proves that every
  * change from another module goes through that module's functions, and reports any it cannot prove.
  */
-export type Owned<T> = T & { readonly __guarantee?: "owned" };
+export type Owned<T = unknown> = T & { readonly "__guarantee:owned"?: true };
+`;
+
+/** The `Opaque` marker, added to the guarantees file when it does not have it yet. */
+export const OPAQUE_TEXT = `/**
+ * A type whose values only its own module builds: stateward reports every value of it built
+ * elsewhere (a cast, a plain value, an object literal, \`any\`), so its checks cannot be skipped.
+ */
+export type Opaque<T, Name extends string> = T & { readonly "__guarantee:opaque"?: Name };
 `;
 
 /** The guarantees file this fix writes when there is none. */
@@ -70,8 +78,8 @@ function importSpecifier(from: string, helperFile: string, ending: string): stri
 }
 
 /** Inserts `import type { Owned } from "<specifier>";` on the line after the file's last import. */
-function importEdit(sourceFile: ts.SourceFile, specifier: string): Edit {
-  const line = `import type { Owned } from ${JSON.stringify(specifier)};`;
+function importEdit(sourceFile: ts.SourceFile, specifier: string, marker: string): Edit {
+  const line = `import type { ${marker} } from ${JSON.stringify(specifier)};`;
   const last = sourceFile.statements.filter(ts.isImportDeclaration).at(-1);
   const file = sourceFile.fileName;
   if (last === undefined) return { file, start: 0, end: 0, newText: `${line}\n\n` };
@@ -81,8 +89,8 @@ function importEdit(sourceFile: ts.SourceFile, specifier: string): Edit {
     : { file, start: next + 1, end: next + 1, newText: `${line}\n` };
 }
 
-/** Whether the file already imports a name `Owned`. */
-function importsOwned(sourceFile: ts.SourceFile): boolean {
+/** Whether the file already imports a name `Owned` (or another marker). */
+function importsMarker(sourceFile: ts.SourceFile, marker: string): boolean {
   return sourceFile.statements.some((statement) => {
     const bindings = ts.isImportDeclaration(statement)
       ? statement.importClause?.namedBindings
@@ -90,7 +98,7 @@ function importsOwned(sourceFile: ts.SourceFile): boolean {
     return (
       bindings !== undefined &&
       ts.isNamedImports(bindings) &&
-      bindings.elements.some((element) => element.name.text === "Owned")
+      bindings.elements.some((element) => element.name.text === marker)
     );
   });
 }
@@ -126,25 +134,44 @@ export function declareOwnedFix(
           end: declaration.type.end,
           newText: `Owned<${written}>`,
         };
-  const known = types.importSpecifierFor({ name: "Owned", file: helperFile }, file);
+  const forms = markerForms({ sourceFile, marker: "Owned", text: OWNED_TEXT, mark, types });
+  return { title: `Declare ${declaration.name.text} owned by ${owner}`, forms };
+}
+
+/**
+ * The ways to write a fix that states a trait with the project's marker: `mark` (the edit that
+ * applies the marker), the import of `marker` from the guarantees file, and the marker's `text`
+ * added to that file or the file created. Every form is kept, the likely one first: a summary is
+ * cached while the guarantees file may come or go, and the first form that compiles is offered.
+ * Empty when the file is the guarantees file itself.
+ */
+export function markerForms(input: {
+  sourceFile: ts.SourceFile;
+  marker: string;
+  text: string;
+  mark: Edit;
+  types: TypeQueries;
+}): Edit[][] {
+  const { sourceFile, marker, text, mark, types } = input;
+  const file = sourceFile.fileName;
+  const helperFile = guaranteesFileFor(file);
+  if (helperFile === file) return [];
+  const known = types.importSpecifierFor({ name: marker, file: helperFile }, file);
   const specifiers = [
     ...new Set([
       ...(known === undefined ? [] : [known]),
       ...importEndings(sourceFile).map((ending) => importSpecifier(file, helperFile, ending)),
     ]),
   ];
-  const imports: Edit[][] = importsOwned(sourceFile)
+  const imports: Edit[][] = importsMarker(sourceFile, marker)
     ? [[]]
-    : specifiers.map((specifier) => [importEdit(sourceFile, specifier)]);
-  const append: Edit = { file: helperFile, start: 0, end: 0, newText: `${OWNED_TEXT}\n` };
-  const create: Edit = { file: helperFile, start: 0, end: 0, newText: GUARANTEES_TEXT };
+    : specifiers.map((specifier) => [importEdit(sourceFile, specifier, marker)]);
+  const append: Edit = { file: helperFile, start: 0, end: 0, newText: `${text}\n` };
+  const create: Edit = { file: helperFile, start: 0, end: 0, newText: `${HEADER}\n${text}` };
   const plain = imports.map((added) => [mark, ...added]);
   const appended = imports.map((added) => [append, mark, ...added]);
   const created = imports.map((added) => [create, mark, ...added]);
-  // A summary is cached while the guarantees file may come or go: every form is kept, the likely
-  // one first, and the first that compiles is offered.
-  const forms = types.isOwnFile(helperFile)
+  return types.isOwnFile(helperFile)
     ? [...plain, ...appended, ...created]
     : [...created, ...plain, ...appended];
-  return { title: `Declare ${declaration.name.text} owned by ${owner}`, forms };
 }

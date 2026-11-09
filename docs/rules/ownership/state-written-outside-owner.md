@@ -25,10 +25,22 @@ export function onDarkMode(): void {
 }
 ```
 
-A value can also state its owner in its type: `Owned<T>`, from `guarantees.ts`, the file the quick fix writes once in your project. stateward then stops guessing for that value and proves it: every change from another module is an error, also through an alias, a re-export, a cast or a function it is handed to, and a place stateward cannot follow is an error too, with why:
+The plainest way to keep one writer needs no stateward: keep the mutable value private, and export a read-only view of it (`readonly` at every level) with the functions that change it. TypeScript then rejects `settings.theme = "dark"` in any other file:
 
 ```ts
-export type Owned<T> = T & { readonly __guarantee?: "owned" };
+const state = { theme: "light", fontSize: 14 };
+
+export const settings: { readonly theme: string; readonly fontSize: number } = state;
+
+export function setTheme(theme: "light" | "dark"): void {
+  state.theme = theme;
+}
+```
+
+A value can also state its owner in its type, for code that is not restructured this way, for changes `readonly` does not see (a cast, a method of a `Map`), or to have each change proven: `Owned<T>`, from `guarantees.ts`, the file the quick fix writes once in your project. stateward then stops guessing for that value and proves it: every change from another module is an error, also through an alias, a re-export, a cast or a function it is handed to, and a place stateward cannot follow is an error too, with why:
+
+```ts
+export type Owned<T = unknown> = T & { readonly "__guarantee:owned"?: true };
 ```
 
 ```ts
@@ -68,7 +80,9 @@ error[ownership/state-written-outside-owner]: `settings` is changed outside its 
   |
 4 |   settings.theme = "dark";
   |   ^^^^^^^^^^^^^^
-  = fix: add a function in `settings.ts` that makes the change (e.g. `setTheme("dark")`), and call it instead
+  = fix: one of
+      - add a function in `settings.ts` that makes the change (e.g. `setTheme("dark")`), call it, and export the value read-only (`readonly` at every level)
+      - or state it `Owned`, so stateward proves that only `settings.ts` changes it
   = note: settings.ts:1: `settings` is declared in `settings.ts`, which owns it
   = docs: stateward explain ownership/state-written-outside-owner
 ```

@@ -348,7 +348,9 @@ export type TypeQueries = {
    * `"not-object"` for a primitive, a union, an array, a tuple or an array-like (a number index and a numeric `length`, such as
    * `RegExpMatchArray`): the rules that ask do not apply.
    * `"generic"` when the keys depend on a type parameter (`Record<K, string>`, `{ [P in K]: n }`):
-   * the properties are not known until `K` is, so the type has no key list to judge.
+   * the properties are not known until `K` is, so the type has no key list to judge. Also when a
+   * mapped type takes its keys from a type that does not resolve (`keyof typeof NAMES` from a
+   * package that is not installed): TypeScript then gives it an index signature for every key.
    */
   propertyKeysOf(
     node: ts.Node,
@@ -400,16 +402,74 @@ export type TypeQueries = {
    */
   uniqueSymbolKeyFiles(node: ts.Node): readonly string[];
   /**
-   * The guarantees a type states: the string literals of its optional `__guarantee` property
-   * (`Context<T> & { readonly __guarantee?: "required-context" }`), sorted. The type is the one
-   * of an expression or type node, or the declared type of a symbol (a variable's type, a type
-   * alias's type), resolved through aliases, generics and re-exports. A type parameter is widened
-   * to its constraint; `null` and `undefined` members are left out, and every other member of a
-   * union must state a guarantee for it to count. Empty for a type that states none, or whose
-   * `__guarantee` is required or not a string literal (that is a brand, not a guarantee). The
+   * The guarantees a type states: one name per optional `"__guarantee:<name>"` property
+   * (`Context<T> & { readonly "__guarantee:required-context"?: true }`), and the string literals of
+   * an optional `__guarantee` property (the 1.1.0 form, `{ readonly __guarantee?: "owned" }`),
+   * sorted. Traits combine by intersection: `Owned<Opaque<string, "Id">>` gives both. The type is
+   * the one of an expression or type node, or the declared type of a symbol (a variable's type, a
+   * type alias's type), resolved through aliases, generics and re-exports. A type parameter is
+   * widened to its constraint; `null` and `undefined` members are left out, and every other member
+   * of a union must state a guarantee for it to count. A required marker property, or a 1.1.0
+   * `__guarantee` that is not string literals, states none (that is a brand, not a guarantee). The
    * names mean nothing to core; each plugin reads its own.
    */
   guaranteesOf(target: ts.Node | SymbolRef): readonly string[];
+  /**
+   * The guarantees of the type the surrounding code expects for an expression (as
+   * `contextualTypeTextOf`), read as `guaranteesOf` reads a type: `{ … }` returned from a function
+   * typed `OrderId`, or passed to a parameter of that type. Empty when nothing is expected.
+   */
+  contextualGuaranteesOf(node: ts.Expression): readonly string[];
+  /**
+   * The values a trait's marker property holds, sorted: `"OrderId"` for
+   * `Opaque<string, "OrderId">`, `true` for `Pending<boolean>`, `"saving"` for
+   * `Pending<Status, "saving">`. Read from the type of the node, of the symbol's declaration, or,
+   * with `contextual`, of the type the surrounding code expects for the expression. Undefined when
+   * the type does not state the trait; `"not-finite"` when the property's type is not literals.
+   */
+  guaranteeValuesOf(
+    target: ts.Node | SymbolRef,
+    name: string,
+    contextual?: boolean,
+  ): readonly Literal[] | "not-finite" | undefined;
+  /**
+   * How a value is disposed when its type is a standard `Disposable` or `AsyncDisposable`: it has
+   * a `[Symbol.dispose]` (`"sync"`) or `[Symbol.asyncDispose]` (`"async"`) method, declared in
+   * `file`. Undefined for any other type, and for `any`.
+   */
+  disposeOf(node: ts.Node): { readonly kind: "sync" | "async"; readonly file: string } | undefined;
+  /**
+   * The type alias the surrounding code expects for an expression (`OrderId` for an argument of
+   * `save(id: OrderId)`; `OrderId | undefined` gives `OrderId`), as a symbol whose declaration
+   * `declarationOf` finds. Undefined when nothing is expected, the type is not one alias, or the
+   * alias is generic.
+   */
+  contextualAliasOf(node: ts.Expression): SymbolRef | undefined;
+  /**
+   * The property a name destructured from an object reads: `cacheEntryRemoved` of the
+   * parameter's type for `{ cacheEntryRemoved }`, as a symbol whose declaration `declarationOf`
+   * finds. Undefined for a rest element, an array pattern, a computed key, or a type with no such
+   * property.
+   */
+  bindingPropertyOf(element: ts.BindingElement): SymbolRef | undefined;
+  /**
+   * Whether any file of the program (the project's or a package's) writes the marker property of
+   * a trait, `"__guarantee:<name>"`: a rule skips work for a trait nobody states.
+   */
+  declaresTrait(name: string): boolean;
+  /**
+   * Whether a file of the project declares a member named `[Symbol.dispose]` or
+   * `[Symbol.asyncDispose]` (a class, an interface, a type or an object literal), read from the
+   * syntax once per program: only such a member states the release trait by its type.
+   */
+  declaresDispose(): boolean;
+  /**
+   * The other names the project's files give a binding, by the name they rename: `onSnapshot` →
+   * `listen` for `import { onSnapshot as listen }`, `export { onSnapshot as listen }`,
+   * `const listen = onSnapshot` (or `= db.onSnapshot`) and `const { onSnapshot: listen } = db`.
+   * Read from the syntax once per program.
+   */
+  renamedBindings(): ReadonlyMap<string, ReadonlySet<string>>;
   /**
    * The type alias a value's type is an instance of, found from its declaration: after awaiting a
    * `Promise`, every member of the type must be written in the same alias (`Result<T, E>` and
@@ -424,9 +484,16 @@ export type TypeQueries = {
   /**
    * The type alias that names the type of an expression as written (`TouchpointStatus` for
    * `touchpointStatus()` declared to return it; a type parameter widened to its constraint), or
-   * undefined when the type has no alias or the alias takes type arguments.
+   * undefined when the type has no alias or the alias takes type arguments. `declaration` is the
+   * alias's declaration.
    */
-  typeAliasOf(node: ts.Node): { readonly name: string; readonly file: string } | undefined;
+  typeAliasOf(node: ts.Node):
+    | {
+        readonly name: string;
+        readonly file: string;
+        readonly declaration: ts.TypeAliasDeclaration;
+      }
+    | undefined;
   /**
    * Where `fromFile` would import the type alias `name` declared in `file` from, written as
    * TypeScript's own auto-import writes it: a relative path to a checked file (with `.js`, `.ts`
@@ -608,6 +675,15 @@ export type TypeQueries = {
    * takes one, the call does not resolve, or the parameter is a rest parameter.
    */
   signalParameterOf(call: ts.CallExpression): SignalParameter | undefined;
+  /**
+   * Whether TypeScript reports that the end of a function can be reached although the function
+   * must return a value: TS2366 (the return type does not include `undefined`), TS2355 (a
+   * declared type that is not `void`, `any` or `undefined`), TS2534 (a function returning
+   * `never`) or TS7030 (`noImplicitReturns`: not all code paths return a value). Only the errors
+   * TypeScript reports on the function itself (its name, signature or return type) count, not
+   * those in its body. Asks for the type errors of the function's file, once per file.
+   */
+  reportsReachableEnd(fn: ts.FunctionLikeDeclaration): boolean;
 };
 
 export type ReportProblem = {
@@ -623,6 +699,12 @@ export type ReportProblem = {
    * finding's kind (`option.severities`) still wins over it.
    */
   severity?: "info" | "warning";
+  /**
+   * The finding is against a guarantee the code states (`Pending<T>`, `Owned<T>`): proven strictly,
+   * so it is an error while the rule is on, even for a heuristic rule whose shape-based findings
+   * are warnings. A severity the config gives this finding's kind still wins over it.
+   */
+  stated?: true;
   related?: readonly { node: ts.Node; message: string }[];
   fixes?: readonly Fix[];
   /**
@@ -642,7 +724,21 @@ export type ReportProblem = {
 export type FunctionFacts = {
   readonly throws?: readonly string[];
   readonly rejects?: readonly string[];
+  /** What the call returns must be released (the release trait): how it is released. */
+  readonly returns?: ReleaseFact;
+  /**
+   * The promise never rejects: the function's result, or the property itself for a promise
+   * property (RTK Query's `cacheEntryRemoved`). An `await` of it is not a way out.
+   */
+  readonly neverRejects?: true;
 };
+
+/**
+ * How a value with the release trait is released, as a `facts` line says it: `"release"`, call the
+ * returned function (`onSnapshot`'s unsubscribe); `{ release: "unsubscribe" }`, call that method
+ * on the returned value (RxJS's `Subscription`).
+ */
+export type ReleaseFact = "release" | { readonly release: string };
 export type PackageFactsConfig = Readonly<Record<string, Readonly<Record<string, FunctionFacts>>>>;
 
 /** Where a library fact comes from, in order of trust. */
@@ -663,6 +759,12 @@ export type LibraryUse = {
   }[];
 };
 
+/**
+ * The noun for the places a guarantee covers, both forms written out ("switch", "switches"): a
+ * plural is never made by adding "s".
+ */
+export type CoveredNoun = { readonly one: string; readonly many: string };
+
 /** A place a stated guarantee covers: a reader of a required context, a writer of owned state. */
 export type CoveredPlace = {
   /** How the place is named in a list: `<Profile>`, `useTheme()`. */
@@ -674,11 +776,25 @@ export type CoveredPlace = {
  * A guarantee stated in the project's code, as the plugin that proves it reads it
  * (`EditorContributions.guarantees`): for `stateward guarantees` and the editor's hover and code
  * lens. Whether it is proven is not said here: core counts the findings of `ruleId` that name the
- * declaration (a related note at `location`), so the list and the check never disagree.
+ * declaration (a related note at `location`) or lie in a place it covers, so the list and the
+ * check never disagree.
  */
+/**
+ * Where a trait is stated: a standard type that already says it (`Disposable`), the project's
+ * marker type (`Owned<T>`), the config's `facts` line for a package, or the facts a plugin ships
+ * for it (stateward's facts).
+ */
+export type TraitSource =
+  | { readonly kind: "type"; readonly name: string }
+  | { readonly kind: "marker" }
+  | { readonly kind: "config"; readonly package: string }
+  | { readonly kind: "shipped"; readonly package: string };
+
 export type StatedGuarantee = {
-  /** The guarantee's name, as `__guarantee` writes it: `required-context`. */
+  /** The guarantee's name, as its marker property writes it: `required-context`. */
   readonly guarantee: string;
+  /** Where the trait is stated; a marker when not given. */
+  readonly source?: TraitSource;
   /** The marker type as the declaration's type names it: `RequiredContext`. */
   readonly marker: string;
   /** The declaration that states it: `ThemeContext`. */
@@ -692,8 +808,8 @@ export type StatedGuarantee = {
   readonly ruleId: string;
   /** What it promises, after "Guaranteed: ": "every reader is rendered under its Provider". */
   readonly promise: string;
-  /** What `covered` holds, as a plural noun: "readers", "writers". */
-  readonly covers: string;
+  /** What `covered` holds, as a noun in both forms: `{ one: "switch", many: "switches" }`. */
+  readonly covers: CoveredNoun;
   /** The places the proof covers, in file and offset order; empty when nothing uses it. */
   readonly covered: readonly CoveredPlace[];
 };
@@ -702,6 +818,11 @@ export type FileContext<O extends Options = Options> = {
   readonly file: string;
   /** The config's facts about packages (`facts`); `{}` when it gives none. */
   readonly facts: PackageFactsConfig;
+  /**
+   * The facts the loaded plugins ship for common packages (`Plugin.facts`), joined in plugin
+   * order. The config's own `facts` line for a function wins over a shipped one.
+   */
+  readonly shippedFacts: PackageFactsConfig;
   /** The rule's options: the config's values with the defaults filled in; `{}` when it declares none. */
   readonly options: O;
   readonly sourceFile: ts.SourceFile;
@@ -734,6 +855,13 @@ export type FileRule<S extends OptionSpecs = OptionSpecs, G extends string = str
   kind: "file";
   meta: RuleMeta<S, G>;
   check(ctx: FileContext<OptionsOf<S>>): void;
+  /**
+   * What the plugin's editor contributions read of this file (`EditorContributions.guarantees`,
+   * `hover`), as JSON: run after `check` on the same file, cached with its findings, and handed
+   * out by `projectSummaries` like a project rule's. It decides no finding: the findings are
+   * `check`'s alone, so the editor's fast pass stays complete without it.
+   */
+  summarize?(ctx: FileContext<OptionsOf<S>>): Json | undefined;
 };
 
 export type ProjectRule<
@@ -880,6 +1008,12 @@ export type Plugin = {
   description: string;
   rules: Readonly<Record<string, PluginRule>>;
   editor?: EditorContributions;
+  /**
+   * Facts about common packages that the plugin ships (stateward's facts), in the config's
+   * `facts` shape: `{ rxjs: { "Observable.subscribe": { returns: { release: "unsubscribe" } } } }`.
+   * Every rule reads them as `FileContext.shippedFacts`; the config's facts win over them.
+   */
+  facts?: PackageFactsConfig;
 };
 
 /** A plugin that keeps its literal name and rule keys, as `definePlugin` returns it. */
@@ -888,6 +1022,7 @@ export type PluginOf<N extends string, R extends Readonly<Record<string, PluginR
   description: string;
   rules: R;
   editor?: EditorContributions;
+  facts?: PackageFactsConfig;
 };
 
 /** Every rule id ("<plugin>/<rule key>") a plugin type offers; any string pair for a wide `Plugin`. */

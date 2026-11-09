@@ -1,5 +1,173 @@
 # Changelog
 
+## 1.2.0 (2026-11-09)
+
+- **`unions/non-exhaustive-switch` checks a `switch` without a `default`** (rc.2). One over a
+  union that misses a case is an error, unless TypeScript already reports it (TS2366, TS7030).
+  Quick fixes add the case after the last clause, or a `default` that allows it. Kinds `missing`
+  and `many-missing`. Who gets fewer switch findings than with 1.1: a project whose switches list
+  every case with a `default`, or that set the removed kind `complete`; one that ended its switches
+  with `satisfies never` sees the same, plus switches without a `default` that miss a case.
+- **`stateward guarantees` lists `SingleProvider` and `Stable` contexts** (rc.2), with their
+  Providers; the hover shows every trait of a declaration and the code lens has one per trait.
+- **`stateward guarantees` agrees with `check`** (rc.2). An error about a guarantee counts when it
+  names the declaration or lies in a place the guarantee covers; every finding on a `switch` over
+  an `OpenUnion` names the union, however the value got its type. A declaration is listed only
+  where its marker is written. `StatedGuarantee.covers` gives the noun in both forms
+  (`{ one: "switch", many: "switches" }`).
+- **`--no-cache` on every command that checks** (rc.2); `baseline`, `coverage`, `plan`, `next`,
+  `deps` and `guarantees` share the results cache with `check`.
+- **`records/unchecked-key` skips keys taken from the same object** (rc.2): `for (k in T)`,
+  `Object.keys(T)` and `Object.entries(T)` with their array methods, read as `T[k as K]`.
+- **`records/unchecked-key` skips reads that handle a missing key** (rc.2): `??`, `||`, `?.`, or a
+  `const` next compared with `undefined` or `null` or passed to `isDefined`, `isNil`, `isNullish`.
+- **`records/unchecked-key` skips keys checked against valid keys** (rc.2): `VALID.has(k)` on a
+  `Set` or `Map`, `VALID.includes(k)` on an array, before the read.
+- **`records/unchecked-key` fix line follows the `lib`** (rc.2): it names
+  `Object.prototype.hasOwnProperty.call` when the project has no `Object.hasOwn`.
+- **`records/unchecked-key` shows a long table short** (rc.2): `getArrowBindings(…)`, and the fix
+  line says to put it in a `const` first.
+- **`unions/non-exhaustive-switch` (was `unions/default-hides-cases`) enforces every case.** A
+  `default` handles no case of the union unless the code allows it there with
+  `void (type satisfies "newsletters");`; one that handles a case nobody allowed is an error. A
+  `default` that cannot be reached because every case is listed is correct and no longer reported,
+  and the kind `complete` is removed. `satisfies never` is no longer suggested or needed (an
+  existing one is read like a plain `default`), and fixes no longer call a project's own `never`
+  helper. The headline is `` `switch` on `type` does not handle "newsletters" ``; the quick fixes
+  are "Add the missing case" and "Allow "newsletters" in `default`", neither applied by
+  `check --fix`.
+- **`OpenUnion<T>`.** A union marked open must be handled with a `default` in every `switch`: one
+  without is an error, with a note at the declaration. Listed by `stateward guarantees`, hover and
+  code lens.
+- **`unions/ambiguous-discriminant` (was `unions/tag-does-not-discriminate`).** New headline, and a
+  fix with both decisions: a catch-all member with its own tag, or an open union allowed by name.
+  The rule page shows the branded-type pattern and `ownership/brand-built-outside-owner`.
+- **Removed: `unions/if-chain-misses-case`.** A config that names it gets "unknown rule" with the
+  rules there are; `baseline --prune` drops its entries.
+- **Renamed rules keep working.** The old id in a config, an ignore comment (with a quick fix),
+  `stateward.rollout.json`, the baseline, `explain` and `--rule` is read as the new one, with a
+  warning.
+- **A fix with alternatives is a list** (contract M22): `one of`, then one line per way, in the
+  terminal, in GitHub annotations and in the editor. `hint` in the JSON stays one string, its ways
+  on lines that start with `- `.
+- **One marker property per guarantee.** `"__guarantee:<name>"?: true`, so guarantees combine by
+  intersection, flat or nested; a marker's first parameter defaults to `unknown`. The 1.1.0 form
+  `__guarantee?: "<name>"` is still read, and a refactoring rewrites a file in it. The quick fixes
+  that write `src/guarantees.ts` write the new form.
+- **A config that names an unknown rule** lists the rules of the loaded packs.
+- **The VS Code extension says which language server it runs.** When the `stateward.serverPath`
+  setting is used, the log and the status bar tooltip name it. When the project also has its own
+  `@stateward/language-server`, a notification offers "Use the project's server", which removes
+  the setting from the user settings. A server that does not implement a command (an older one)
+  gets a message that names the server and the fix, instead of "Unhandled method". A command in a
+  TypeScript project never goes to a Python folder's server; when the TypeScript server is not
+  running, the message and the status bar say why. `pnpm try` no longer suggests
+  `stateward.serverPath`.
+- **New add-on `records/unchecked-key`** (`addons: ["records/unchecked-key"]`, a warning): a cast such as
+  `status as keyof typeof LABELS`, or a type predicate that tests `key in LABELS`, used to read a
+  plain object without checking the key. Such a read gives `undefined` for a missing key and an
+  inherited value for `"constructor"` or `"toString"`. The quick fix "Check the key with isKeyOf"
+  writes a small `isKeyOf` helper once (in `src/keys.ts`, or uses the project's own), imports it,
+  and rewrites the read as `isKeyOf(LABELS, status) ? LABELS[status] : undefined`.
+- **`records/table-type-too-loose` is now `records/ambiguous-table`.** The old id keeps working,
+  with a warning that says where to rename it.
+- **The records fix lines suggest `satisfies` only for a table read with a declared key type**
+  (`status: Status`), as `as const satisfies Record<Status, V>`, with a note where `Status` is
+  declared; `Partial<Record<Status, V>>` when every such read has a fallback; `as const` alone
+  when the object defines its keys. The quick fix of `records/ambiguous-table` follows the same
+  rule ("Use as const: the object defines the keys"). For an open dictionary, the fix line lists
+  the choices: `Partial<Record<string, V>>`, a `Map`, `Object.create(null)` or `isKeyOf` before
+  reading.
+- **The traits model.** `stateward guarantees` lists every trait with where it is stated (the
+  project's marker, a standard type, the config's facts or stateward's facts), in the text and the
+  JSON (`source`); the hover names a source that is not a marker. The guarantees guide is one
+  catalog: for each trait, when to use it, when not, an example and its finding.
+- **`Opaque<T, Name>`.** A brand stated opaque makes `ownership/brand-built-outside-owner` strict:
+  every value of the type built outside its module (a cast, a plain value, an object literal,
+  `any`) is an error, with a note at the declaration. The finding on an unmarked brand offers the
+  quick fix "State `X` opaque". Listed by `stateward guarantees`.
+- **New: `ownership/resource-not-released`** (core). A value with the release trait (a
+  `Disposable` type, the `Release<T>` marker, or a `facts` line `returns: "release"` or
+  `returns: { release: "<method>" }`) that a function does not release on every way out is an
+  error; what it cannot follow (an array, a parameter not typed `Release`) is an error that says
+  why. The ownership pack ships facts for Firebase `onSnapshot`, RxJS `Observable.subscribe`,
+  Redux `Store.subscribe` and zustand `StoreApi.subscribe`. Core checks `returns` in `facts` and a
+  plugin's own `facts`.
+- **`react/effect-missing-cleanup` reads the release trait.** A value with the trait that an
+  effect does not release is reported whatever the function is called, with a note naming the
+  source; the name-based detection stays for the rest.
+- **`Pending<T, Running>`.** `async/pending-state-stuck-on-failure` proves that a state stated
+  pending settles on every way out of a function that sets it running, and that an async function
+  does not start while it runs; the fixes name the start value and the other values from the type.
+  A `Pending` with no running value is reported. These findings are errors (kind `stated` under `severities`); unmarked state stays a warning. Core: `ReportProblem.stated`. A pending finding notes other state the function
+  writes, and the rule page has "One state for an async result".
+- **`ownership/state-written-outside-owner`'s fix line** lists the read-only view first and
+  `Owned` second; the rule page and the guarantees guide show the pattern.
+
+- **`react/provider-value-changes-every-render` is now `react-context/provider-value-changes-every-render`**,
+  in the react-context pack. The old id keeps working with the rename warning, and `check --fix`
+  renames it in the config. A config that names it without loading `reactContext()` gets a
+  warning to add the pack or remove the line.
+- **`SingleProvider` and `react-context/provider-nested`.** A context whose type has
+  `SingleProvider` (`Context<Store | undefined> & SingleProvider`, or
+  `RequiredContext<Store> & SingleProvider`) has one Provider on any render path. A Provider of it
+  rendered under another one is an error, at the render that brings in the second Provider, with
+  the outer one as a note.
+- **`Stable`, proven by `react-context/provider-value-changes-every-render`.** A context whose type
+  has `Stable` must get a value that never changes: setters, a `dispatch`, refs, module
+  constants, and `useMemo`/`useCallback` over them. Anything else is an error that names the
+  cause (state, a prop, a new literal, a hook not followed). The rule's default severity is now
+  `error` for that case; a new value for a context that states nothing is still a warning.
+- **`react-context/value-changed-by-reader`, an add-on.** Reports a component or hook that changes
+  the value it reads from a context (an assignment, `delete`, `push`, `set`, `add`): readers
+  re-render only when the Provider passes a new value. Off by default until it is measured on
+  real projects: `addons: ["react-context/value-changed-by-reader"]`.
+- **The react-context messages and rule pages are rewritten** to say what each rule checks first,
+  with one example and its fix; fix lines with alternatives are lists. `fake-default-value` now
+  reads "`ThemeContext` defaults to `{} as Theme`, a cast that is not a real value"; the quick
+  fixes are "State AuthCtx required: …" and "Remove the run-time check in useAuth".
+- **`Stable`: state whose setter is never read is stable.** `const [store] = useState(createStore)`,
+  a setter bound and never read, and a reducer whose `dispatch` is never taken keep their first
+  value, so a context stated `Stable` may carry them. A setter that is read, and `ref.current`,
+  are still reported.
+- **`neverRejects: true` in `facts`.** A package function or promise property can be stated never
+  to reject: an `await` of it is not a way out for `ownership/resource-not-released` and for a
+  state stated `Pending`, and the async rules read it too. Shipped for RTK Query's
+  `cacheEntryRemoved` (`@reduxjs/toolkit`), so the `onCacheEntryAdded` streaming pattern
+  (`await cacheEntryRemoved; unsubscribe();`) is no longer reported. The config validates it:
+  only `true`, never with a non-empty `rejects`. Core: `neverRejectsFactOf`,
+  `TypeQueries.bindingPropertyOf`.
+- **`ownership/resource-not-released` asks no type question about a call whose syntax rules the
+  trait out** (`releaseCandidates` in core; `react/effect-missing-cleanup` uses it too). Cold,
+  with only that rule: outline 16.2 s to 5.8 s, mattermost-webapp 17.4 s to 6.5 s; a full cold
+  check is 2.5 s faster on each. Findings are the same. Core: `TypeQueries.declaresDispose` and
+  `renamedBindings`.
+- **A package function called through a name the project gives it** (`const listen = onSnapshot`,
+  `const { onSnapshot: listen } = firestore`) is followed to its `facts` line by
+  `resource-not-released`; rc.1 did not follow it.
+- **Projects reached through a link** (every folder under macOS's `/tmp`): `init --hook` writes
+  the right `cd`, `init --ci` names the workflow from the project, `check --staged` checks the
+  staged text, the warning about a config file that imports its own TypeScript names the file
+  from the config's folder, and the VS Code extension no longer treats a `stateward.serverPath`
+  that names the project's own server through a link as an override.
+- **Tables keyed by a type that does not resolve are not judged.** `TypeQueries.propertyKeysOf`
+  says `"generic"` for a mapped type over the keys of an unresolved import, instead of an index
+  signature (twenty, `records/lookup-misses-key`).
+- **`resource-not-released`: a value stored in a field and returned** from the same function is
+  handed to the caller, not left unreleased (reactfire's `SuspenseSubject._subscribe`).
+- **`effect-missing-cleanup` accepts an emitter's `off`**: `bus.on(event, handler)` ended by
+  `bus.off(event, handler)` or `removeListener` with the same arguments is cleaned up (insomnia).
+- **On save, VS Code applies only safe fixes.** `source.fixAll.stateward`, which
+  `editor.codeActionsOnSave` runs, takes only the fixes a rule marks `safe` (those
+  `check --fix` applies); the lightbulb's "Fix all stateward problems in the file" still takes the
+  first fix of each finding.
+- **A second `stateward.config.*` in the folder** gets a warning that names the file used and the
+  one ignored.
+- **`install-into` says that the `file:` paths it writes** work only on this machine and are not
+  to be committed; `--vendor` is the form for a team or CI.
+- **Development:** a gate step fails on file names that differ only by case, or by `.ts` and
+  `.tsx`; the fixture `Feed.tsx` that collided with `feed.ts` is now `FeedList.tsx`.
+
 ## 1.1.0 (2026-11-07)
 
 - **State that a context is required, and stateward proves it.** A context typed

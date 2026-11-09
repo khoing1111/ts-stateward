@@ -1,6 +1,6 @@
 {
   "name": "stateward",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Exclusive states and predictable code paths for TypeScript and React: finds the states your code allows but never means, and shows how to state your intent in types.",
   "license": "MIT",
   "repository": {

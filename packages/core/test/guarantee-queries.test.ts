@@ -108,6 +108,42 @@ describe("TypeQueries.guaranteesOf", () => {
     ]);
   });
 
+  it("reads one property per trait (the 1.2 form), and traits combine by intersection, nested or flat", () => {
+    expect(
+      project({
+        "guarantees.ts": [
+          'export type Owned<T> = T & { readonly "__guarantee:owned"?: true };',
+          'export type Opaque<T, N extends string> = T & { readonly "__guarantee:opaque"?: N };',
+          'export type OpenUnion<T> = T & { readonly "__guarantee:open-union"?: true };',
+          'export type Legacy<T> = T & { readonly __guarantee?: "required-context" };',
+        ].join("\n"),
+        "a.ts": [
+          "import type { Legacy, OpenUnion, Opaque, Owned } from './guarantees.js';",
+          "export const probeOwned = { a: 1 } as Owned<{ a: number }>;",
+          "export const probeBoth = 'x' as Owned<Opaque<string, 'Id'>>;",
+          "export const probeMixedForms = { a: 1 } as Owned<Legacy<{ a: number }>>;",
+          "export const probeOpen = 'paid' as OpenUnion<'paid' | 'shipped'>;",
+          "export const probeRequired = { a: 1 } as { a: number; readonly '__guarantee:owned': true };",
+          "type Store = { items: string[] };",
+          "type Single<T = unknown> = T & { readonly '__guarantee:single-provider'?: true };",
+          "type Owns<T = unknown> = T & { readonly '__guarantee:owned'?: true };",
+          "export const probeFlat = { items: [] } as Store & Owns & Single;",
+          "export const probeNested = { items: [] } as Owns<Single<Store>>;",
+          "export type ProbeOpenStatus = OpenUnion<'paid' | 'shipped'>;",
+        ].join("\n"),
+      }),
+    ).toEqual([
+      "probeOwned: [owned] [owned]",
+      "probeBoth: [opaque,owned] [opaque,owned]",
+      "probeMixedForms: [owned,required-context] [owned,required-context]",
+      "probeOpen: [open-union] [open-union]",
+      "probeRequired: [] []",
+      "probeFlat: [owned,single-provider] [owned,single-provider]",
+      "probeNested: [owned,single-provider] [owned,single-provider]",
+      "ProbeOpenStatus: [open-union]",
+    ]);
+  });
+
   it("is empty for a brand (a required tag) and a tag that is not a string literal", () => {
     expect(
       project({
@@ -142,5 +178,59 @@ describe("TypeQueries.guaranteesOf", () => {
         },
       ),
     ).toEqual(["probeShared: [required-context] [required-context]"]);
+  });
+});
+
+/** Reports, on the first statement, whether any file of the program declares the `opaque` trait. */
+const traitProbe: FileRule = {
+  kind: "file",
+  meta,
+  check(ctx) {
+    const [first] = ctx.sourceFile.statements;
+    if (first === undefined || !ctx.file.endsWith("a.ts")) return;
+    ctx.report({
+      node: first,
+      hint: "probe hint",
+      message: `declares opaque: ${String(ctx.types.declaresTrait("opaque"))}`,
+    });
+  },
+};
+
+function declaresOpaque(sources: Record<string, string>): string[] {
+  write(
+    "tsconfig.json",
+    JSON.stringify({
+      compilerOptions: {
+        strict: true,
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
+        noEmit: true,
+        types: [],
+      },
+      files: Object.keys(sources),
+    }),
+  );
+  for (const [name, text] of Object.entries(sources)) write(name, text);
+  return checkFixture(dir, [plugin({ probe: traitProbe })]).findings.map((f) => f.message);
+}
+
+describe("TypeQueries.declaresTrait", () => {
+  it("counts the marker only as a property of a type, not inside a string or a comment", () => {
+    expect(
+      declaresOpaque({
+        "quoted.ts": [
+          '/** The trait `Opaque<T, Name>` states: `"__guarantee:opaque"?: Name`. */',
+          'export const TEXT = "export type Opaque<T, N extends string> = T & { readonly \\"__guarantee:opaque\\"?: N };";',
+        ].join("\n"),
+        "a.ts": "export const a = 1;",
+      }),
+    ).toEqual(["declares opaque: false"]);
+    expect(
+      declaresOpaque({
+        "guarantees.ts":
+          'export type Opaque<T, N extends string> = T & { readonly "__guarantee:opaque"?: N };',
+        "a.ts": "export const a = 1;",
+      }),
+    ).toEqual(["declares opaque: true"]);
   });
 });

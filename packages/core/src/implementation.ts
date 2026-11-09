@@ -300,7 +300,8 @@ export function foreignTypeScriptWarnings(configFile: string): readonly string[]
     if (same) continue;
     const version = stringField(jsonOf(path.join(root, "package.json")), "version");
     const shortVersion = /^\d+\.\d+/.exec(version)?.[0] ?? version;
-    const shown = path.relative(configDir, file).split(path.sep).join("/");
+    // Both sides real: the local files are, and a config reached through a link is not.
+    const shown = path.relative(real(configDir), real(file)).split(path.sep).join("/");
     warnings.push(
       `\`${shown}\` imports the app's TypeScript ${shortVersion}; use \`@stateward/core/typescript\`, or it may see nothing`,
     );

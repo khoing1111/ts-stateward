@@ -2,9 +2,12 @@ import ts from "@stateward/core/typescript";
 import {
   defineRule,
   matchesName,
+  neverRejectsFactOf,
   option,
   type FileContext,
   type Fix,
+  type Json,
+  type Literal,
   type OptionsOf,
 } from "@stateward/core";
 import { rejectionsOf, type CanReject } from "./rejects.js";
@@ -77,15 +80,49 @@ It guesses what the code means, so it is a warning in every preset, and it is wr
 
 ## Getting the best from it
 
-Keep a request in one union instead of separate flags: \`{ kind: "idle" } | { kind: "loading" } | { kind: "failed"; error: Error } | { kind: "ready"; data: T }\`, and set its failed case in a \`catch\`. Then "loading but also failed" cannot happen, and every screen decides what a failure shows.
+### State it: \`Pending\`
 
-Say what cannot fail, and the rule believes it: \`facts: { "my-client": { save: { rejects: [] } } }\` for a package function, a JSDoc \`/** @neverRejects */\` on your own function (not looked into any deeper), or a setter whose type has a member nothing can fill (\`| { status: "failed"; error: never }\`). Say what a package function does reject with \`facts: { "my-client": { save: { rejects: ["Error"] } } }\`.
+The checks above read the shape of the code. A state stated \`Pending\` says which of its values mean "in progress", and the rule then proves two things for every function that sets it to one, with no guessing:
+
+\`\`\`ts
+// src/guarantees.ts
+export type Pending<T, Running extends T = Extract<T, true>> = T & {
+  readonly "__guarantee:pending"?: Running;
+};
+
+const [saving, setSaving] = useState<Pending<boolean>>(false); // true means running
+status: Pending<"idle" | "saving" | "saved" | "failed", "saving"> = "idle"; // "saving" means running
+\`\`\`
+
+- **It settles:** every way out of the function (success, a failed \`await\`, an early \`return\`, a \`throw\`) leaves a value that is not running. Every \`await\` counts as one that can fail, except of a promise a \`facts\` line states \`neverRejects: true\`. The fix names the value the declaration starts with, in \`finally\`; for a union, each other value that is not running (\`"failed"\`) in a \`catch\`.
+- **It does not start twice:** an async function that sets it returns early while it runs, \`if (savingRef.current) return;\` (a ref, because a state value read in a handler can be one render old, so two quick clicks both see \`false\`), or the control is disabled with it (\`disabled={saving}\` in the same file).
+
+For \`boolean\` the running value is \`true\`; for any other type, name it: a \`Pending\` with no running value is reported. These findings are errors, since the guarantee is stated and proven strictly (the kind \`stated\` under \`severities\` changes that); unmarked state keeps the checks above, as warnings.
+
+### One state for an async result
+
+\`loading\`, \`error\` and \`data\` side by side can contradict each other: loading and failed at once, data from the previous request next to a new error. One union holds them without contradictions:
+
+\`\`\`ts
+type Save =
+  | { status: "idle" }
+  | { status: "saving" }
+  | { status: "failed"; error: Error }
+  | { status: "saved"; savedAt: Date };
+\`\`\`
+
+A data library's own status (React Query, SWR, RTK Query) is the same thing. When the function a finding is about also writes other state, its note names them: "\`saving\`, \`saveError\` and \`savedAt\` are written together here". Nothing rewrites the state for you: which states exist is a design choice.
+
+### Say what cannot fail
+
+Say what cannot fail, and the rule believes it: \`facts: { "my-client": { save: { neverRejects: true } } }\` for a package function or a promise property (shipped for RTK Query's \`cacheEntryRemoved\`), a JSDoc \`/** @neverRejects */\` on your own function (not looked into any deeper), or a setter whose type has a member nothing can fill (\`| { status: "failed"; error: never }\`). Say what a package function does reject with \`facts: { "my-client": { save: { rejects: ["Error"] } } }\`.
 
 ## Turn it on or off
 
 \`\`\`ts
 rules: { "async/pending-state-stuck-on-failure": "off" } // or "error"
 rules: { "async/pending-state-stuck-on-failure": ["warning", { ignore: ["*Draft"] }] } // states set again elsewhere
+rules: { "async/pending-state-stuck-on-failure": ["warning", { severities: { stated: "warning" } }] } // stated ones as warnings too
 \`\`\`
 `;
 
@@ -94,6 +131,14 @@ const OPTIONS = {
     default: [],
     description:
       "State names (globs like *Busy) that are set again somewhere this rule cannot see.",
+  }),
+  severities: option.severities({
+    kinds: {
+      stated:
+        "a state stated `Pending` that does not settle, starts twice, or names no running value: an error unless set here.",
+      shape: "unmarked state read from the shape of the code: the rule's severity (a warning).",
+    },
+    description: "A severity per kind of finding.",
   }),
 };
 
@@ -593,8 +638,15 @@ function analyze(
   statements.forEach((statement, index) => {
     if (!ts.isExpressionStatement(statement)) return;
     const use = flagUse(statement.expression, ctx.sourceFile, tracked);
+    if (use === undefined || firstAwait(use.value) !== undefined) return;
+    // A state stated `Pending` says which values mean running: no guessing from its shape.
+    const pending = pendingOf(use, ctx);
+    if (pending !== undefined) {
+      analyzePending(container, index, use, pending, ctx, tracked);
+      return;
+    }
     // A write whose value waits for a call is the result arriving, not a state set before it.
-    if (use === undefined || firstAwait(use.value) !== undefined || isEmptying(use.value)) return;
+    if (isEmptying(use.value)) return;
     const scope: Scope = { sourceFile: ctx.sourceFile, flag: use.flag, tracked, rejects };
     if (coveredByEnclosingTry(container, scope)) return;
     const first = { node: statement.expression, value: oneLine(use.value) };
@@ -610,6 +662,8 @@ function analyze(
       message: headline(found.flag, found.value, found.awaited),
       hint: hint(found.flag, found.reset, found.awaited),
       fixes,
+      related: oneStateNote(statement, use.flag, ctx, tracked),
+      findingKind: "shape",
     });
   });
 }
@@ -647,6 +701,463 @@ function mainReport(
   };
 }
 
+/** The trait `Pending<T, Running>` states: `"__guarantee:pending"?: Running`. */
+export const PENDING = "pending";
+
+/**
+ * A state stated `Pending`: the values that mean running, every value of its type (when finite),
+ * and the value its declaration starts with, as written.
+ */
+type PendingState = {
+  running: readonly Literal[];
+  values: readonly Literal[] | undefined;
+  start: string | undefined;
+  /** The state's declaration: where the trait is stated. */
+  declaration: ts.Node | undefined;
+};
+
+/** The node a write is made by: the setter call, or the assignment. */
+function writeNode(use: FlagUse): ts.Node {
+  return use.value.parent;
+}
+
+/** The first argument of the `useState(…)` call a setter comes from: `false` in `useState(false)`. */
+function stateOfSetter(
+  setter: ts.Node,
+  ctx: FileContext,
+):
+  | { state: ts.Node | undefined; start: ts.Expression | undefined; declaration: ts.Node }
+  | undefined {
+  const symbol = ctx.types.symbolAt(setter);
+  const declared = symbol === undefined ? undefined : ctx.types.declarationOf(symbol);
+  if (declared === undefined) return undefined;
+  const node = declared.node;
+  if (!ts.isBindingElement(node) || !ts.isArrayBindingPattern(node.parent)) return undefined;
+  const pattern = node.parent;
+  const [first] = pattern.elements;
+  const state = first !== undefined && ts.isBindingElement(first) ? first.name : undefined;
+  const holder = pattern.parent;
+  const call =
+    ts.isVariableDeclaration(holder) && holder.initializer !== undefined
+      ? holder.initializer
+      : undefined;
+  const start = call !== undefined && ts.isCallExpression(call) ? call.arguments[0] : undefined;
+  return { state, start, declaration: holder };
+}
+
+/** The value a field or variable starts with: `"idle"` in `status: Pending<…> = "idle"`. */
+function startOfPlace(
+  place: ts.Expression,
+  ctx: FileContext,
+): { start: ts.Expression | undefined; declaration: ts.Node | undefined } {
+  const name = ts.isPropertyAccessExpression(place) ? place.name : place;
+  const symbol = ctx.types.symbolAt(name);
+  const declared = symbol === undefined ? undefined : ctx.types.declarationOf(symbol);
+  const node = declared?.node;
+  if (node !== undefined && (ts.isPropertyDeclaration(node) || ts.isVariableDeclaration(node))) {
+    return { start: node.initializer, declaration: node };
+  }
+  return { start: undefined, declaration: node };
+}
+
+/** The `Pending` trait of the state a write writes, or undefined when it is not stated. */
+function pendingOf(use: FlagUse, ctx: FileContext): PendingState | undefined {
+  if (!ctx.types.declaresTrait(PENDING)) return undefined;
+  const node = writeNode(use);
+  if (ts.isCallExpression(node)) {
+    const running = ctx.types.guaranteeValuesOf(use.value, PENDING, true);
+    if (running === undefined || running === "not-finite") return undefined;
+    const found = stateOfSetter(unwrap(node.expression), ctx);
+    const values = found?.state === undefined ? "not-finite" : ctx.types.literalsOf(found.state);
+    return {
+      running,
+      values: values === "not-finite" ? undefined : values,
+      start: found?.start === undefined ? undefined : oneLine(found.start),
+      declaration: found?.declaration,
+    };
+  }
+  if (ts.isBinaryExpression(node)) {
+    const running = ctx.types.guaranteeValuesOf(node.left, PENDING);
+    if (running === undefined || running === "not-finite") return undefined;
+    const values = ctx.types.literalsOf(node.left);
+    const found = startOfPlace(node.left, ctx);
+    return {
+      running,
+      values: values === "not-finite" ? undefined : values,
+      start: found.start === undefined ? undefined : oneLine(found.start),
+      declaration: found.declaration,
+    };
+  }
+  return undefined;
+}
+
+/** Whether a write sets a running value: `setSaving(true)`, `this.status = "saving"`. */
+function setsRunning(value: ts.Expression, pending: PendingState, ctx: FileContext): boolean {
+  const written = ctx.types.literalsOf(value);
+  return (
+    written !== "not-finite" &&
+    written.length > 0 &&
+    written.every((one) => pending.running.some((run) => run.label === one.label))
+  );
+}
+
+function isRunningLabel(label: string, pending: PendingState): boolean {
+  return pending.running.some((run) => run.label === label);
+}
+
+/** The running values as a headline names them: `true`, `"saving"`. */
+function runningText(pending: PendingState): string {
+  return pending.running.map((run) => `\`${run.label}\``).join(" or ");
+}
+
+/**
+ * The fix of a `Pending` state that does not settle (M22): the value it starts with, in `finally`;
+ * for a union, each other value that is not running, in a `catch`, named from the type.
+ */
+function pendingHint(flag: Flag, pending: PendingState, success: string | undefined): string {
+  const settled = (pending.values ?? []).filter((one) => !isRunningLabel(one.label, pending));
+  const start =
+    pending.start !== undefined && !isRunningLabel(pending.start, pending)
+      ? pending.start
+      : settled[0]?.label;
+  const first =
+    start === undefined
+      ? `set \`${flag.name}\` back in \`finally\`, to a value that is not running`
+      : `set \`${flag.name}\` back in \`finally\`: \`finally { ${writeCode(flag, start)} }\``;
+  const others = settled
+    .map((one) => one.label)
+    .filter((label) => label !== start && label !== success && label !== "undefined");
+  if (others.length === 0 || pending.values?.every((one) => typeof one.value === "boolean")) {
+    return first;
+  }
+  return [
+    "one of",
+    `- ${first}`,
+    ...others.map(
+      (label) =>
+        `- or set it to ${label} in a \`catch\`: \`catch (error) { ${writeCode(flag, label)} throw error; }\``,
+    ),
+  ].join("\n");
+}
+
+/** The name a function is known by in a headline: `save`, or "the function". */
+function functionName(fn: ts.SignatureDeclaration | undefined): string {
+  if (fn === undefined) return "the function";
+  const name = fn.name ?? (ts.isVariableDeclaration(fn.parent) ? fn.parent.name : undefined);
+  return name !== undefined && (ts.isIdentifier(name) || ts.isPrivateIdentifier(name))
+    ? `\`${name.text}\``
+    : "the function";
+}
+
+/** Whether `fn` returns early while the state runs, before the write at `at`, or a control is disabled with it. */
+function guardsStart(
+  fn: ts.SignatureDeclaration,
+  at: ts.Node,
+  flag: Flag,
+  ctx: FileContext,
+): boolean {
+  const name = new RegExp(`\\b${flag.name}(?:Ref)?\\b`);
+  const visit = (node: ts.Node): boolean => {
+    if (node.getStart(ctx.sourceFile) >= at.getStart(ctx.sourceFile)) return false;
+    if (node !== fn && ts.isFunctionLike(node)) return false;
+    if (
+      ts.isIfStatement(node) &&
+      name.test(node.expression.getText(ctx.sourceFile)) &&
+      leaves(node.thenStatement)
+    ) {
+      return true;
+    }
+    return ts.forEachChild(node, visit) === true;
+  };
+  const body = "body" in fn ? fn.body : undefined;
+  if (body !== undefined && visit(body)) return true;
+  // `disabled={saving}` on the control: a second click cannot start it.
+  return new RegExp(`disabled=\\{[^}]*\\b${flag.name}\\b`).test(ctx.sourceFile.text);
+}
+
+/** A statement that leaves the function: `return`, `throw`, or a block ending in one. */
+function leaves(statement: ts.Statement): boolean {
+  if (ts.isReturnStatement(statement) || ts.isThrowStatement(statement)) return true;
+  if (ts.isBlock(statement)) {
+    const last = statement.statements.at(-1);
+    return last !== undefined && leaves(last);
+  }
+  return false;
+}
+
+/** Whether a function's body holds an `await` (not in a nested function). */
+function hasAwait(fn: ts.SignatureDeclaration): boolean {
+  const body = "body" in fn ? fn.body : undefined;
+  return body !== undefined && firstAwait(body) !== undefined;
+}
+
+/**
+ * The note on a pending finding when the same function also writes other state (an error, the
+ * data): one status union holds them without contradictions. Undefined when it writes no other.
+ */
+function oneStateNote(
+  at: ts.Node,
+  flag: Flag,
+  ctx: FileContext,
+  tracked: Tracked,
+): { node: ts.Node; message: string }[] {
+  const fn = enclosingFunction(at);
+  const body = fn !== undefined && "body" in fn ? fn.body : undefined;
+  if (body === undefined) return [];
+  const names: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (node !== fn && ts.isFunctionLike(node)) return;
+    const use = flagUse(node, ctx.sourceFile, tracked);
+    if (use !== undefined && use.flag.name !== flag.name && !names.includes(use.flag.name)) {
+      names.push(use.flag.name);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  if (names.length === 0) return [];
+  const all = [flag.name, ...names].map((name) => `\`${name}\``);
+  const listed = `${all.slice(0, -1).join(", ")} and ${all.at(-1) ?? ""}`;
+  return [
+    {
+      node: at,
+      message: `${listed} are written together here: one status union holds them without contradictions`,
+    },
+  ];
+}
+
+/**
+ * A write of a running value to a state stated `Pending`: it must settle on every way out of the
+ * function (any \`await\` may fail, an early \`return\` or \`throw\` leaves), and the function must
+ * not start while the state runs.
+ */
+function analyzePending(
+  container: Container,
+  index: number,
+  use: FlagUse,
+  pending: PendingState,
+  ctx: FileContext,
+  tracked: Tracked,
+): void {
+  const { statements } = container;
+  const statement = statements[index];
+  if (statement === undefined || !ts.isExpressionStatement(statement)) return;
+  if (pending.running.length === 0) return;
+  if (!setsRunning(use.value, pending, ctx)) return;
+  // Every await may fail, except one the facts say never rejects: the state says it must settle,
+  // so nothing is left to guess.
+  const scope: Scope = {
+    sourceFile: ctx.sourceFile,
+    flag: use.flag,
+    tracked,
+    rejects: (expression) => neverRejectsFactOf(expression, ctx) === undefined,
+  };
+  const fn = enclosingFunction(statement);
+  const stated =
+    pending.declaration === undefined
+      ? []
+      : [{ node: pending.declaration, message: `\`${use.flag.name}\` is stated \`Pending\` here` }];
+  const related = [...stated, ...oneStateNote(statement, use.flag, ctx, tracked)];
+  if (!coveredByEnclosingTry(container, scope)) {
+    const first = { node: statement.expression, value: oneLine(use.value) };
+    const reset = statements.findIndex((one, at) => at > index && isSetAgain(one, scope));
+    const found =
+      chainReport(statements, index, first, scope) ??
+      (reset < 0 ? undefined : mainReport(statements, index, first, scope, ctx));
+    const success = found?.reset === undefined ? undefined : oneLine(found.reset.value);
+    if (found !== undefined) {
+      ctx.report({
+        node: found.node,
+        message: headline(found.flag, found.value, found.awaited),
+        hint: pendingHint(use.flag, pending, success),
+        fixes: found.fix === undefined ? [] : [found.fix],
+        related,
+        findingKind: "stated",
+        stated: true,
+      });
+    } else if (reset < 0 && !resetsLater(statement, fn, scope)) {
+      ctx.report({
+        node: statement.expression,
+        message: fitted(
+          (cut) =>
+            `\`${cut(use.flag.name)}\` stays \`${cut(first.value)}\` after ${functionName(fn)} returns`,
+        ),
+        hint: pendingHint(use.flag, pending, undefined),
+        related,
+        findingKind: "stated",
+        stated: true,
+      });
+    }
+  }
+  if (fn === undefined || !hasAwait(fn) || guardsStart(fn, statement, use.flag, ctx)) return;
+  const name = use.flag.name;
+  const running = runningText(pending);
+  ctx.report({
+    node: statement.expression,
+    message: fitted(
+      (cut) => `${functionName(fn)} starts again while \`${cut(name)}\` is ${running}`,
+    ),
+    hint: [
+      "one of",
+      `- return early while it runs, read from a ref (state read in a handler can be one render old): \`if (${name}Ref.current) return;\``,
+      `- or disable the control while it runs: \`disabled={${name}}\``,
+    ].join("\n"),
+    related: stated,
+    findingKind: "stated",
+    stated: true,
+  });
+}
+
+/** Whether the state is set back after `statement` anywhere in the function: in a nested block, a callback. */
+function resetsLater(
+  statement: ts.Statement,
+  fn: ts.SignatureDeclaration | undefined,
+  scope: Scope,
+): boolean {
+  const body = fn !== undefined && "body" in fn ? fn.body : undefined;
+  if (body === undefined) return false;
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (node.getStart(scope.sourceFile) > statement.getEnd() && resetsIn(node, scope)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  return found;
+}
+
+/**
+ * A `Pending` that names no running value: `Pending<Status>` where `Status` has no `true`, so
+ * nothing says which values mean "in progress" and nothing can be proven.
+ */
+function checkRunningValues(node: ts.TypeReferenceNode, ctx: FileContext): void {
+  const [type] = node.typeArguments ?? [];
+  if (type === undefined) return;
+  if (!ctx.types.guaranteesOf(node).includes(PENDING)) return;
+  const running = ctx.types.guaranteeValuesOf(node, PENDING);
+  if (running === undefined || running === "not-finite" || running.length > 0) return;
+  const written = oneLine(type);
+  let declaration: ts.Node = node;
+  while (
+    !ts.isSourceFile(declaration) &&
+    !ts.isVariableDeclaration(declaration) &&
+    !ts.isPropertyDeclaration(declaration)
+  ) {
+    declaration = declaration.parent;
+  }
+  ctx.report({
+    node,
+    related: ts.isSourceFile(declaration)
+      ? []
+      : [{ node: declaration, message: `\`${oneLine(node)}\` is stated here` }],
+    findingKind: "stated",
+    stated: true,
+    message: fitted((cut) => `\`${cut(oneLine(node))}\` names no running value`),
+    hint: fitted(
+      (cut) =>
+        `say which values of \`${cut(written)}\` mean running: \`Pending<${cut(written)}, "…">\``,
+    ),
+  });
+}
+
+type Place = { file: string; start: number; end: number };
+
+/**
+ * What the rule keeps of a file for `stateward guarantees`, hover and code lens: the states it
+ * declares `Pending` with their running values, and its writes of a running value, each with the
+ * id (`<file>#<offset>`) of the state's declaration.
+ */
+export type PendingSummary = {
+  pending: (Place & { name: string; running: string[] })[];
+  starts: (Place & { id: string })[];
+};
+
+function placeOf(node: ts.Node): Place {
+  const sourceFile = node.getSourceFile();
+  return { file: sourceFile.fileName, start: node.getStart(sourceFile), end: node.end };
+}
+
+function idOf(node: ts.Node): string {
+  const place = placeOf(node);
+  return `${place.file}#${String(place.start)}`;
+}
+
+/**
+ * The types written on a declaration itself: its annotation, and the type arguments of the call
+ * that makes its value (`useState<Pending<boolean>>(false)`). A type it gets from another value
+ * (`const loading = isSubmitting`) is not written there.
+ */
+function writtenTypes(
+  node: ts.VariableDeclaration | ts.PropertyDeclaration,
+): readonly ts.TypeNode[] {
+  const written: ts.TypeNode[] = node.type === undefined ? [] : [node.type];
+  let initializer = node.initializer;
+  while (
+    initializer !== undefined &&
+    (ts.isParenthesizedExpression(initializer) || ts.isAwaitExpression(initializer))
+  ) {
+    initializer = initializer.expression;
+  }
+  if (initializer !== undefined && ts.isCallExpression(initializer)) {
+    written.push(...(initializer.typeArguments ?? []));
+  }
+  return written;
+}
+
+/**
+ * The name a `Pending` state is declared under, or undefined when the declaration states none.
+ * Only a declaration that writes the marker itself (`writtenTypes`) states it: one that copies a
+ * `Pending` value is the same state, read under another name.
+ */
+function declaredPending(
+  node: ts.Node,
+  ctx: FileContext,
+): { name: string; running: string[] } | undefined {
+  let name: ts.Node | undefined;
+  if (ts.isVariableDeclaration(node) && ts.isArrayBindingPattern(node.name)) {
+    const [first] = node.name.elements;
+    name = first !== undefined && ts.isBindingElement(first) ? first.name : undefined;
+  } else if (ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node)) {
+    name = node.name;
+  }
+  if (name === undefined || !ts.isIdentifier(name)) return undefined;
+  if (
+    !(ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node)) ||
+    !writtenTypes(node).some((type) => ctx.types.guaranteesOf(type).includes(PENDING))
+  ) {
+    return undefined;
+  }
+  const running = ctx.types.guaranteeValuesOf(name, PENDING);
+  if (running === undefined || running === "not-finite") return undefined;
+  return { name: name.text, running: running.map((one) => one.label) };
+}
+
+function pendingSummary(ctx: FileContext<Settings>): PendingSummary | undefined {
+  if (!ctx.types.declaresTrait(PENDING)) return undefined;
+  const tracked = trackedWith(ctx.options, ctx);
+  const summary: PendingSummary = { pending: [], starts: [] };
+  const visit = (node: ts.Node): void => {
+    const declared = declaredPending(node, ctx);
+    if (declared !== undefined) summary.pending.push({ ...declared, ...placeOf(node) });
+    if (ts.isExpressionStatement(node)) {
+      const use = flagUse(node.expression, ctx.sourceFile, tracked);
+      const pending = use === undefined ? undefined : pendingOf(use, ctx);
+      if (
+        use !== undefined &&
+        pending?.declaration !== undefined &&
+        setsRunning(use.value, pending, ctx)
+      ) {
+        summary.starts.push({ ...placeOf(node.expression), id: idOf(pending.declaration) });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(ctx.sourceFile);
+  return summary.pending.length > 0 || summary.starts.length > 0 ? summary : undefined;
+}
+
 export const pendingStateStuckOnFailure = defineRule({
   kind: "file",
   meta: {
@@ -665,12 +1176,17 @@ export const pendingStateStuckOnFailure = defineRule({
   check(ctx) {
     const tracked = trackedWith(ctx.options, ctx);
     const rejects = rejectionsOf(ctx);
+    const stated = ctx.types.declaresTrait(PENDING);
     const visit = (node: ts.Node): void => {
       if (ts.isBlock(node) || ts.isCaseClause(node) || ts.isDefaultClause(node)) {
         analyze(node, ctx, tracked, rejects);
       }
+      if (stated && ts.isTypeReferenceNode(node)) checkRunningValues(node, ctx);
       ts.forEachChild(node, visit);
     };
     visit(ctx.sourceFile);
+  },
+  summarize(ctx): Json | undefined {
+    return pendingSummary(ctx);
   },
 });

@@ -4,6 +4,15 @@ import { parseConfig, type RuleConfig } from "@stateward/core";
 import { ownership } from "../src/index.js";
 import { check, fixture, shown, type Shown } from "./helpers.js";
 
+/** The fix line of a change outside the owner: the read-only view first, `Owned` second. */
+function hintFor(owner: string, example: string): string {
+  return [
+    "one of",
+    `- add a function in \`${owner}\` that makes the change (e.g. \`${example}\`), call it, and export the value read-only (\`readonly\` at every level)`,
+    `- or state it \`Owned\`, so stateward proves that only \`${owner}\` changes it`,
+  ].join("\n");
+}
+
 const FLAGGED = fixture("state-written-outside-owner/flagged");
 const CLEAN = fixture("state-written-outside-owner/clean");
 const OWNERS = fixture("state-written-outside-owner/owners");
@@ -25,7 +34,7 @@ function change(
     file,
     at,
     message: `\`${name}\` is changed outside its module, \`${owner}\``,
-    hint: `add a function in \`${owner}\` that makes the change (e.g. \`${example}\`), and call it instead`,
+    hint: hintFor(owner, example),
     notes: [...through, `${declared}: \`${name}\` is declared in \`${owner}\`, which owns it`],
   };
 }
@@ -135,7 +144,7 @@ describe("ownership/state-written-outside-owner option `owners`", () => {
         file: "other.ts",
         at: "store.user.name",
         message: "`store` is changed outside its module, `store.ts`",
-        hint: 'add a function in `store.ts` that makes the change (e.g. `setName("Grace")`), and call it instead',
+        hint: hintFor("store.ts", 'setName("Grace")'),
         notes: ["store: `store` is declared in `store.ts`, which owns it"],
       },
     ]);

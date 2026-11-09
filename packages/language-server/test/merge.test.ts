@@ -39,7 +39,7 @@ describe("mergeFastPass", () => {
   });
 
   it("carries no project-rule finding of the edited file: they come back with the full pass", () => {
-    // The old behaviour kept `records/table-type-too-loose@40` at its old offset, drawn mid-line after an edit.
+    // The old behaviour kept `records/ambiguous-table@40` at its old offset, drawn mid-line after an edit.
     const fast = { findings: [problem("guards/new", FILE, 10)], hidden: none };
     const merged = mergeFastPass({ file: FILE, fast });
     expect(merged.findings.map((f) => f.message)).toEqual(["guards/new@10"]);

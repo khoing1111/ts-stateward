@@ -16,6 +16,11 @@ function code(text: string): string {
   return `\`${text}\``;
 }
 
+/** A fix with alternatives (M22): `one of`, then one bullet per way, each after the first with `or`. */
+function oneOf(first: string, ...rest: readonly string[]): string {
+  return ["one of", `- ${first}`, ...rest.map((way) => `- or ${way}`)].join("\n");
+}
+
 /** `A`, `A` and `B`, `A`, `B` and `C`. */
 export function codeList(names: readonly string[]): string {
   const quoted = names.map(code);
@@ -23,22 +28,13 @@ export function codeList(names: readonly string[]): string {
   return quoted.length < 2 ? last : `${quoted.slice(0, -1).join(", ")} and ${last}`;
 }
 
-/**
- * `call`: for a context guessed required that the quick fix can state required, the call it
- * writes (`requiredContext<User>()`); the hint then asks for it, as code under the fix line.
- */
-export function missingProvider(component: string, context: string, call?: string): Message {
-  const hint = `wrap it in ${code(`<${context}.Provider value={…}>`)}, or render it inside a component that provides it`;
+export function missingProvider(component: string, context: string): Message {
   return {
     message: `${code(`<${component}>`)} is rendered without ${code(`${context}.Provider`)}`,
-    hint:
-      call === undefined
-        ? hint
-        : [
-            hint,
-            `    // if it is always under its Provider, state it (quick fix); stateward proves every reader:`,
-            `    const ${context} = ${call};`,
-          ].join("\n"),
+    hint: oneOf(
+      `wrap it in ${code(`<${context}.Provider value={…}>`)}`,
+      `render it inside a component that provides ${code(context)}`,
+    ),
   };
 }
 
@@ -46,7 +42,10 @@ const DYNAMIC_HINTS: Readonly<Record<Exclude<ComputedFix, object>, string>> = {
   plain:
     "render the component directly; constant maps are checked by the dynamic-components add-on",
   "add-addon": `add ${code('"react-context/dynamic-components"')} to ${code("addons")} in your stateward config`,
-  narrow: `render the component directly, or pick it from a ${code("const")} object by a key of a finite type`,
+  narrow: oneOf(
+    "render the component directly",
+    `pick it from a ${code("const")} object by a key with a fixed set of values`,
+  ),
 };
 
 export function computedComponent(tag: string, fix: ComputedFix): Unchecked {
@@ -94,14 +93,20 @@ export function escapingJsx(tag: string, sink: string): Unchecked {
 export function unreachableComponent(component: string, contexts: readonly string[]): Message {
   return {
     message: `not checked: whether ${code(component)} is under the ${contexts.length === 1 ? "Provider" : "Providers"} of ${codeList(contexts)}: no entry point renders it`,
-    hint: `render it from your app, or list it in ${code("entries")} in the react-context options`,
+    hint: oneOf(
+      "render it from the app",
+      `list it in ${code("entries")} in the react-context options`,
+    ),
   };
 }
 
 export function noEntryPoint(contexts: readonly string[]): Message {
   return {
     message: `not checked: the Providers of ${codeList(contexts)}: no entry point is found`,
-    hint: `render your app with ${code("createRoot(…).render(<App/>)")}, or list it in ${code("entries")} in the react-context options`,
+    hint: oneOf(
+      `render the app with ${code("createRoot(…).render(<App/>)")}`,
+      `list the entry point in ${code("entries")} in the react-context options`,
+    ),
   };
 }
 
@@ -115,7 +120,7 @@ export function entryMatchesNoComponent(file: string, exportName: string): Messa
 export function providesMatchesNoContext(file: string, exportName: string, name: string): Message {
   return {
     message: `not checked: ${code(name)} from entry ${code(`${file}#${exportName}`)}: it is not a required context`,
-    hint: `check the names in ${code("provides")} against your required contexts (made with no default, read through a check)`,
+    hint: `use the name of a required context in ${code("provides")}: one created with no default and read through a check, or stated ${code("RequiredContext")}`,
   };
 }
 
@@ -142,14 +147,20 @@ function statedList(contexts: readonly string[]): string {
 export function unreachableStated(component: string, contexts: readonly string[]): Message {
   return {
     message: `${code(component)} reads ${statedList(contexts)}, but no entry point renders it`,
-    hint: `render it from your app under the Provider, or list it in ${code("entries")} in the react-context options`,
+    hint: oneOf(
+      "render it from the app, under the Provider",
+      `list it in ${code("entries")} in the react-context options`,
+    ),
   };
 }
 
 export function noEntryPointStated(contexts: readonly string[]): Message {
   return {
     message: `${statedList(contexts)} cannot be proven: no entry point is found`,
-    hint: `render your app with ${code("createRoot(…).render(<App/>)")}, or list it in ${code("entries")} in the react-context options`,
+    hint: oneOf(
+      `render the app with ${code("createRoot(…).render(<App/>)")}`,
+      `list the entry point in ${code("entries")} in the react-context options`,
+    ),
   };
 }
 
@@ -157,24 +168,26 @@ export function noEntryPointStated(contexts: readonly string[]): Message {
  * A place that cannot be followed, where a stated context is not proven: the "not checked"
  * message of that place, now an error, with how to make it provable.
  */
+const PROP = "pass the value to the component as a prop instead of through the context";
+
 export function unprovable(base: Unchecked, contexts: readonly string[]): Message {
   const verb = contexts.length === 1 ? "is" : "are";
   return {
     message: `${statedList(contexts)} ${verb} not proven: ${base.what} cannot be followed`,
-    hint: `pass the value as a prop, or ${base.hint}`,
+    hint: base.hint.startsWith("one of\n") ? `${base.hint}\n- or ${PROP}` : oneOf(base.hint, PROP),
   };
 }
 
 export function guardNotNeeded(hook: string, context: string): Message {
   return {
     message: `${code(hook)} checks ${code(context)} at run time, but every reader is proven under its Provider`,
-    hint: `drop the check: ${code(context)} is ${STATED}, so its value is always there`,
+    hint: `remove the check: ${code(context)} is ${STATED}, so its value is always there`,
   };
 }
 
 export const fixTitles = {
-  declare: (context: string, call: string): string => `Declare ${context} required: ${call}`,
-  dropGuard: (hook: string): string => `Drop the check in ${hook}`,
+  declare: (context: string, call: string): string => `State ${context} required: ${call}`,
+  dropGuard: (hook: string): string => `Remove the run-time check in ${hook}`,
 };
 
 export const guaranteeNotes = {

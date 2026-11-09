@@ -1,6 +1,18 @@
 import ts from "@stateward/core/typescript";
-import { defineRule, option } from "@stateward/core";
-import type { FileContext, OptionsOf, TypeQueries } from "@stateward/core";
+import {
+  defineRule,
+  describeRelease,
+  option,
+  releaseCandidates,
+  releaseTraitOf,
+} from "@stateward/core";
+import type {
+  FileContext,
+  OptionsOf,
+  ReleaseCandidate,
+  ReleaseTrait,
+  TypeQueries,
+} from "@stateward/core";
 import {
   cleanupCalls,
   cleanupsOf,
@@ -61,11 +73,12 @@ A cleanup that calls a function declared outside the effect with what was starte
 
 It looks for these, each with what undoes it in a returned cleanup:
 
+- a value whose release trait is stated: a \`Disposable\` type, the \`Release<T>\` marker, a \`facts\` line (\`returns: "release"\`) or the facts the ownership pack ships (Firebase \`onSnapshot\`, RxJS, Redux and zustand \`subscribe\`). It is found whatever the function is called, and the note says where the trait comes from: calling it, its stated method or \`[Symbol.dispose]()\` undoes it. Node's own \`Disposable\` types (child processes, streams, timers) state nothing. The names below are the guess for everything else;
 - \`addEventListener(type, handler)\`: \`removeEventListener\` with the same target, type and handler variable, or aborting the \`signal\` passed in its options. A handler written inline cannot be removed, since the cleanup cannot name the same function;
 - \`setInterval(…)\`: \`clearInterval\` on the stored id;
 - \`setTimeout(…)\`: \`clearTimeout\` on the stored id; reported only when the timeout sets state, or the effect runs more than once (it has dependencies, or no list);
 - a timer kept in a ref that the effect clears itself before it starts the next one (a debounce): only unmount is missing, and the fix is an effect of its own, \`useEffect(() => () => clearTimeout(timer.current), [])\`;
-- \`subscribe(…)\` or \`.on(…)\` that returns an unsubscribe function (call it, or return the call itself) or a subscription object (its \`unsubscribe()\`);
+- \`subscribe(…)\` or \`.on(…)\` that returns an unsubscribe function (call it, or return the call itself) or a subscription object (its \`unsubscribe()\`), or the emitter's own way with the same arguments: \`bus.off(event, handler)\` for \`bus.on(event, handler)\`, \`removeListener\` for \`addListener\`;
 - \`new ResizeObserver\`, \`IntersectionObserver\` or \`MutationObserver\`: \`disconnect()\`;
 - \`new WebSocket\` or \`EventSource\`: \`close()\`.
 
@@ -143,10 +156,14 @@ type Started =
     }
   | {
       kind: "subscription";
-      node: ts.CallExpression;
+      node: ts.CallExpression | ts.NewExpression;
       call: string;
       stored: Stored;
       returns: "function" | "object";
+      /** How an object is released: `unsubscribe`, or the method the release trait states. */
+      method: string;
+      /** The release trait, when it is stated: the finding is then certain, and its note says why. */
+      trait: ReleaseTrait | undefined;
     }
   | {
       kind: "observer" | "connection";
@@ -248,6 +265,47 @@ function setsState(types: TypeQueries, call: ts.CallExpression): boolean {
   return found;
 }
 
+/**
+ * Node's types add `[Symbol.dispose]` to child processes, streams and timers, which end by
+ * themselves: their `Disposable` type states no release.
+ */
+const PLATFORM: readonly string[] = ["@types/node"];
+
+/** The method that releases a value with the release trait: none for a function. */
+function releaseMethod(trait: ReleaseTrait): string | undefined {
+  switch (trait.way.kind) {
+    case "call":
+      return undefined;
+    case "method":
+      return trait.way.name;
+    case "dispose":
+      return trait.way.async ? "[Symbol.asyncDispose]" : "[Symbol.dispose]";
+  }
+}
+
+/** What an effect starts whose release trait is stated (a type, a marker, a `facts` line). */
+function startedWithTrait(
+  ctx: FileContext<Settings>,
+  node: ts.Node,
+  effect: Effect,
+  candidate: ReleaseCandidate,
+): Started | undefined {
+  if (!ts.isCallExpression(node) && !ts.isNewExpression(node)) return undefined;
+  if (!candidate(node)) return undefined;
+  const trait = releaseTraitOf(node, ctx, { platformPackages: PLATFORM });
+  if (trait === undefined) return undefined;
+  const method = releaseMethod(trait);
+  return {
+    kind: "subscription",
+    node,
+    call: `${ts.isNewExpression(node) ? "new " : ""}${textOf(unwrapped(node.expression), ctx.sourceFile)}(…)`,
+    stored: storedIn(ctx.types, node, effect, ctx.sourceFile),
+    returns: method === undefined ? "function" : "object",
+    method: method ?? "unsubscribe",
+    trait,
+  };
+}
+
 function startedBy(
   types: TypeQueries,
   node: ts.Node,
@@ -325,8 +383,20 @@ function startedBy(
     call: `${textOf(callee, sourceFile)}(…)`,
     stored: storedIn(types, node, effect, sourceFile),
     returns,
+    method: "unsubscribe",
+    trait: undefined,
   };
 }
+
+/**
+ * Methods that start a subscription, and the methods of the same object that end it when called
+ * with the same arguments (an event emitter's `on` and `off`).
+ */
+const UNDONE_BY: ReadonlyMap<string, readonly string[]> = new Map([
+  ["on", ["off", "removeListener"]],
+  ["addListener", ["removeListener", "off"]],
+  ["subscribe", ["unsubscribe"]],
+]);
 
 /** The parts of a cleanup call: `window.removeEventListener` → receiver `window`, name. */
 function callParts(
@@ -375,12 +445,35 @@ function undone(
     case "interval":
     case "timeout":
       return parts.some((part) => CLEARS.includes(part.callee) && part.args[0] === stored);
-    case "subscription":
-      if (returned.includes(started.node)) return true;
+    case "subscription": {
+      if (returned.some((call) => call === started.node)) return true;
+      // `bus.on(event, handler)` undone the emitter's way: `bus.off(event, handler)`.
+      if (ts.isCallExpression(started.node)) {
+        const start = callParts(started.node, sourceFile);
+        const undoers = UNDONE_BY.get(start.name) ?? [];
+        if (
+          start.receiver !== undefined &&
+          start.args.length > 0 &&
+          parts.some(
+            (part) =>
+              part.receiver === start.receiver &&
+              undoers.includes(part.name) &&
+              part.args.length === start.args.length &&
+              part.args.every((arg, i) => arg === start.args[i]),
+          )
+        ) {
+          return true;
+        }
+      }
       if (stored === undefined) return false;
       return started.returns === "function"
         ? parts.some((part) => part.callee === stored)
-        : parts.some((part) => part.receiver === stored && part.name === "unsubscribe");
+        : parts.some(
+            (part) =>
+              (part.receiver === stored && part.name === started.method) ||
+              part.callee === `${stored}${started.method}`,
+          );
+    }
     case "observer":
       return parts.some(
         (part) =>
@@ -503,21 +596,23 @@ function messageFor(
     }
     case "subscription":
       if (started.returns === "object") {
+        const method = started.method.startsWith("[") ? started.method : `.${started.method}`;
         return {
-          message: fitted(
-            (cut) =>
-              `\`${cut.name(started.call)}\` returns a subscription that the effect never ends`,
+          message: fitted((cut) =>
+            started.trait === undefined
+              ? `\`${cut.name(started.call)}\` returns a subscription that the effect never ends`
+              : `\`${cut.name(started.call)}\` returns a value that the effect never releases`,
           ),
           hint: fitted(
             (cut) =>
-              `end it in the cleanup: \`return () => ${cut.name(started.stored?.text ?? "subscription")}.unsubscribe();\``,
+              `end it in the cleanup: \`return () => ${cut.name(started.stored?.text ?? "subscription")}${method}();\``,
           ),
         };
       }
       return {
         message: fitted(
           (cut) =>
-            `\`${cut.name(started.call)}\` returns an unsubscribe function that the effect never calls`,
+            `\`${cut.name(started.call)}\` returns ${started.trait === undefined ? "an unsubscribe" : "a release"} function that the effect never calls`,
         ),
         hint: fitted((cut) =>
           started.stored !== undefined
@@ -590,11 +685,19 @@ function unmountCalls(
     .flatMap((other) => cleanupCalls(types, other, cleanupsOf(types, other)));
 }
 
-function checkEffect(ctx: FileContext<Settings>, effect: Effect, all: readonly Effect[]): void {
+function checkEffect(
+  ctx: FileContext<Settings>,
+  effect: Effect,
+  all: readonly Effect[],
+  candidate: ReleaseCandidate,
+): void {
   const { sourceFile, types } = ctx;
   const started: Started[] = [];
   forEachOwn(effect.callback, (node) => {
-    const found = startedBy(types, node, effect, sourceFile, ctx.options);
+    // A stated release trait is certain; the names below are the guess for the rest.
+    const found =
+      startedWithTrait(ctx, node, effect, candidate) ??
+      startedBy(types, node, effect, sourceFile, ctx.options);
     if (found !== undefined) started.push(found);
   });
   if (started.length === 0) return;
@@ -626,10 +729,12 @@ function checkEffect(ctx: FileContext<Settings>, effect: Effect, all: readonly E
       });
       continue;
     }
+    const trait = each.kind === "subscription" ? each.trait : undefined;
     ctx.report({
       ...messageFor(types, each, hasCleanup),
       node: each.node,
       findingKind: each.kind === "listener" && each.inline ? "inline-handler" : "missing-cleanup",
+      related: trait === undefined ? [] : [{ node: each.node, message: describeRelease(trait) }],
     });
   }
 }
@@ -650,6 +755,9 @@ export const effectMissingCleanup = defineRule({
   },
   check(ctx) {
     const effects = effectsIn(ctx.types, ctx.sourceFile);
-    for (const effect of effects) checkEffect(ctx, effect, effects);
+    if (effects.length === 0) return;
+    // Most calls cannot have the release trait: the syntax rules them out before any type question.
+    const candidate = releaseCandidates(ctx);
+    for (const effect of effects) checkEffect(ctx, effect, effects, candidate);
   },
 });

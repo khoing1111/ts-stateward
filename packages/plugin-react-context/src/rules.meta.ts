@@ -7,8 +7,9 @@ export const RULES = {
     kind: "file",
     meta: {
       description:
-        "A default like `{} as Theme` is used when the Provider is missing, so the code reads an empty object typed as a full one and fails later.",
-      summary: "a context created with a fake default like `{} as Theme` or `null!`",
+        "Reports a context created with a cast or an empty object as its default (`{} as Theme`, `null!`): a component rendered outside the Provider reads that value, and its type says it is complete.",
+      summary:
+        "a context created with a cast or `{}` as its default, such as `{} as Theme` or `null!`",
       defaultSeverity: "error",
       tier: "coverage",
       group: "defaults",
@@ -35,7 +36,7 @@ export const RULES = {
     kind: "project",
     meta: {
       description:
-        "A component that reads a required context outside its Provider gets the default value or an error at run time; the finding shows the render path without it.",
+        "Reports a component that reads a required context and is rendered with no Provider of that context above it; the notes show the render path from the entry point.",
       summary: "a component that reads a required context, rendered with no Provider above it",
       defaultSeverity: "error",
       tier: "core",
@@ -54,6 +55,74 @@ export const RULES = {
           default: [],
           description:
             'Your own wrappers of React\'s `lazy`, by name (like ["lazyComponent"]), whose first argument is `() => import("./Page")`: the page they load is followed like `lazy`.',
+        },
+      },
+    },
+  },
+  "provider-nested": {
+    kind: "project",
+    meta: {
+      description:
+        "Reports a Provider of a context stated `SingleProvider` that is rendered under another Provider of the same context; the outer one is a note.",
+      summary: "a Provider of a context stated `SingleProvider`, rendered under another one",
+      defaultSeverity: "error",
+      tier: "core",
+      group: "providers",
+      needsTypes: { library: "React", modules: ["react"] },
+      widenedBy: ["react-router", "dynamic-components"],
+      options: {
+        ignore: {
+          kind: "strings",
+          default: [],
+          description: "Contexts (names or globs) whose nested Providers are not reported.",
+        },
+        lazyFunctions: {
+          kind: "strings",
+          default: [],
+          description:
+            'Your own wrappers of React\'s `lazy`, by name (like ["lazyComponent"]), as in `provider-missing`.',
+        },
+      },
+    },
+  },
+  "provider-value-changes-every-render": {
+    kind: "file",
+    meta: {
+      description:
+        "Reports a Provider whose value is a new object, array or function on every render, which re-renders every reader of the context; for a context stated `Stable`, any value that can change is an error.",
+      summary:
+        "a Provider given a new object or function on every render, or a value that can change for a context stated `Stable`",
+      defaultSeverity: "error",
+      tier: "core",
+      group: "providers",
+      needsTypes: { library: "React", modules: ["react"] },
+      options: {
+        ignore: {
+          kind: "strings",
+          default: [],
+          description:
+            "Contexts (names or globs) whose readers are few or cheap, so a new value each render is fine.",
+        },
+      },
+    },
+  },
+  "value-changed-by-reader": {
+    kind: "file",
+    meta: {
+      description:
+        "Reports a component or hook that changes the value it reads from a context (assigns or deletes a property, or calls `push`, `set` or `add` on an array, Map or Set in it): React re-renders the readers only when the Provider passes a new value, so the change does not show.",
+      summary: "a write to the value read from a context, in a component or hook that reads it",
+      defaultSeverity: "error",
+      tier: "addon",
+      addon: "value-changed-by-reader",
+      group: "readers",
+      needsTypes: { library: "React", modules: ["react"] },
+      options: {
+        ignore: {
+          kind: "strings",
+          default: [],
+          description:
+            "Contexts (names or globs) whose value is meant to be changed in place, such as a mutable store object.",
         },
       },
     },

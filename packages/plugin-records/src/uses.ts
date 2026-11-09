@@ -428,7 +428,7 @@ function guardedByKeyTest(access: ts.Expression, record: ts.Node, key: ts.Expres
 }
 
 /** The lookup handles a key the record lacks: tested first, or its result checked. */
-function handlesMissing(
+export function handlesMissing(
   access: ts.Expression,
   record: ts.Node,
   key: ts.Expression,

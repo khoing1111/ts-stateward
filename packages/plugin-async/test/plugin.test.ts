@@ -14,7 +14,7 @@ const EXPECTED: readonly (readonly [AsyncKey, Severity, RuleTier, Severity])[] =
 ];
 
 describe("async", () => {
-  it("is a plugin named async with its two rules, one group, and no editor contributions", () => {
+  it("is a plugin named async with its two rules, one group, and the states it lists as `Pending`", () => {
     const plugin = asyncFlow();
     expect(plugin.name).toBe("async");
     expect(Object.keys(plugin.rules)).toEqual(EXPECTED.map(([key]) => key));
@@ -22,7 +22,10 @@ describe("async", () => {
       "failures",
       "failures",
     ]);
-    expect(plugin.editor).toBeUndefined();
+    expect(Object.keys(plugin.editor ?? {})).toEqual(["guarantees"]);
+    expect(plugin.facts).toEqual({
+      "@reduxjs/toolkit": { cacheEntryRemoved: { neverRejects: true } },
+    });
     expect(plugin.description).toBe(
       "An async failure is never lost: handlers catch their own, and state set before an await is set again when it fails.",
     );

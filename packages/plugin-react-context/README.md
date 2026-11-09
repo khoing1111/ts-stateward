@@ -42,11 +42,12 @@ rules: {
 Add-on rules stay off until you list their add-on:
 
 ```ts
-addons: ["react-context/dynamic-components", "react-context/react-router"],
+addons: ["react-context/dynamic-components", "react-context/react-router", "react-context/value-changed-by-reader"],
 ```
 
-- `react-context/dynamic-components`: `provider-missing` (checks more with it)
-- `react-context/react-router`: `provider-missing` (checks more with it)
+- `react-context/dynamic-components`: `provider-missing` (checks more with it), `provider-nested` (checks more with it)
+- `react-context/react-router`: `provider-missing` (checks more with it), `provider-nested` (checks more with it)
+- `react-context/value-changed-by-reader`: `value-changed-by-reader`
 
 Every key of the config: [config.md](https://github.com/khoing1111/ts-stateward/blob/main/docs/user/config.md).
 
@@ -58,8 +59,11 @@ Every key of the config: [config.md](https://github.com/khoing1111/ts-stateward/
 
 | Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
 | --- | --- | --- | --- | --- | --- |
-| [fake-default-value](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/react-context/fake-default-value.md) | a context created with a fake default like `{} as Theme` or `null!` | A default like `{} as Theme` is used when the Provider is missing, so the code reads an empty object typed as a full one and fails later. | Coverage | info | error |
-| [provider-missing](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/react-context/provider-missing.md) | a component that reads a required context, rendered with no Provider above it | A component that reads a required context outside its Provider gets the default value or an error at run time; the finding shows the render path without it. | Core | error | error |
+| [fake-default-value](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/react-context/fake-default-value.md) | a context created with a cast or `{}` as its default, such as `{} as Theme` or `null!` | Reports a context created with a cast or an empty object as its default (`{} as Theme`, `null!`): a component rendered outside the Provider reads that value, and its type says it is complete. | Coverage | info | error |
+| [provider-missing](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/react-context/provider-missing.md) | a component that reads a required context, rendered with no Provider above it | Reports a component that reads a required context and is rendered with no Provider of that context above it; the notes show the render path from the entry point. | Core | error | error |
+| [provider-nested](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/react-context/provider-nested.md) | a Provider of a context stated `SingleProvider`, rendered under another one | Reports a Provider of a context stated `SingleProvider` that is rendered under another Provider of the same context; the outer one is a note. | Core | error | error |
+| [provider-value-changes-every-render](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/react-context/provider-value-changes-every-render.md) | a Provider given a new object or function on every render, or a value that can change for a context stated `Stable` | Reports a Provider whose value is a new object, array or function on every render, which re-renders every reader of the context; for a context stated `Stable`, any value that can change is an error. | Core | error | error |
+| [value-changed-by-reader](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/react-context/value-changed-by-reader.md) | a write to the value read from a context, in a component or hook that reads it | Reports a component or hook that changes the value it reads from a context (assigns or deletes a property, or calls `push`, `set` or `add` on an array, Map or Set in it): React re-renders the readers only when the Provider passes a new value, so the change does not show. | Add-on `value-changed-by-reader` | error | error |
 
 **Core** rules are on in every preset. **Coverage** rules point at code whose types do not say
 enough for stateward to check it; they are info under `recommended` and errors under `strict`.

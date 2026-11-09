@@ -23,6 +23,11 @@ const FORMAT: readonly [string, string] = [
   "pretty to read (the default), json for scripts",
 ];
 
+const NO_CACHE: readonly [string, string] = [
+  "--no-cache",
+  "check every file again instead of reusing earlier results (the results `check` keeps)",
+];
+
 export const COMMAND_HELP = {
   check: {
     usage:
@@ -76,35 +81,36 @@ export const COMMAND_HELP = {
     example: ["stateward check --rule records/lookup-misses-key", "only that rule's problems"],
   },
   baseline: {
-    usage: "baseline [--prune] [--config <file>] [--cwd <dir>]",
+    usage: "baseline [--prune] [--no-cache] [--config <file>] [--cwd <dir>]",
     summary: "Accept the problems you have today, so that from now on only new ones fail `check`.",
-    options: [["--prune", "drop accepted problems you have fixed since"], CONFIG, CWD],
+    options: [["--prune", "drop accepted problems you have fixed since"], NO_CACHE, CONFIG, CWD],
     example: ["stateward baseline", "save today's problems in stateward.baseline.json"],
   },
   plan: {
-    usage: "plan [--format pretty|json] [--config <file>] [--cwd <dir>]",
+    usage: "plan [--format pretty|json] [--no-cache] [--config <file>] [--cwd <dir>]",
     summary:
       "Show every rule with how many places it flags in your code, in the order to turn them on.",
-    options: [FORMAT, CONFIG, CWD],
+    options: [FORMAT, NO_CACHE, CONFIG, CWD],
     example: ["stateward plan", "decide where to start"],
   },
   next: {
-    usage: "next [--anyway] [--baseline] [--config <file>] [--cwd <dir>]",
+    usage: "next [--anyway] [--baseline] [--no-cache] [--config <file>] [--cwd <dir>]",
     summary:
       "Turn on the next rule and say how many places it flags. Waits while the last rule you turned on still has problems.",
     options: [
       ["--anyway", "move on even though the last rule still has problems"],
       ["--baseline", "accept the new rule's problems at once"],
+      NO_CACHE,
       CONFIG,
       CWD,
     ],
     example: ["stateward next", "turn on the next rule; then run `stateward check`"],
   },
   coverage: {
-    usage: "coverage [--format pretty|json] [--config <file>] [--cwd <dir>]",
+    usage: "coverage [--format pretty|json] [--no-cache] [--config <file>] [--cwd <dir>]",
     summary:
       "Show, per pack, the code stateward cannot check yet, and the change that would let it.",
-    options: [FORMAT, CONFIG, CWD],
+    options: [FORMAT, NO_CACHE, CONFIG, CWD],
     example: ["stateward coverage", "see what is not checked yet"],
   },
   init: {
@@ -137,20 +143,20 @@ export const COMMAND_HELP = {
     usage: "explain <rule> [--config <file>] [--cwd <dir>]",
     summary: "Explain a rule: why it matters, what it flags and how to fix it.",
     options: [CONFIG, CWD],
-    example: ["stateward explain unions/default-hides-cases", "read that rule's page"],
+    example: ["stateward explain unions/non-exhaustive-switch", "read that rule's page"],
   },
   deps: {
-    usage: "deps [--format pretty|json] [--config <file>] [--cwd <dir>]",
+    usage: "deps [--format pretty|json] [--no-cache] [--config <file>] [--cwd <dir>]",
     summary:
       "Show the library functions your code calls and whether stateward knows what they throw (with the errors pack).",
-    options: [FORMAT, CONFIG, CWD],
+    options: [FORMAT, NO_CACHE, CONFIG, CWD],
     example: ["stateward deps", "see which library calls are still unknown"],
   },
   guarantees: {
-    usage: "guarantees [--format pretty|json] [--config <file>] [--cwd <dir>]",
+    usage: "guarantees [--format pretty|json] [--no-cache] [--config <file>] [--cwd <dir>]",
     summary:
       "List the guarantees your code states (a `RequiredContext`, an `Owned` value), where each is declared, whether stateward proves it, and the readers or writers it covers; a marker nothing uses is listed as unused. Exit code: 0 when every guarantee is proven, unused or not checked, 1 when one is not proven, 2 when stateward could not run.",
-    options: [FORMAT, CONFIG, CWD],
+    options: [FORMAT, NO_CACHE, CONFIG, CWD],
     example: ["stateward guarantees", "review every promise and its proof"],
   },
   cache: {

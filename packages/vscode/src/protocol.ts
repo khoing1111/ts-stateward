@@ -163,3 +163,16 @@ export function parseNext(value: unknown): NextAnswer {
   if (kind === undefined) throw new UnexpectedAnswerError(NEXT_REQUEST);
   return { kind, message: value.message };
 }
+
+/** JSON-RPC's code for a request the server does not implement. */
+export const METHOD_NOT_FOUND = -32601;
+
+/** Whether `error` is the server's answer that it does not implement the request. */
+export function isMethodNotFound(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === METHOD_NOT_FOUND
+  );
+}

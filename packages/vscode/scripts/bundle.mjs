@@ -46,7 +46,7 @@ copyFileSync(babel, path.join(dist, "babel.cjs"));
 
 // TypeScript reads lib.*.d.ts (where `Record`, `Array`, `Promise` are declared) from the folder of
 // the file it runs from. Bundled, that folder is dist/: without these copies every standard type
-// is an error type, and the rules that read a `Record` (records/lookup-misses-key, records/table-type-too-loose)
+// is an error type, and the rules that read a `Record` (records/lookup-misses-key, records/ambiguous-table)
 // report nothing. .vscodeignore lets them into the .vsix.
 const tsLib = path.dirname(fromCore.resolve("typescript"));
 for (const name of readdirSync(tsLib)) {

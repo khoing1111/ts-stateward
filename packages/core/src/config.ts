@@ -8,6 +8,7 @@ import type {
   IgnoreOptions,
   UnknownsSetting,
   FunctionFacts,
+  ReleaseFact,
   PackageFactsConfig,
   OptionSpec,
   OptionSpecs,
@@ -27,7 +28,8 @@ import type {
   Severity,
   UserConfig,
 } from "./types.js";
-import { addonNames, groupIds } from "./severity.js";
+import { movedNotice, renameNotice, renamedRule } from "./renamed.js";
+import { addonNames, groupIds, ruleIds } from "./severity.js";
 import { PRESETS, RULE_TIERS, orList } from "./vocabulary.js";
 import { defaultOptions, optionProblem, parseRuleOptions } from "./options.js";
 
@@ -512,7 +514,7 @@ function parsePlugin(value: unknown, index: number, errors: string[]): Plugin | 
     errors.push(`plugins[${String(index)}] must be an object`);
     return undefined;
   }
-  const { name, description, rules, editor } = value;
+  const { name, description, rules, editor, facts } = value;
   if (typeof name !== "string" || name === "" || name.includes("/")) {
     errors.push(`plugins[${String(index)}].name must be a non-empty string without "/"`);
     return undefined;
@@ -534,11 +536,30 @@ function parsePlugin(value: unknown, index: number, errors: string[]): Plugin | 
     else parsedRules[key] = parsed;
   }
   if (!valid) return undefined;
-  if (editor === undefined) return { name, description, rules: parsedRules };
+  const shipped = shippedFacts(facts, where, errors);
+  if (shipped === null) return undefined;
+  const parsed: Plugin = {
+    name,
+    description,
+    rules: parsedRules,
+    ...(shipped === undefined ? {} : { facts: shipped }),
+  };
+  if (editor === undefined) return parsed;
   const parsedEditor = parseEditor(editor, where, errors);
-  return parsedEditor === undefined
-    ? undefined
-    : { name, description, rules: parsedRules, editor: parsedEditor };
+  return parsedEditor === undefined ? undefined : { ...parsed, editor: parsedEditor };
+}
+
+/** A plugin's own facts (`Plugin.facts`), checked as the config's are; null when one is malformed. */
+function shippedFacts(
+  value: unknown,
+  where: string,
+  errors: string[],
+): PackageFactsConfig | undefined | null {
+  if (value === undefined) return undefined;
+  const found: string[] = [];
+  const facts = parseFacts(value, found);
+  errors.push(...found.map((error) => `${where}: ${error}`));
+  return found.length > 0 ? null : facts;
 }
 
 function parsePlugins(value: unknown, errors: string[]): readonly Plugin[] {
@@ -569,6 +590,12 @@ function splitRuleConfig(value: unknown): { setting: RuleSetting; options: unkno
   return undefined;
 }
 
+/** A rule id no loaded plugin has (a typo, or a rule a release removed), with the ones they have. */
+function unknownRuleId(ruleId: string, known: Iterable<string>): string {
+  const listed = [...known].sort().join(", ") || "none";
+  return `unknown rule id "${ruleId}"; rules of the loaded plugins: ${listed}`;
+}
+
 function parseRuleSettings(
   value: unknown,
   plugins: readonly Plugin[],
@@ -590,7 +617,7 @@ function parseRuleSettings(
   const given = new Map<string, unknown>();
   for (const [ruleId, entry] of Object.entries(value)) {
     const split = splitRuleConfig(entry);
-    if (!known.has(ruleId)) errors.push(`rules: unknown rule id "${ruleId}"`);
+    if (!known.has(ruleId)) errors.push(`rules: ${unknownRuleId(ruleId, known.keys())}`);
     else if (split === undefined) {
       errors.push(
         `rules["${ruleId}"] must be "error", "warning", "info", "off", or [severity, { options }]`,
@@ -690,7 +717,27 @@ function parseAddons(
   return listed;
 }
 
-const FACT_KINDS: readonly string[] = ["throws", "rejects"];
+const FACT_KINDS: readonly string[] = ["throws", "rejects", "returns", "neverRejects"];
+
+const RETURNS_SHAPE = '"release" (call the returned function) or { release: "<method>" }';
+
+/** `returns: "release"` or `returns: { release: "unsubscribe" }`: the release trait of a package function. */
+function parseReturns(value: unknown, where: string, errors: string[]): ReleaseFact | undefined {
+  if (value === "release") return value;
+  if (isRecord(value)) {
+    const keys = Object.keys(value);
+    const method = value.release;
+    if (keys.length === 1 && typeof method === "string" && /^[A-Za-z_$][\w$]*$/.test(method)) {
+      return { release: method };
+    }
+    if (keys.length === 1 && typeof method === "string") {
+      errors.push(`${where}.returns.release must be a method name, such as "unsubscribe"`);
+      return undefined;
+    }
+  }
+  errors.push(`${where}.returns must be ${RETURNS_SHAPE}`);
+  return undefined;
+}
 
 /** `facts: { axios: { get: { throws: ["AxiosError"] } } }`. */
 function parseFacts(value: unknown, errors: string[]): PackageFactsConfig {
@@ -709,13 +756,26 @@ function parseFacts(value: unknown, errors: string[]): PackageFactsConfig {
     for (const [fn, entry] of Object.entries(functions)) {
       const where = `facts["${name}"]["${fn}"]`;
       if (!isRecord(entry)) {
-        errors.push(`${where} must be an object: { throws: [...], rejects: [...] }`);
+        errors.push(
+          `${where} must be an object: { throws: [...], rejects: [...], returns: "release", neverRejects: true }`,
+        );
         continue;
       }
-      const one: { throws?: readonly string[]; rejects?: readonly string[] } = {};
+      const one: {
+        throws?: readonly string[];
+        rejects?: readonly string[];
+        returns?: ReleaseFact;
+        neverRejects?: true;
+      } = {};
       for (const [kind, list] of Object.entries(entry)) {
         if (!FACT_KINDS.includes(kind)) {
           errors.push(`${where}: unknown fact "${kind}"; facts are ${orList(FACT_KINDS)}`);
+        } else if (kind === "neverRejects") {
+          if (list === true) one.neverRejects = true;
+          else errors.push(`${where}.neverRejects must be true (leave it out when it can reject)`);
+        } else if (kind === "returns") {
+          const returns = parseReturns(list, where, errors);
+          if (returns !== undefined) one.returns = returns;
         } else if (!isStringArray(list)) {
           errors.push(`${where}.${kind} must be an array of class names`);
         } else if (kind === "throws") {
@@ -723,6 +783,9 @@ function parseFacts(value: unknown, errors: string[]): PackageFactsConfig {
         } else {
           one.rejects = list;
         }
+      }
+      if (one.neverRejects === true && (one.rejects ?? []).length > 0) {
+        errors.push(`${where}: neverRejects and a non-empty rejects list contradict each other`);
       }
       parsed[fn] = one;
     }
@@ -786,7 +849,7 @@ function parseOverrideRules(
   const settings: Record<string, RuleSetting> = {};
   for (const [ruleId, entry] of Object.entries(value)) {
     if (!known.has(ruleId)) {
-      errors.push(`${name}: unknown rule id "${ruleId}"`);
+      errors.push(`${name}: ${unknownRuleId(ruleId, known.keys())}`);
     } else if (Array.isArray(entry)) {
       errors.push(
         `${name}["${ruleId}"] takes a severity or "off", not options; set a rule's options once, in the config's own rules`,
@@ -1091,6 +1154,60 @@ function mergeChain(
   return merged;
 }
 
+/**
+ * An object keyed by rule ids with each renamed id written as it is now (`renamed.ts`), unless a
+ * loaded plugin still has the old id; an entry under the new id wins over the old one. An entry
+ * whose rule moved to a pack no loaded plugin is is dropped. `notices` gets one line per old id
+ * found.
+ */
+function migratedRuleKeys(
+  value: unknown,
+  current: ReadonlySet<string>,
+  notices: Set<string>,
+  where: (id: string) => string,
+): unknown {
+  if (!isRecord(value)) return value;
+  const renamed: Record<string, unknown> = {};
+  for (const [id, entry] of Object.entries(value)) {
+    const now = current.has(id) ? undefined : renamedRule(id);
+    if (now === undefined) {
+      renamed[id] = entry;
+      continue;
+    }
+    if (!current.has(now)) {
+      // The rule moved to a pack this config does not load: the entry applies to nothing.
+      notices.add(movedNotice(id, now, where(id)));
+      continue;
+    }
+    notices.add(renameNotice(id, now, where(id)));
+    if (!(now in value)) renamed[now] = entry;
+  }
+  return renamed;
+}
+
+/** The config with renamed rule ids written as they are now, in `rules` and in each override's. */
+function migrateRuleIds(
+  input: Record<string, unknown>,
+  current: ReadonlySet<string>,
+  notices: Set<string>,
+  where: (id: string) => string,
+): Record<string, unknown> {
+  const migrated: Record<string, unknown> = { ...input };
+  if (input.rules !== undefined) {
+    migrated.rules = migratedRuleKeys(input.rules, current, notices, where);
+  }
+  const { overrides } = input;
+  if (Array.isArray(overrides)) {
+    const list: unknown[] = overrides;
+    migrated.overrides = list.map((item) =>
+      isRecord(item) && item.rules !== undefined
+        ? { ...item, rules: migratedRuleKeys(item.rules, current, notices, where) }
+        : item,
+    );
+  }
+  return migrated;
+}
+
 /** `tsconfig`: one path, or a non-empty list of paths and globs; undefined after an error. */
 function parseTsconfig(value: unknown, errors: string[]): readonly string[] | undefined {
   if (value === undefined) return [DEFAULT_TSCONFIG];
@@ -1110,13 +1227,24 @@ function parseTsconfig(value: unknown, errors: string[]): readonly string[] | un
  * Validates untrusted config input once. `tsconfig` is resolved against `configDir`, so the
  * returned value holds absolute paths (and absolute globs).
  */
-export function parseConfig(given: unknown, configDir: string): ParseResult<Config> {
+export function parseConfig(
+  given: unknown,
+  configDir: string,
+  configName = "your config",
+  /** The line the config file names an old rule id on, so the notice says where to rename it. */
+  lineOf: (id: string) => number | undefined = () => undefined,
+): ParseResult<Config> {
   if (!isRecord(given)) return { ok: false, errors: ["config must be an object"] };
   const errors: string[] = [];
   const merged = mergeChain(configChain(given, { name: "your config" }, [], errors), errors);
   const tsconfig = parseTsconfig(merged.tsconfig, errors);
   const plugins = parsePlugins(merged.plugins, errors);
-  const input = merged;
+  const notices = new Set<string>();
+  const where = (id: string): string => {
+    const line = lineOf(id);
+    return line === undefined ? configName : `${configName}:${String(line)}`;
+  };
+  const input = migrateRuleIds(merged, new Set(ruleIds(plugins)), notices, where);
   const preset = parsePreset(input.preset, errors);
   const addons = parseAddons(input.addons, plugins, errors);
   const { rules, ruleOptions } = parseRuleSettings(input.rules ?? {}, plugins, errors);
@@ -1152,7 +1280,7 @@ export function parseConfig(given: unknown, configDir: string): ParseResult<Conf
       ignores,
       unknowns,
       maxMemory,
-      warnings: [],
+      warnings: [...notices],
     },
   };
 }

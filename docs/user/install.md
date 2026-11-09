@@ -102,7 +102,7 @@ code --uninstall-extension stateward.stateward-vscode
   The React rules read React's types from your app's `node_modules`. Run your package manager's
   install, then check again.
 - **`` `strictNullChecks` is off in `tsconfig.json` ``.** TypeScript then does not check `null` and
-  `undefined`, so fixes such as `satisfies never` prove less. Set `strict: true` (or
+  `undefined`, so a `satisfies` check proves less. Set `strict: true` (or
   `strictNullChecks: true`) when you can; stateward works either way.
 - **`turn on rollout: true ... first`** from `next`. Set `rollout: true` in `stateward.config.ts`.
 - **`unknown rule "..."`.** Rule ids include the pack, as in `records/lookup-misses-key`. The

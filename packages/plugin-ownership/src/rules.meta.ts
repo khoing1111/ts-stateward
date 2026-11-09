@@ -65,4 +65,24 @@ export const RULES = {
       },
     },
   },
+  "resource-not-released": {
+    kind: "file",
+    meta: {
+      description:
+        "A value with the release trait (a subscription, a listener, a connection) that a function starts and never releases keeps running, and the leak shows far from its cause.",
+      summary:
+        "a subscription, listener or connection stated to need releasing that is never released",
+      defaultSeverity: "error",
+      tier: "core",
+      group: "owners",
+      options: {
+        ignore: {
+          kind: "strings",
+          default: [],
+          description:
+            "Functions whose results are not checked, as the note names them (globs like `Observable.*`).",
+        },
+      },
+    },
+  },
 } as const satisfies Readonly<Record<string, RuleDeclaration>>;

@@ -1,6 +1,9 @@
+import { ErrorCodes, ResponseError } from "vscode-jsonrpc";
 import { describe, expect, it } from "vitest";
 import {
+  METHOD_NOT_FOUND,
   UnexpectedAnswerError,
+  isMethodNotFound,
   parseChecking,
   parseNext,
   parsePlan,
@@ -106,5 +109,19 @@ describe("parseChecking", () => {
     );
     expect(parseChecking({ checking: false })).toBeUndefined();
     expect(parseChecking(null)).toBeUndefined();
+  });
+});
+
+describe("isMethodNotFound", () => {
+  it("recognises the server's answer by its code, not its text", () => {
+    expect(METHOD_NOT_FOUND).toBe(ErrorCodes.MethodNotFound);
+    expect(isMethodNotFound(new ResponseError(ErrorCodes.MethodNotFound, "anything"))).toBe(true);
+    expect(
+      isMethodNotFound(
+        new ResponseError(ErrorCodes.InternalError, "Unhandled method stateward/recheck"),
+      ),
+    ).toBe(false);
+    expect(isMethodNotFound(new Error("Unhandled method stateward/recheck"))).toBe(false);
+    expect(isMethodNotFound(undefined)).toBe(false);
   });
 });

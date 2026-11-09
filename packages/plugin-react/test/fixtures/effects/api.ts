@@ -36,3 +36,16 @@ export const presence = {
     return { unsubscribe: () => undefined };
   },
 };
+
+/** An event bus in the style of an emitter: `on` returns an unsubscribe function, and `off` with the same arguments ends it too. */
+export const bus = {
+  on(event: string, handler: () => void): () => void {
+    void event;
+    void handler;
+    return () => undefined;
+  },
+  off(event: string, handler: () => void): void {
+    void event;
+    void handler;
+  },
+};

@@ -1,4 +1,5 @@
 import { definePlugin, lazyRule, moduleLoader } from "@stateward/core";
+import { guarantees } from "./guarantees.js";
 import { RULES } from "./rules.meta.js";
 
 /** Each rule's module, imported the first time the rule is on. */
@@ -25,5 +26,9 @@ export function asyncFlow() {
         (module) => module.handlerRejectionLost,
       ),
     },
+    editor: { guarantees },
+    // RTK Query resolves `cacheEntryRemoved` when the cache entry is removed and never rejects it:
+    // an `await` of it is not a way out. The ownership pack ships the same line.
+    facts: { "@reduxjs/toolkit": { cacheEntryRemoved: { neverRejects: true } } },
   });
 }

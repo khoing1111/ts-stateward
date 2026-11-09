@@ -11,7 +11,7 @@ function fixture(name: string): string {
 /** The plain form, in the context's own names. */
 function hintFor(label: string, name: string, type: string): string {
   return [
-    "create it with `undefined` and read it in a hook that throws, so a missing Provider fails at once:",
+    "create it with `undefined`, and read it in a hook that throws when the Provider is missing:",
     `    const ${name} = createContext<${type} | undefined>(undefined);`,
     `    // in use${label}(): if (value === undefined) throw new Error("${name} needs a Provider");`,
   ].join("\n");
@@ -19,7 +19,9 @@ function hintFor(label: string, name: string, type: string): string {
 
 function headline(name: string, argument: string): string {
   const context = name === "this context" ? "context" : `\`${name}\``;
-  return `${context} defaults to a fake value, \`${argument}\``;
+  return argument === "{}"
+    ? `${context} defaults to \`${argument}\`, an empty object typed as the full value`
+    : `${context} defaults to \`${argument}\`, a cast that is not a real value`;
 }
 
 describe("react-context/fake-default-value", () => {
@@ -51,7 +53,7 @@ describe("react-context/fake-default-value", () => {
         ruleId: "react-context/fake-default-value",
         severity: "info",
       });
-      expect(finding.hint).toContain("create it with `undefined` and read it in a hook");
+      expect(finding.hint).toContain("create it with `undefined`, and read it in a hook");
       expect(finding.hint).not.toContain("@stateward");
     }
     // The context's own names when it ends in "Context", a neutral name when it does not.
@@ -85,7 +87,7 @@ describe("react-context/fake-default-value", () => {
         "contexts.ts",
         headline("ThemeContext", "undefined as never"),
         [
-          "create it with the helper of the guarantees file, which holds the one cast:",
+          "create it with `requiredContext` from `guarantees.ts`, which holds the only cast:",
           "    requiredContext<Theme>()",
         ].join("\n"),
       ],
@@ -106,10 +108,16 @@ describe("react-context/fake-default-value", () => {
 });
 
 describe("reactContext", () => {
-  it("is a plugin named react-context with its two rules, a hover, a refactoring and its guarantees", () => {
+  it("is a plugin named react-context with its rules, a hover, a refactoring and its guarantees", () => {
     const plugin = reactContext();
     expect(plugin.name).toBe("react-context");
-    expect(Object.keys(plugin.rules)).toEqual(["fake-default-value", "provider-missing"]);
+    expect(Object.keys(plugin.rules)).toEqual([
+      "fake-default-value",
+      "provider-missing",
+      "provider-nested",
+      "provider-value-changes-every-render",
+      "value-changed-by-reader",
+    ]);
     expect(Object.keys(plugin.editor ?? {})).toEqual(["hover", "codeActions", "guarantees"]);
   });
 

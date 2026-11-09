@@ -31,10 +31,22 @@ export function onDarkMode(): void {
 }
 \`\`\`
 
-A value can also state its owner in its type: \`Owned<T>\`, from \`guarantees.ts\`, the file the quick fix writes once in your project. stateward then stops guessing for that value and proves it: every change from another module is an error, also through an alias, a re-export, a cast or a function it is handed to, and a place stateward cannot follow is an error too, with why:
+The plainest way to keep one writer needs no stateward: keep the mutable value private, and export a read-only view of it (\`readonly\` at every level) with the functions that change it. TypeScript then rejects \`settings.theme = "dark"\` in any other file:
+
+\`\`\`ts
+const state = { theme: "light", fontSize: 14 };
+
+export const settings: { readonly theme: string; readonly fontSize: number } = state;
+
+export function setTheme(theme: "light" | "dark"): void {
+  state.theme = theme;
+}
+\`\`\`
+
+A value can also state its owner in its type, for code that is not restructured this way, for changes \`readonly\` does not see (a cast, a method of a \`Map\`), or to have each change proven: \`Owned<T>\`, from \`guarantees.ts\`, the file the quick fix writes once in your project. stateward then stops guessing for that value and proves it: every change from another module is an error, also through an alias, a re-export, a cast or a function it is handed to, and a place stateward cannot follow is an error too, with why:
 
 \`\`\`ts example-bad file=guarantees.ts
-export type Owned<T> = T & { readonly __guarantee?: "owned" };
+export type Owned<T = unknown> = T & { readonly "__guarantee:owned"?: true };
 \`\`\`
 
 \`\`\`ts example-bad file=session.ts
@@ -168,10 +180,17 @@ function headline(write: Write, owner: string): string {
   );
 }
 
+/**
+ * The plain TypeScript pattern first (a function in the owner, and the value exported as a
+ * read-only view, so TypeScript itself rejects other changes), the `Owned` marker second.
+ */
 function hintOf(write: Write, owner: string): string {
-  return fitted(
-    (cut) =>
-      `add a function in \`${cut.path(owner)}\` that makes the change (e.g. \`${shorten(write.example, 50)}\`), and call it instead`,
+  return fitted((cut) =>
+    [
+      "one of",
+      `- add a function in \`${cut.path(owner)}\` that makes the change (e.g. \`${shorten(write.example, 50)}\`), call it, and export the value read-only (\`readonly\` at every level)`,
+      `- or state it \`Owned\`, so stateward proves that only \`${cut.path(owner)}\` changes it`,
+    ].join("\n"),
   );
 }
 

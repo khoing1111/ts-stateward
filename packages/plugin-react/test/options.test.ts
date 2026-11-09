@@ -45,14 +45,6 @@ describe("react render-stability options", () => {
       "info: effect runs after every render: `columns` from `useColumns(…)` is a new array each time",
     ]);
   });
-
-  it("provider-value-changes-every-render: `ignore`", () => {
-    expect(
-      count("shop", "provider-value-changes-every-render", {
-        ignore: ["ItemContext", "Theme*", "Toggle*", "Field*"],
-      }),
-    ).toBe(3);
-  });
 });
 
 describe("react effects options", () => {
@@ -64,8 +56,8 @@ describe("react effects options", () => {
   });
 
   it("effect-missing-cleanup: what counts as started, and a severity per kind", () => {
-    expect(count("effects", "effect-missing-cleanup")).toBe(8);
-    expect(count("effects", "effect-missing-cleanup", { timeouts: false })).toBe(7);
+    expect(count("effects", "effect-missing-cleanup")).toBe(9);
+    expect(count("effects", "effect-missing-cleanup", { timeouts: false })).toBe(8);
     expect(
       count("effects", "effect-missing-cleanup", {
         observers: [],
@@ -79,7 +71,7 @@ describe("react effects options", () => {
     expect(mixed.filter((line) => line.startsWith("error"))).toEqual([
       "error: `resize` listener on `window` is an inline function: no cleanup can remove it",
     ]);
-    expect(mixed.filter((line) => line.startsWith("info"))).toHaveLength(7);
+    expect(mixed.filter((line) => line.startsWith("info"))).toHaveLength(8);
   });
 
   it("effect-response-race: `notRequests` (the add-on's guesses)", () => {

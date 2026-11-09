@@ -213,7 +213,7 @@ function oldTypescriptSmoke(manager, temp) {
   const check = manager.exec(app, "stateward", ["check"]);
   report(
     label("stateward check runs and reports"),
-    check.status === 1 && check.output.includes("records/table-type-too-loose"),
+    check.status === 1 && check.output.includes("records/ambiguous-table"),
     `exit code ${String(check.status)}\n${check.output}`,
   );
 }
@@ -307,8 +307,8 @@ function leanSmoke(manager, temp) {
   );
   const check = manager.exec(app, "stateward", ["check"]);
   report(
-    label("stateward check runs and reports unions/default-hides-cases"),
-    check.status === 1 && check.output.includes("unions/default-hides-cases"),
+    label("stateward check runs and reports unions/non-exhaustive-switch"),
+    check.status === 1 && check.output.includes("unions/non-exhaustive-switch"),
     `exit code ${String(check.status)}\n${check.output}`,
   );
 }
@@ -339,12 +339,12 @@ function smoke(manager, temp) {
     const check = manager.exec(app, "stateward", ["check"]);
     report(
       label(
-        "stateward check exits 1 and reports react-context/fake-default-value, unions/default-hides-cases and records/table-type-too-loose",
+        "stateward check exits 1 and reports react-context/fake-default-value, unions/non-exhaustive-switch and records/ambiguous-table",
       ),
       check.status === 1 &&
         check.output.includes("react-context/fake-default-value") &&
-        check.output.includes("unions/default-hides-cases") &&
-        check.output.includes("records/table-type-too-loose"),
+        check.output.includes("unions/non-exhaustive-switch") &&
+        check.output.includes("records/ambiguous-table"),
       `exit code ${String(check.status)}\n${check.output}`,
     );
   }

@@ -33,11 +33,19 @@ One rule's severity (`error`, `warning`, `info` or `off`), and its options, go u
 
 ```ts
 rules: {
-  "records/lookup-misses-key": "warning",
+  "records/duplicate-key": "warning",
   // a severity and options; this option is at its default, the rule's page lists them all
-  "records/duplicate-key": ["error", { ignore: [] }],
+  "records/ambiguous-table": ["error", { ignore: [] }],
 },
 ```
+
+Add-on rules stay off until you list their add-on:
+
+```ts
+addons: ["records/unchecked-key"],
+```
+
+- `records/unchecked-key`: `unchecked-key`
 
 Every key of the config: [config.md](https://github.com/khoing1111/ts-stateward/blob/main/docs/user/config.md).
 
@@ -49,9 +57,10 @@ Every key of the config: [config.md](https://github.com/khoing1111/ts-stateward/
 
 | Rule | What it finds | Why it matters | Kind | `recommended` | `strict` |
 | --- | --- | --- | --- | --- | --- |
+| [ambiguous-table](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/records/ambiguous-table.md) | a lookup table typed `Record<string, V>` that says neither "all keys" nor "keys from outside" | A table typed `Record<string, V>` does not say whether its keys are fixed or come from outside, so a misspelt or missing key compiles and the read gives `undefined`. | Core | error | error |
 | [duplicate-key](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/records/duplicate-key.md) | the same key twice in a `new Map([...])` or `new Set([...])` written out in code | The same key twice in a `new Map([...])` or `new Set([...])` keeps only the last entry, so the first one has no effect. | Core | error | error |
 | [lookup-misses-key](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/records/lookup-misses-key.md) | a lookup like `labels[status]` with no entry for some value of the key | A lookup like `labels[status]` is typed as always present; a value with no entry gives `undefined`, and the page shows "undefined" or the next call throws. | Core | error | error |
-| [table-type-too-loose](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/records/table-type-too-loose.md) | a lookup table typed `Record<string, V>` that says neither "all keys" nor "keys from outside" | A table typed `Record<string, V>` lets a misspelt or missing key compile; typing its keys, or its reads as possibly missing, lets TypeScript check each read. | Core | error | error |
+| [unchecked-key](https://github.com/khoing1111/ts-stateward/blob/main/docs/rules/records/unchecked-key.md) | a key cast (`as keyof typeof LABELS`) or `in` test used to read a table without an own-key check | A cast such as `status as keyof typeof LABELS` tells TypeScript that `status` is a key of `LABELS` without checking it, so `LABELS[status]` compiles and can give `undefined` or an inherited value. | Add-on `unchecked-key` | warning | warning |
 
 **Core** rules are on in every preset. **Coverage** rules point at code whose types do not say
 enough for stateward to check it; they are info under `recommended` and errors under `strict`.

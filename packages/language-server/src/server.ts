@@ -1159,6 +1159,20 @@ export function startServer(
     const fixAll: Omit<CodeAction, "title" | "kind"> = {
       edit: versionedEdit({ [params.textDocument.uri]: all.edits }, versionOf),
     };
+    // `source.fixAll.stateward` also runs without review, on save (`editor.codeActionsOnSave`):
+    // it takes only the fixes a rule marks safe, as `stateward check --fix` does. The quick fix
+    // "Fix all stateward problems in the file" is chosen by hand and takes the first fix of each.
+    const safeAt = sites.flatMap((site, at) => (site.form?.safe === true ? [at] : []));
+    const safeSites = safeAt.flatMap((at) => sites[at] ?? []);
+    const safePending = safeAt.flatMap((at) => pending[at] ?? []);
+    const safeAll =
+      safeSites.length === 0
+        ? { edits: [], count: 0 }
+        : fixAllEdits(
+            safeSites,
+            params.textDocument.uri,
+            verifier(engine, safePending, safeSites, params.textDocument.uri),
+          );
     if (kindWanted(only, CodeActionKind.QuickFix)) {
       actions.push(
         ...sites
@@ -1180,11 +1194,11 @@ export function startServer(
         });
       }
     }
-    if (all.count >= 1 && kindWanted(only, FIX_ALL_KIND)) {
+    if (safeAll.count >= 1 && kindWanted(only, FIX_ALL_KIND)) {
       actions.push({
-        title: "Fix all stateward problems in the file",
+        title: "Apply the safe stateward fixes in the file",
         kind: FIX_ALL_KIND,
-        ...fixAll,
+        edit: versionedEdit({ [params.textDocument.uri]: safeAll.edits }, versionOf),
       });
     }
     if (kindWanted(only, CodeActionKind.RefactorRewrite)) {
