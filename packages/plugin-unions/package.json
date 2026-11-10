@@ -1,6 +1,6 @@
 {
   "name": "@stateward/plugin-unions",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "stateward rules for unions: every case of a union is handled, and its tag tells the cases apart.",
   "license": "MIT",
   "repository": {

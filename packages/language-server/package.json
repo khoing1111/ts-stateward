@@ -1,6 +1,6 @@
 {
   "name": "@stateward/language-server",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "The stateward language server: exclusive states and predictable code paths in any editor that speaks LSP, with findings, quick fixes and hints.",
   "license": "MIT",
   "repository": {

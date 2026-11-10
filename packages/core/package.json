@@ -1,6 +1,6 @@
 {
   "name": "@stateward/core",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "The engine of stateward (exclusive states and predictable code paths for TypeScript) and the API for writing your own rules and packs.",
   "license": "MIT",
   "repository": {

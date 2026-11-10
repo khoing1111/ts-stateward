@@ -70,7 +70,7 @@ export function useSearch() {
 ```
 
 ```text
-warning[async/pending-state-stuck-on-failure]: `loading` stays `true` when `fetch()` fails
+warning[async/pending-state-stuck-on-failure]: `loading` stays `true` when `fetch(…)` fails
 ```
 
 Fix: clear the state in a `finally`, so it is cleared whether the call works or fails.

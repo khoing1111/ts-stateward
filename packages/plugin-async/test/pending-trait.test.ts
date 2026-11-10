@@ -40,7 +40,7 @@ describe("async/pending-state-stuck-on-failure: a state stated `Pending`", () =>
         file: "save.ts",
         name: "setSaving(true)",
         // Any `await` may fail: `post` is declared with no body, yet the state says it must settle.
-        message: "`saving` stays `true` when `post()` fails",
+        message: "`saving` stays `true` when `post(…)` fails",
         hint: "set `saving` back in `finally`: `finally { setSaving(false); }`",
         notes: ["`saving` is stated `Pending` here"],
         fix: "Reset the state in a finally",
@@ -48,7 +48,7 @@ describe("async/pending-state-stuck-on-failure: a state stated `Pending`", () =>
       {
         file: "save.ts",
         name: 'this.status = "saving"',
-        message: '`status` stays `"saving"` when `post()` fails',
+        message: '`status` stays `"saving"` when `post(…)` fails',
         // The start value in `finally`; each other value that is not running in a `catch`.
         hint: [
           "one of",

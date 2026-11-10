@@ -1,6 +1,6 @@
 {
   "name": "@stateward/plugin-ownership",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "stateward rules for ownership: one owner per piece of shared state and per brand.",
   "license": "MIT",
   "repository": {

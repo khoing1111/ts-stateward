@@ -51,7 +51,7 @@ It reports a cast to the keys of a plain object (an object literal, an \`as cons
 
 - a cast checked first with \`Object.hasOwn\`, \`Object.prototype.hasOwnProperty.call\`, \`hasOwnProperty\` or a type predicate whose body does one of those (\`isKeyOf\`), in an \`if\`, before \`&&\`, in a \`?:\` condition or before an early \`return\`;
 - a key checked the same way against a list of valid keys: \`VALID.has(key)\` on a \`Set\` or \`Map\`, \`VALID.includes(key)\` on an array;
-- a key taken from the same table: \`for (const key in LABELS)\`, \`Object.keys(LABELS).map((key) => …)\` and the other array methods, \`for (const [key] of Object.entries(LABELS))\`;
+- a key taken from the same table, cast or tested with \`in\`: \`for (const key in LABELS)\`, \`Object.keys(LABELS).map((key) => …)\` and the other array methods (\`Object.keys(LABELS).filter((key): key is Status => key in LABELS)\`), \`for (const [key] of Object.entries(LABELS))\`;
 - a read that handles a missing key: \`LABELS[key as K] ?? fallback\` (or \`||\`), \`LABELS[key as K]?.length\`, or a \`const\` that holds the read and is next compared with \`undefined\` or \`null\` or passed to \`isDefined\`, \`isNil\` or \`isNullish\`. Not when the key is read from the URL or from storage (\`params.get(…)\`, \`localStorage.getItem(…)\`): a fallback does not stop an inherited key such as \`"toString"\`;
 - a key already typed as the table's keys;
 - a \`Map\`, a \`Set\`, an enum, or writes (\`LABELS[key as K] = …\`);
@@ -86,9 +86,15 @@ export function ${HELPER_NAME}<T extends object>(table: T, key: PropertyKey): ke
 `;
 }
 
-/** A read with an unchecked key: a cast used as the key, or an `in` test in a type predicate. */
-type Site = {
-  kind: "cast" | "predicate";
+/**
+ * A read with an unchecked key: a cast used as the key (`target`: the cast's type as written,
+ * `keyof typeof LABELS`), or an `in` test in a type predicate (`target`: the predicate's name,
+ * null for one without a name, such as a callback).
+ */
+type Site = SiteFields &
+  ({ kind: "cast"; target: string } | { kind: "predicate"; target: string | null });
+
+type SiteFields = {
   /** The span reported: the cast, or the `in` test. */
   start: number;
   end: number;
@@ -103,8 +109,6 @@ type Site = {
   /** The name a hint gives a `const` that holds a table that is not a plain reference; null for a plain reference. */
   tableConst: string | null;
   key: string;
-  /** The cast's type as written (`keyof typeof LABELS`), or the predicate's name. */
-  target: string;
   /** The cast is used under `key in table`, which the code may take as the check. */
   inGuard: boolean;
   /** The span the quick fix replaces, and whether its new text needs parentheses; null for none. */
@@ -820,6 +824,9 @@ function predicateSite(
   const table = stripParentheses(found.right);
   if (parts.some((part) => keyTest(part, table, parameterName.text, ctx) === "own"))
     return undefined;
+  // The callback of `Object.keys(T).filter(…)` tests keys taken from `T`: each is an own key.
+  const source = keysSource(stripParentheses(found.left), ctx);
+  if (source !== undefined && sameObject(source, table, ctx)) return undefined;
   const name = tableName(table);
   if (name !== null && matchesName(name, ignore)) return undefined;
   const isKeyof = ts.isTypeOperatorNode(type) && type.operator === ts.SyntaxKind.KeyOfKeyword;
@@ -834,7 +841,7 @@ function predicateSite(
       ? fn.name.text
       : ts.isVariableDeclaration(fn.parent) && ts.isIdentifier(fn.parent.name)
         ? fn.parent.name.text
-        : "the type predicate";
+        : null;
   return {
     kind: "predicate",
     start: found.getStart(ctx.sourceFile),
@@ -943,7 +950,7 @@ function summarize(ctx: FileContext<{ ignore: readonly string[] }>): UncheckedKe
   };
 }
 
-function castHeadline(site: Site): string {
+function castHeadline(site: Site & { kind: "cast" }): string {
   return fitted((cut) =>
     site.inGuard
       ? `\`${cut(site.key)} in ${cut(site.tableShown)}\` also finds inherited keys such as "toString": the cast to \`${cut(site.target)}\` is not checked`
@@ -991,10 +998,12 @@ function castHint(site: Site, helper: "project" | OwnTest | null): string {
   ].join("\n");
 }
 
-function predicateHeadline(site: Site): string {
+function predicateHeadline(site: Site & { kind: "predicate" }): string {
+  const { target } = site;
+  // A predicate without a name is described, not quoted as code.
   return fitted(
     (cut) =>
-      `\`${cut(site.target)}\` tests \`${cut(site.key)} in ${cut(site.tableShown)}\`, which also finds inherited keys such as "toString"`,
+      `${target === null ? "the type predicate" : `\`${cut(target)}\``} tests \`${cut(site.key)} in ${cut(site.tableShown)}\`, which also finds inherited keys such as "toString"`,
   );
 }
 

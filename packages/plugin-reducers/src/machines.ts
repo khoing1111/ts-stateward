@@ -13,7 +13,10 @@ export type Machine = {
   /** Declares where it starts: `useReducer` or `@initial`. */
   active: boolean;
   starts: Start[];
-  /** Some start is unknown, so any state may be the first. */
+  /**
+   * Some start is unknown, so any state may be the first. A start of `null` or `undefined` counts:
+   * which return runs on it depends on tests the graph does not read (`state?.kind !== "a"`).
+   */
   startsAny: boolean;
   /** Uses of `useReducer` whose start cannot be read. */
   unreadStarts: { file: string; use: Use }[];
@@ -76,13 +79,20 @@ function build(
       starts.push({ file, at: reducer.initial.at, tags: names, label: "starts" });
     }
   }
+  let emptyStart = false;
   for (const { file: useFile, use } of uses) {
     if (use.starts === null) unreadStarts.push({ file: useFile, use });
-    else starts.push({ file: useFile, at: use.at, tags: use.starts, label: "starts" });
+    else {
+      emptyStart ||= use.starts.empty.length > 0;
+      if (use.starts.tags.length > 0 || use.starts.empty.length === 0) {
+        starts.push({ file: useFile, at: use.at, tags: use.starts.tags, label: "starts" });
+      }
+    }
   }
   const active = reducer.initial !== null || uses.length > 0;
   const startsAny =
     unreadStarts.length > 0 ||
+    emptyStart ||
     (reducer.initial === null && (references.length > 0 || reducer.external)) ||
     (active && starts.length === 0);
   const out = new Map<string, Hop[]>();

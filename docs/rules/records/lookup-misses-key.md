@@ -58,6 +58,7 @@ There is no quick fix: the values are the code's own. A read with a fallback (`l
 
 - A read whose type already includes `undefined` (an optional property, `Partial<…>`, `noUncheckedIndexedAccess`): TypeScript already makes you handle it.
 - A read checked first with `key in table`, `Object.hasOwn(table, key)`, `hasOwnProperty`, or by testing the read itself (`table[key]`, `typeof table[key] === "object"`, `table[key] !== undefined`), in an `if`, before `&&`, or in a `?:` condition.
+- A read of a table whose entries are typed to admit a missing value (`Record<string, unknown>`, `any`, or values with `| undefined`): TypeScript makes the code check the value before it is used. A read after an early `return` on a table typed `Record<string, number>` is still reported: stateward does not follow what runs between the test and the read.
 - A read compared with a literal (`table[key] === true`): a missing entry is not equal.
 - A read stored in a `const` whose first use checks for a missing entry (`toggle?.kbd`, `if (!asset)`, `Array.isArray(shades)`), also as the fallback of `??` or `||`, and a read after `&&` whose result has a fallback (`(op && table[op]) ?? []`).
 - A key typed `string` or `number`, with no fixed set of values, and a table whose keys come from a generic (`Record<K, string>`).

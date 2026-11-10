@@ -1932,6 +1932,38 @@ export function createTypeQueries(
       // When every member has the same tag type, narrowing on it removes no member.
       return rest.some((tag) => tag !== first);
     },
+    declaredEntryCanBeMissing(access) {
+      const checker = typeChecker();
+      const object = widened(checker, checker.getTypeAtLocation(access.expression));
+      const key = widened(checker, checker.getTypeAtLocation(access.argumentExpression));
+      if (object === undefined || key === undefined) return false;
+      const keys = key.isUnion() ? key.types : [key];
+      return keys.some((one) => {
+        const number = (one.flags & ts.TypeFlags.NumberLike) !== 0;
+        if (!number && (one.flags & ts.TypeFlags.StringLike) === 0) return false;
+        let declared: ts.Type | undefined;
+        if (one.isStringLiteral() || one.isNumberLiteral()) {
+          const property = checker.getPropertyOfType(object, String(one.value));
+          if (property !== undefined) declared = checker.getTypeOfSymbol(property);
+        }
+        declared ??= (
+          (number ? checker.getIndexInfoOfType(object, ts.IndexKind.Number) : undefined) ??
+          checker.getIndexInfoOfType(object, ts.IndexKind.String)
+        )?.type;
+        return declared !== undefined && includesUndefined(declared);
+      });
+    },
+    sameType(a, b) {
+      const checker = typeChecker();
+      const left = checker.getTypeAtLocation(a);
+      const right = checker.getTypeAtLocation(b);
+      // `any` (written, or a type that does not resolve) is assignable both ways: it says nothing.
+      if ((left.flags | right.flags) & ts.TypeFlags.Any) return false;
+      return (
+        left === right ||
+        (checker.isTypeAssignableTo(left, right) && checker.isTypeAssignableTo(right, left))
+      );
+    },
     typeTextOf(node) {
       return typeChecker()
         .typeToString(typeChecker().getTypeAtLocation(node))

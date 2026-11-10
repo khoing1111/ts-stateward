@@ -101,3 +101,20 @@ export async function untagged(): Promise<void> {
   await untaggedSearch();
   setLoading(false);
 }
+
+/** The `.catch` callback rethrows without setting the state: a failure leaves `waiting` true. */
+export async function catchCallbackRethrows(): Promise<void> {
+  setWaiting(true);
+  await search().catch((error: unknown) => {
+    report(error);
+    throw error;
+  });
+  setWaiting(false);
+}
+
+/** The `.finally` sets the running value again: that is no reset. */
+export async function finallySetsRunning(): Promise<void> {
+  setWaiting(true);
+  await search().finally(() => setWaiting(true));
+  setWaiting(false);
+}

@@ -362,6 +362,7 @@ export type TypeQueries = {
   canBeUndefined(node: ts.Node): boolean;
   /** Whether the type of an expression includes `null`; `any` and `unknown` count as yes. */
   canBeNull(node: ts.Node): boolean;
+
   /**
    * Whether `propertyName` discriminates the type of the object expression (a type parameter
    * widened to its constraint): the type is a union, every member is an object type (an
@@ -375,6 +376,19 @@ export type TypeQueries = {
   isDiscriminant(object: ts.Node, propertyName: string): boolean;
   /** The type of an expression as TypeScript prints it, on one line (`Record<string, string>`). */
   typeTextOf(node: ts.Node): string;
+  /**
+   * Whether two expressions have the same type: each is assignable to the other. Two types that
+   * print the same name (a local `Phase` and an imported one) can differ; this compares the types.
+   * False when either is `any`, written or from a type that does not resolve.
+   */
+  sameType(a: ts.Node, b: ts.Node): boolean;
+  /**
+   * Whether the type an object declares for the entry an element access reads, before any
+   * narrowing, already admits a missing value: `unknown`, `any`, or a union with `undefined`
+   * (`Record<string, unknown>`). TypeScript then makes the code check the value before using it.
+   * False when the entry's declared type cannot be found.
+   */
+  declaredEntryCanBeMissing(access: ts.ElementAccessExpression): boolean;
   /**
    * The type the surrounding code expects for an expression, as `typeTextOf` prints it: for a
    * function written as a JSX attribute, the declared type of that prop (`() => Promise<void>`);

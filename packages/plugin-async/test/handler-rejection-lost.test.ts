@@ -160,6 +160,58 @@ describe(`async/${RULE}: not flagged`, () => {
   });
 });
 
+describe(`async/${RULE}: the project's own functions are read`, () => {
+  it("accepts a call that cannot reject: a .catch chain, a function that awaits only those, one that awaits nothing, or catches its own; reports one that can or that it cannot see into", () => {
+    const dir = fixture(`${RULE}/follows`);
+    const text = readFileSync(path.join(dir, "handlers.tsx"), "utf8");
+    const lines = checkOnly(dir, RULE).map((finding) => {
+      const line = text.slice(0, finding.location.start).split("\n").length;
+      return `${path.basename(finding.location.file)}:${String(line)}: ${finding.message}`;
+    });
+    // Lines 6-12 call functions that cannot reject (a chain 5 deep, read in any order); lines 20-32 call ones that can.
+    expect(lines).toEqual(
+      [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32].map(
+        (line) => `handlers.tsx:${String(line)}: ${failure("onClick", "handler")}`,
+      ),
+    );
+  });
+});
+
+describe(`async/${RULE}: a function tagged \`@neverRejects\` that rejects`, () => {
+  it("reports only what certainly rejects outside a try: fetch, a throw, a project function that rejects; not what it cannot see into", () => {
+    const dir = fixture(`${RULE}/tags`);
+    const text = readFileSync(path.join(dir, "lib.ts"), "utf8");
+    const findings = checkOnly(dir, RULE);
+    expect(
+      findings.map((finding) => {
+        const line = text.slice(0, finding.location.start).split("\n").length;
+        return `${String(line)}: ${finding.message}`;
+      }),
+    ).toEqual([
+      "5: `loadWrong` is tagged `@neverRejects`, but `fetch(…)` can reject",
+      "10: `validate` is tagged `@neverRejects`, but it throws",
+      "20: `outer` is tagged `@neverRejects`, but `inner(…)` can reject",
+      "25: `ping` is tagged `@neverRejects`, but `fetch(…)` can reject",
+      "85: `send` is tagged `@neverRejects`, but it throws",
+    ]);
+    expect(findings[0]?.hint).toBe(
+      "one of\n- catch the failure inside the function: `try { … } catch (error) { … }`\n- or remove `@neverRejects`, so its callers handle the failure",
+    );
+  });
+});
+
+describe(`async/${RULE}: functions that call each other`, () => {
+  it(
+    "reads twelve functions that all call each other quickly, and finds nothing to report",
+    { timeout: 20_000 },
+    () => {
+      const started = Date.now();
+      expect(checkOnly(fixture(`${RULE}/recursion`), RULE)).toEqual([]);
+      expect(Date.now() - started).toBeLessThan(15_000);
+    },
+  );
+});
+
 describe(`async/${RULE}: promises that do not reject`, () => {
   it("accepts a trigger with unwrap() that resolves to data or an error, and reports its .unwrap()", () => {
     expect(shown(checkOnly(fixture(`${RULE}/rtk`), RULE))).toEqual([

@@ -386,3 +386,52 @@ describe(`${ID}: a switch without a default`, { timeout: 60_000 }, () => {
     ).toEqual(["open", "hidden"]);
   });
 });
+
+describe(`${ID}: plain values on an enum`, () => {
+  it("counts a `case` with a member's value as that member, with or without a default, and says once per case to name the member", () => {
+    const found = inDir("enum-values", "handled.ts");
+    expect(found.every((one) => one.kind === "problem" && one.severity === "info")).toBe(true);
+    expect(
+      new Set(found.map((one) => (one.kind === "problem" ? one.findingKind : one.kind))),
+    ).toEqual(new Set(["enum-value"]));
+    expect(found).toHaveLength(7);
+    expect(found[0]?.message).toBe(
+      '`case "person"` matches `StakeholderTypes.PERSON` by its value, which TypeScript does not check',
+    );
+    expect(found[0]?.hint).toBe(
+      "write `case StakeholderTypes.PERSON:`, so TypeScript checks the `switch` too",
+    );
+    const [first] = found;
+    expect(first?.kind === "problem" ? first.fixes.map((fix) => fix.title) : []).toEqual([
+      "Write StakeholderTypes.PERSON",
+    ]);
+  });
+
+  it("names the member as the file reaches it, and offers no fix when the enum is imported only as a type", () => {
+    const found = [...inDir("enum-values", "imported.ts"), ...inDir("enum-values", "type-only.ts")];
+    expect(found.map((one) => one.hint)).toEqual([
+      "write `case R.Admin:`, so TypeScript checks the `switch` too",
+      "write `case R.User:`, so TypeScript checks the `switch` too",
+      "write `case Role.Admin:`, with `Role` imported as a value, so TypeScript checks the `switch` too",
+      "write `case Role.User:`, with `Role` imported as a value, so TypeScript checks the `switch` too",
+    ]);
+    expect(found.map((one) => (one.kind === "problem" ? one.fixes.length : -1))).toEqual([
+      1, 1, 0, 0,
+    ]);
+  });
+
+  it("still reports a member left out, and one whose value is misspelled", () => {
+    expect(
+      inDir("enum-values", "unhandled.ts")
+        .filter((finding) => finding.kind !== "problem" || finding.findingKind !== "enum-value")
+        .map((finding) => [
+          finding.kind === "problem" ? finding.findingKind : finding.kind,
+          finding.message,
+        ]),
+    ).toEqual([
+      ["missing", headline("type", ["StakeholderTypes.ORGANIZATION"])],
+      ["missing", headline("type", ["StakeholderTypes.PERSON"])],
+      ["hidden", headline("type", ["StakeholderTypes.PERSON"])],
+    ]);
+  });
+});

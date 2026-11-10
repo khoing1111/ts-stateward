@@ -18,6 +18,8 @@ const WIZARD = fixture("graph/wizard");
 const UNREADABLE = fixture("graph/unreadable");
 const ENTRY = fixture("graph/entry");
 const DEFAULTED = fixture("graph/defaulted");
+const NULLABLE = fixture("graph/nullable");
+const PAYLOADS = fixture("graph/payloads");
 
 const checkoutExpected: Shown[] = [
   {
@@ -369,5 +371,63 @@ describe("reducers/state-cannot-leave: final states in a `FINAL_STATES` const", 
     expect(fixed).toContain(
       'ORDER_FINAL_STATES = ["paid", "cancelled", "failed"] as const satisfies',
     );
+  });
+});
+
+describe("reducers: a start of `null` or `undefined` when the state type includes it", () => {
+  const found = shown(NULLABLE, check(NULLABLE)).map((finding) => [
+    finding.file,
+    finding.at,
+    finding.message,
+  ]);
+
+  it("is a known start, as the argument and from an `init` function; the other findings stay", () => {
+    expect(found.filter(([file]) => file !== "unknown.tsx")).toEqual([
+      ["selection.tsx", "action.payload", "`action.payload` can return any state of `Selection`"],
+      [
+        "selection.tsx",
+        "null",
+        "not checked: which state `null` returns: its type is not one state of `Selection`",
+      ],
+    ]);
+  });
+
+  it("still reports a start of the state type from data, and `null` when the state type has no `null`", () => {
+    expect(found.filter(([file]) => file === "unknown.tsx")).toEqual([
+      [
+        "unknown.tsx",
+        "saved",
+        "`selectionReducer` can start in any state: the state it starts from is not known",
+      ],
+      [
+        "unknown.tsx",
+        "null",
+        "`tabReducer` can start in any state: the state it starts from is not known",
+      ],
+    ]);
+  });
+});
+
+describe("reducers: a setter is not a state machine", () => {
+  const found = shown(NULLABLE, check(NULLABLE));
+
+  it("reads nothing of a reducer whose returns are the payload, an empty value or the state", () => {
+    expect(found.filter((finding) => finding.file === "setter.tsx")).toEqual([]);
+  });
+
+  it("still reports `return action.payload` in a reducer that builds a state of its own", () => {
+    expect(
+      found
+        .filter((finding) => finding.file === "selection.tsx" && finding.at === "action.payload")
+        .map((finding) => finding.message),
+    ).toEqual(["`action.payload` can return any state of `Selection`"]);
+  });
+
+  it("checks a machine whose payloads are each typed as one state: it is not a setter", () => {
+    expect(shown(PAYLOADS, check(PAYLOADS)).map((finding) => finding.message)).toEqual([
+      '`payloads` never reaches "verifying": no case returns it',
+      // An `any` payload says nothing about the state: not a setter, and not checked.
+      "not checked: which state `action.payload` returns: its type is not one state of `S`",
+    ]);
   });
 });

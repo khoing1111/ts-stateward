@@ -75,7 +75,8 @@ It reads `async` functions written in place as a JSX prop named `on` plus a capi
 
 - a handler passed by name (`onClick={save}`), and other callbacks no code awaits: `.then` callbacks, `setImmediate`, observers, `useEffect` callbacks;
 - a handler with no `await` and no promise the rule recognises;
-- a call that catches its own failure (`await save().catch(onError)`), or a call to an `async` function of the project that catches its own: every `await` and `throw` in it is inside a `try` with a `catch` (a `catch` that rethrows or awaits again does not count);
+- a call that catches its own failure (`await save().catch(onError)`);
+- a call to a function of the project that cannot reject. stateward reads it, and every function it calls: every `await`, `throw` and returned promise in it is inside a `try` with a `catch`, or is itself a call that cannot reject (a chain that ends in a `.catch(…)` whose callback, written in place, does not throw; a function that awaits nothing; `Promise.allSettled(…)`). A `.then` or `.catch` callback that throws or returns a request, a `for await`, and a function that calls itself back count as able to reject. A `catch` that rethrows or awaits again does not count, and what stateward cannot see into (a package with no facts, a promise held in a variable) can reject;
 - a promise that reports failure in its value instead of rejecting: its type has an `unwrap()` method and it resolves to data or an `error` (RTK Query's mutation and lazy-query triggers). `await addTodo(todo).unwrap()` rejects, and is reported;
 - a prop whose type returns a promise (`onSave: () => Promise<void>`): the component that declares it awaits it. The same for a prop your component calls only as `await onSubmit(…)` inside a `try` with a `catch`.
 
@@ -84,7 +85,7 @@ It reads `async` functions written in place as a JSX prop named `on` plus a capi
 Tell stateward which calls never reject, and it stops asking about them:
 
 - a package function: `facts: { "my-client": { send: { rejects: [] } } }` in the config;
-- your own function that catches and reports its failures: a JSDoc `@neverRejects` on the function, on a function type alias, or on the prop in its props type (`/** Shows its own errors. @neverRejects */ handleSearch: (query: string) => Promise<void>;`). stateward takes the tag at its word: a function marked this way that does reject is not caught.
+- your own function that catches and reports its failures: a JSDoc `@neverRejects` on the function, on a function type alias, or on the prop in its props type (`/** Shows its own errors. @neverRejects */ handleSearch: (query: string) => Promise<void>;`). stateward checks the tag where it can be sure: a tagged function with a `throw`, or a call known to reject (`fetch`, a package that rejects, a project function that does), outside a `try` with a `catch` is reported at that call (kind `contradicted`). A call it cannot see into is taken at the tag's word.
 
 ## Turn it on or off
 
@@ -101,5 +102,6 @@ Options, set as `rules: { "async/handler-rejection-lost": ["error", { … }] }`:
 | --- | --- | --- | --- |
 | `timers` | list of strings | `["setTimeout","setInterval","queueMicrotask"]` | Functions whose first argument is a callback no code awaits (add requestAnimationFrame, setImmediate…). |
 | `ignoreProps` | list of strings | `[]` | JSX props whose async handler the component awaits itself, like a form library's onSubmit (globs allowed). |
+| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of finding. Kinds: `contradicted`: a function tagged `@neverRejects` with a `throw`, or a call that is known to reject, outside a `try`: the rule's severity. |
 
 Core rule: error under `recommended` and `strict`. Group: `async/failures`.

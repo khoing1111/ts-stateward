@@ -18,7 +18,7 @@ import {
   pathOf,
 } from "./syntax.js";
 import { fitted, oneLine, shorten, withExample } from "./text.js";
-import { NEVER_REJECTS } from "./rejects.js";
+import { cannotRun, NEVER_REJECTS, rejectionsOf, type CanReject } from "./rejects.js";
 
 /** The group the rule belongs to in the docs and in `stateward status`. */
 export const GROUP = "failures";
@@ -83,7 +83,8 @@ It reads \`async\` functions written in place as a JSX prop named \`on\` plus a 
 
 - a handler passed by name (\`onClick={save}\`), and other callbacks no code awaits: \`.then\` callbacks, \`setImmediate\`, observers, \`useEffect\` callbacks;
 - a handler with no \`await\` and no promise the rule recognises;
-- a call that catches its own failure (\`await save().catch(onError)\`), or a call to an \`async\` function of the project that catches its own: every \`await\` and \`throw\` in it is inside a \`try\` with a \`catch\` (a \`catch\` that rethrows or awaits again does not count);
+- a call that catches its own failure (\`await save().catch(onError)\`);
+- a call to a function of the project that cannot reject. stateward reads it, and every function it calls: every \`await\`, \`throw\` and returned promise in it is inside a \`try\` with a \`catch\`, or is itself a call that cannot reject (a chain that ends in a \`.catch(…)\` whose callback, written in place, does not throw; a function that awaits nothing; \`Promise.allSettled(…)\`). A \`.then\` or \`.catch\` callback that throws or returns a request, a \`for await\`, and a function that calls itself back count as able to reject. A \`catch\` that rethrows or awaits again does not count, and what stateward cannot see into (a package with no facts, a promise held in a variable) can reject;
 - a promise that reports failure in its value instead of rejecting: its type has an \`unwrap()\` method and it resolves to data or an \`error\` (RTK Query's mutation and lazy-query triggers). \`await addTodo(todo).unwrap()\` rejects, and is reported;
 - a prop whose type returns a promise (\`onSave: () => Promise<void>\`): the component that declares it awaits it. The same for a prop your component calls only as \`await onSubmit(…)\` inside a \`try\` with a \`catch\`.
 
@@ -92,7 +93,7 @@ It reads \`async\` functions written in place as a JSX prop named \`on\` plus a 
 Tell stateward which calls never reject, and it stops asking about them:
 
 - a package function: \`facts: { "my-client": { send: { rejects: [] } } }\` in the config;
-- your own function that catches and reports its failures: a JSDoc \`@neverRejects\` on the function, on a function type alias, or on the prop in its props type (\`/** Shows its own errors. @neverRejects */ handleSearch: (query: string) => Promise<void>;\`). stateward takes the tag at its word: a function marked this way that does reject is not caught.
+- your own function that catches and reports its failures: a JSDoc \`@neverRejects\` on the function, on a function type alias, or on the prop in its props type (\`/** Shows its own errors. @neverRejects */ handleSearch: (query: string) => Promise<void>;\`). stateward checks the tag where it can be sure: a tagged function with a \`throw\`, or a call known to reject (\`fetch\`, a package that rejects, a project function that does), outside a \`try\` with a \`catch\` is reported at that call (kind \`contradicted\`). A call it cannot see into is taken at the tag's word.
 
 ## Turn it on or off
 
@@ -114,6 +115,13 @@ const OPTIONS = {
     default: [],
     description:
       "JSX props whose async handler the component awaits itself, like a form library's onSubmit (globs allowed).",
+  }),
+  severities: option.severities({
+    kinds: {
+      contradicted:
+        "a function tagged `@neverRejects` with a `throw`, or a call that is known to reject, outside a `try`: the rule's severity.",
+    },
+    description: "A severity per kind of finding.",
   }),
 };
 
@@ -356,35 +364,77 @@ function neverRejects(expression: ts.Expression, ctx: FileContext): boolean {
   );
 }
 
+/** A function of this file whose JSDoc says `@neverRejects`, with the tag and the name shown. */
+type Tagged = { body: ts.ConciseBody; tag: ts.JSDocTag; name: string };
+
+function taggedFunctions(sourceFile: ts.SourceFile): Tagged[] {
+  const found: Tagged[] = [];
+  const tagOf = (node: ts.Node): ts.JSDocTag | undefined =>
+    ts.getJSDocTags(node).find((tag) => tag.tagName.text === NEVER_REJECTS);
+  const visit = (node: ts.Node): void => {
+    if (
+      (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) &&
+      node.body !== undefined &&
+      node.name !== undefined
+    ) {
+      const tag = tagOf(node);
+      if (tag !== undefined) {
+        found.push({ body: node.body, tag, name: node.name.getText(sourceFile) });
+      }
+    } else if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer !== undefined
+    ) {
+      const value = stripParentheses(node.initializer);
+      if (ts.isArrowFunction(value) || ts.isFunctionExpression(value)) {
+        const tag = tagOf(node) ?? tagOf(value);
+        if (tag !== undefined) found.push({ body: value.body, tag, name: node.name.text });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return found;
+}
+
 /**
- * A call to a project function that catches its own failures: an `async` function with a block
- * body in which every `await`, `for await`, `throw` and returned call sits inside the `try` of a
- * `try` with a `catch` (its `catch` and `finally` are not, so one that rethrows or awaits again
- * still counts as failing). `const remove = async () => { try { await api.remove(); } catch {} }`.
+ * The first place in `fn` that certainly rejects with nothing inside the function to catch it: a
+ * `throw`, or an awaited or returned call stateward knows rejects (`fetch`, a package or a project
+ * function that does). What it cannot see into does not count.
  */
-function calleeCatchesOwnFailures(expression: ts.Expression, ctx: FileContext): boolean {
-  const call = stripParentheses(expression);
-  if (!ts.isCallExpression(call)) return false;
-  const callee = stripParentheses(call.expression);
-  const name = ts.isPropertyAccessExpression(callee) ? callee.name : callee;
-  if (!ts.isIdentifier(name)) return false;
-  const symbol = ctx.types.symbolAt(name);
-  const declared = symbol === undefined ? undefined : ctx.types.declarationOf(symbol);
-  if (declared === undefined || !ctx.types.isOwnFile(declared.file)) return false;
-  const fn = functionOfDeclaration(declared.node);
-  if (fn?.body === undefined || !ts.isBlock(fn.body)) return false;
-  if (!hasModifier(fn, ts.SyntaxKind.AsyncKeyword) || fn.asteriskToken !== undefined) return false;
-  let fails = false;
-  scanRunning(fn.body, (node, guarded) => {
-    if (fails || guarded) return;
-    if (ts.isAwaitExpression(node) || ts.isThrowStatement(node)) fails = true;
-    else if (ts.isForOfStatement(node) && node.awaitModifier !== undefined) fails = true;
-    else if (ts.isReturnStatement(node) && node.expression !== undefined) {
-      const value = stripParentheses(node.expression);
-      fails = ts.isCallExpression(value) || ts.isAwaitExpression(value);
+function firstCertainRejection(
+  body: ts.ConciseBody,
+  certainlyRejects: CanReject,
+  ctx: FileContext,
+): ts.Node | undefined {
+  if (!ts.isBlock(body)) return certainlyRejects(body) ? body : undefined;
+  let found: ts.Node | undefined;
+  scanRunning(body, (node, guarded) => {
+    if (found !== undefined || guarded) return;
+    if (ts.isThrowStatement(node)) {
+      if (!cannotRun(node, ctx)) found = node;
+    } else if (ts.isAwaitExpression(node) && certainlyRejects(node.expression))
+      found = node.expression;
+    else if (
+      ts.isReturnStatement(node) &&
+      node.expression !== undefined &&
+      certainlyRejects(node.expression)
+    ) {
+      found = node.expression;
     }
   });
-  return !fails;
+  return found;
+}
+
+/** What the finding names: the call that rejects, or the `throw`. */
+function contradictionText(node: ts.Node, ctx: FileContext): string {
+  if (ts.isThrowStatement(node)) return "throw";
+  const inner = ts.isExpression(node) ? stripParentheses(node) : node;
+  if (ts.isCallExpression(inner)) {
+    return `${shorten(oneLine(inner.expression.getText(ctx.sourceFile)), CODE_MAX)}(…)`;
+  }
+  return shorten(oneLine(inner.getText(ctx.sourceFile)), CODE_MAX);
 }
 
 /** `save().catch(showError)`: a call that handles its own failure. */
@@ -396,7 +446,11 @@ function catchesOwnFailure(expression: ts.Expression): boolean {
 }
 
 /** The first place the handler can fail with nothing to catch it, or undefined. */
-function unguardedFailure(fn: Handler["fn"], ctx: FileContext): Failure | undefined {
+function unguardedFailure(
+  fn: Handler["fn"],
+  mayReject: CanReject,
+  ctx: FileContext,
+): Failure | undefined {
   let found: Failure | undefined;
   const look = (node: ts.Node, guarded: boolean): void => {
     if (found !== undefined || guarded) return;
@@ -404,7 +458,7 @@ function unguardedFailure(fn: Handler["fn"], ctx: FileContext): Failure | undefi
       ts.isAwaitExpression(node) &&
       !catchesOwnFailure(node.expression) &&
       !neverRejects(node.expression, ctx) &&
-      !calleeCatchesOwnFailures(node.expression, ctx)
+      mayReject(node.expression)
     ) {
       found = {
         node: node.getFirstToken(ctx.sourceFile) ?? node,
@@ -417,7 +471,7 @@ function unguardedFailure(fn: Handler["fn"], ctx: FileContext): Failure | undefi
       ts.isReturnStatement(node) &&
       node.expression !== undefined &&
       returnsPromise(node.expression, ctx) &&
-      !calleeCatchesOwnFailures(node.expression, ctx)
+      mayReject(node.expression)
     ) {
       found = { node: node.expression, kind: "await", code: node.expression };
     }
@@ -427,7 +481,7 @@ function unguardedFailure(fn: Handler["fn"], ctx: FileContext): Failure | undefi
     found === undefined &&
     !ts.isBlock(fn.body) &&
     returnsPromise(fn.body, ctx) &&
-    !calleeCatchesOwnFailures(fn.body, ctx)
+    mayReject(fn.body)
   ) {
     found = { node: fn.body, kind: "await", code: fn.body };
   }
@@ -509,10 +563,33 @@ export const handlerRejectionLost = defineRule({
     needsJsDoc: true,
   },
   check(ctx) {
+    // The project's functions are followed into; what cannot be seen into can reject.
+    const mayReject = rejectionsOf(ctx, { unknownRejects: true });
+    // A function tagged `@neverRejects` that certainly can: only what is known to reject counts.
+    const certainlyRejects = rejectionsOf(ctx);
+    for (const tagged of taggedFunctions(ctx.sourceFile)) {
+      const contradiction = firstCertainRejection(tagged.body, certainlyRejects, ctx);
+      if (contradiction === undefined) continue;
+      ctx.report({
+        node: contradiction,
+        message: fitted((cut) =>
+          ts.isThrowStatement(contradiction)
+            ? `\`${cut(tagged.name)}\` is tagged \`@${NEVER_REJECTS}\`, but it throws`
+            : `\`${cut(tagged.name)}\` is tagged \`@${NEVER_REJECTS}\`, but \`${cut(contradictionText(contradiction, ctx))}\` can reject`,
+        ),
+        hint: [
+          "one of",
+          "- catch the failure inside the function: `try { … } catch (error) { … }`",
+          `- or remove \`@${NEVER_REJECTS}\`, so its callers handle the failure`,
+        ].join("\n"),
+        findingKind: "contradicted",
+        related: [{ node: tagged.tag, message: `\`@${NEVER_REJECTS}\` is stated here` }],
+      });
+    }
     const visit = (node: ts.Node): void => {
       const handler = handlerOf(node, ctx);
       if (handler !== undefined) {
-        const failure = unguardedFailure(handler.fn, ctx);
+        const failure = unguardedFailure(handler.fn, mayReject, ctx);
         if (failure !== undefined) {
           ctx.report({
             node: failure.node,

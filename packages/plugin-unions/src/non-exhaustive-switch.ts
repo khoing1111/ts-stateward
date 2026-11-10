@@ -20,6 +20,7 @@ import {
   restType,
   stripParentheses,
   valueCode,
+  enumParts,
 } from "./cases.js";
 import { EXPLAIN } from "./non-exhaustive-switch.explain.js";
 import { OPEN_UNION, type OpenSummary } from "./open-union.js";
@@ -29,26 +30,81 @@ export const RULE_NAME = "non-exhaustive-switch";
 
 /**
  * The labels the case clauses cover, or undefined when a case is not one literal (`case other:` with
- * `other: string`): then the switch cannot be judged.
+ * `other: string`): then the switch cannot be judged. `literals` are the cases of the subject.
  */
 function coveredLabels(
   clauses: readonly ts.CaseOrDefaultClause[],
+  literals: readonly Literal[],
   ctx: FileContext,
 ): Set<string> | undefined {
   const covered = new Set<string>();
   for (const clause of clauses) {
     if (!ts.isCaseClause(clause)) continue;
-    const literals = ctx.types.literalsOf(clause.expression);
+    const cases = ctx.types.literalsOf(clause.expression);
     // A case whose type is several literals (`case mode:`) matches only one of them at run time.
-    const [only] = literals === "not-finite" ? [] : literals;
-    if (only === undefined || literals.length !== 1) return undefined;
+    const [only] = cases === "not-finite" ? [] : cases;
+    if (only === undefined || cases.length !== 1) return undefined;
     covered.add(only.label);
     // `case Status.Issued` over `"issued" | …`: TypeScript narrows by the value, so the member also
     // covers the plain literal it equals (Infisical, user trial 1.0.2).
     const plain = plainLabel(only.value);
-    if (plain !== undefined) covered.add(plain);
+    if (plain === undefined) continue;
+    covered.add(plain);
+    // `case "person":` over an enum with `Person = "person"`: TypeScript does not narrow, but at
+    // run time the case handles that member.
+    if (only.label !== plain) continue;
+    for (const member of literals) if (member.value === only.value) covered.add(member.label);
   }
   return covered;
+}
+
+/**
+ * The cases that name an enum member by its value (`case "person":` for `PERSON = "person"`): they
+ * run as the member's case, but TypeScript does not narrow an enum by its value, so it cannot check
+ * the `switch`. Each with the member it matches.
+ */
+function valueCases(
+  clauses: readonly ts.CaseOrDefaultClause[],
+  literals: readonly Literal[],
+  ctx: FileContext,
+): { expression: ts.Expression; member: string }[] {
+  const found: { expression: ts.Expression; member: string }[] = [];
+  for (const clause of clauses) {
+    if (!ts.isCaseClause(clause)) continue;
+    const cases = ctx.types.literalsOf(clause.expression);
+    const [only] = cases === "not-finite" ? [] : cases;
+    if (only === undefined || cases.length !== 1 || only.label !== plainLabel(only.value)) continue;
+    const member = literals.find(
+      (literal) => literal.value === only.value && literal.label !== only.label,
+    );
+    if (member !== undefined) found.push({ expression: clause.expression, member: member.label });
+  }
+  return found;
+}
+
+/**
+ * The code that names an enum member in this file: `Role.Admin` when the file declares `Role` or
+ * imports it as a value, `R.Admin` for `import { Role as R }`. Undefined when the file has no value
+ * for the enum (not imported, or imported with `import type`).
+ */
+function memberCode(label: string, sourceFile: ts.SourceFile): string | undefined {
+  const parts = enumParts(label);
+  if (parts === undefined) return undefined;
+  for (const statement of sourceFile.statements) {
+    if (ts.isEnumDeclaration(statement) && statement.name.text === parts.owner) return label;
+    if (!ts.isImportDeclaration(statement)) continue;
+    const clause = statement.importClause;
+    if (clause === undefined || clause.phaseModifier === ts.SyntaxKind.TypeKeyword) continue;
+    const bindings = clause.namedBindings;
+    if (bindings === undefined || !ts.isNamedImports(bindings)) continue;
+    for (const element of bindings.elements) {
+      const imported = (element.propertyName ?? element.name).text;
+      if (imported === parts.owner && !element.isTypeOnly) {
+        return `${element.name.text}.${parts.member}`;
+      }
+    }
+  }
+  return undefined;
 }
 
 /** How TypeScript prints a plain string or number literal: `"issued"`, `3`. */
@@ -450,6 +506,8 @@ export const nonExhaustiveSwitch = defineRule({
           "many-missing":
             "a switch without a default does not list more than maxHidden cases (info unless set here)",
           open: "a switch over an open union (`OpenUnion<T>`) has no default",
+          "enum-value":
+            'a case names an enum member by its value (`case "person":`), which TypeScript does not check (info unless set here)',
         },
         description: "A severity per kind of finding.",
       }),
@@ -807,7 +865,43 @@ function checkSwitch(node: ts.SwitchStatement, settings: Settings, ctx: FileCont
   // A member a package adds in a later version is not a state the app designed; an open union is
   // stated by the project, wherever its members come from.
   if (!open && settings.projectTypesOnly && ctx.types.isLibraryType(subject)) return;
-  const covered = coveredLabels(clauses, ctx);
+  const covered = coveredLabels(clauses, literals, ctx);
+  for (const { expression, member } of valueCases(clauses, literals, ctx)) {
+    const shown = oneLineText(expression, ctx.sourceFile);
+    const code = memberCode(member, ctx.sourceFile);
+    ctx.report({
+      node: expression,
+      message: fitted(
+        (cut) =>
+          `\`case ${cut(shown)}\` matches \`${cut(member)}\` by its value, which TypeScript does not check`,
+      ),
+      hint:
+        code === undefined
+          ? `write \`case ${member}:\`, with \`${enumParts(member)?.owner ?? member}\` imported as a value, so TypeScript checks the \`switch\` too`
+          : `write \`case ${code}:\`, so TypeScript checks the \`switch\` too`,
+      findingKind: "enum-value",
+      severity: "info",
+      ...(code === undefined
+        ? {}
+        : {
+            fixes: [
+              {
+                title: `Write ${code}`,
+                edits: [
+                  {
+                    location: {
+                      file: ctx.file,
+                      start: expression.getStart(ctx.sourceFile),
+                      end: expression.getEnd(),
+                    },
+                    newText: code,
+                  },
+                ],
+              },
+            ],
+          }),
+    });
+  }
   if (covered === undefined) return;
   if (fallback === undefined) {
     checkMissing({ node, subject, literals, covered, stated, settings, ctx });

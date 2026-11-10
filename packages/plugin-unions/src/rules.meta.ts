@@ -41,6 +41,8 @@ export const RULES = {
             "many-missing":
               "a switch without a default does not list more than maxHidden cases (info unless set here)",
             open: "a switch over an open union (`OpenUnion<T>`) has no default",
+            "enum-value":
+              'a case names an enum member by its value (`case "person":`), which TypeScript does not check (info unless set here)',
           },
           description: "A severity per kind of finding.",
         },

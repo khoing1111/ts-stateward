@@ -32,8 +32,8 @@ const count = (...args: Parameters<typeof lines>): number => lines(...args).leng
 describe("async/pending-state-stuck-on-failure options", () => {
   const dir = "pending-state-stuck-on-failure/flagged";
   it("`ignore` leaves out the states named", () => {
-    expect(count(dir, "pending-state-stuck-on-failure")).toBe(11);
-    expect(count(dir, "pending-state-stuck-on-failure", { ignore: ["loading", "busy"] })).toBe(6);
+    expect(count(dir, "pending-state-stuck-on-failure")).toBe(13);
+    expect(count(dir, "pending-state-stuck-on-failure", { ignore: ["loading", "busy"] })).toBe(8);
     expect(lines(dir, "pending-state-stuck-on-failure", { ignore: ["*"] })).toEqual([]);
   });
 });

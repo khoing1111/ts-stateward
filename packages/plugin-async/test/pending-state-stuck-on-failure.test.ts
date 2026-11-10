@@ -22,11 +22,13 @@ const OFF = { "async/handler-rejection-lost": "off" } as const;
 
 /** `call` is what fails; `reset` is the code that goes in the `finally`. */
 function leak(name: string, call: string, flag: string, reset: string, fix?: string) {
+  // `search` is shown `search()`; a call with arguments is passed as `api.fetchAll(…)`.
+  call = call.endsWith(")") ? call : `${call}()`;
   return {
     file: "save.ts",
     name,
-    message: `\`${flag}\` stays \`true\` when \`${call}()\` fails`,
-    hint: `set \`${flag}\` again in a \`finally\`, so a failure resets it too: \`try { await ${call}(); } finally { ${reset} }\``,
+    message: `\`${flag}\` stays \`true\` when \`${call}\` fails`,
+    hint: `set \`${flag}\` again in a \`finally\`, so a failure resets it too: \`try { await ${call}; } finally { ${reset} }\``,
     notes: [],
     fix,
   };
@@ -34,11 +36,12 @@ function leak(name: string, call: string, flag: string, reset: string, fix?: str
 
 /** A state set again to a value only success makes true: the failure needs its own write. */
 function stuck(name: string, call: string, state: string, value: string, write: string) {
+  call = call.endsWith(")") ? call : `${call}()`;
   return {
     file: "save.ts",
     name,
-    message: `\`${state}\` stays \`${value}\` when \`${call}()\` fails`,
-    hint: `set \`${state}\` in a \`catch\` too, so a failure resets it: \`try { await ${call}(); … } catch (error) { ${write} throw error; }\``,
+    message: `\`${state}\` stays \`${value}\` when \`${call}\` fails`,
+    hint: `set \`${state}\` in a \`catch\` too, so a failure resets it: \`try { await ${call}; … } catch (error) { ${write} throw error; }\``,
     notes: [],
     fix: undefined,
   };
@@ -53,7 +56,13 @@ describe("async/pending-state-stuck-on-failure", () => {
       leak("setLoading(true)", "search", "loading", "setLoading(false);", FIX),
       leak("this.isSaving = true", "submit", "isSaving", "this.isSaving = false;", FIX),
       {
-        ...leak("state.pending = true", "api.fetchAll", "pending", "state.pending = false;", FIX),
+        ...leak(
+          "state.pending = true",
+          "api.fetchAll(…)",
+          "pending",
+          "state.pending = false;",
+          FIX,
+        ),
         // The function also writes the data: the note points at one status union.
         notes: [
           "`pending` and `items` are written together here: one status union holds them without contradictions",
@@ -74,6 +83,19 @@ describe("async/pending-state-stuck-on-failure", () => {
       leak("setWaiting(true)", "search", "waiting", "setWaiting(false);", FIX),
       stuck('setStatus("saving")', "submit", "status", '"saving"', "setStatus(…);"),
       leak("setLoading(true)", "untaggedSearch", "loading", "setLoading(false);", FIX),
+      // A `.catch` callback that rethrows without setting the state.
+      leak("setWaiting(true)", "search().catch(…)", "waiting", "setWaiting(false);", FIX),
+      // A `.finally` that sets the running value again.
+      leak("setWaiting(true)", "search().finally(…)", "waiting", "setWaiting(false);", FIX),
+    ]);
+  });
+
+  it("reads a class component's `setState` with an object written in place, not a computed state", () => {
+    const findings = check(fixture("pending-state-stuck-on-failure/class-state"), OFF).filter(
+      (finding) => finding.ruleId === "async/pending-state-stuck-on-failure",
+    );
+    expect(findings.map((finding) => finding.message)).toEqual([
+      "`state` stays `{ saving: true }` when `fetch(…)` fails",
     ]);
   });
 
@@ -87,7 +109,7 @@ describe("async/pending-state-stuck-on-failure", () => {
       const ours = checkWithPreset(FLAGGED, preset).filter(
         (finding) => finding.ruleId === "async/pending-state-stuck-on-failure",
       );
-      expect(ours).toHaveLength(11);
+      expect(ours).toHaveLength(13);
       expect(
         ours.every((finding) => finding.kind === "problem" && finding.severity === "warning"),
       ).toBe(true);
@@ -210,7 +232,7 @@ describe("async/pending-state-stuck-on-failure: a call that cannot fail, said in
   it("takes `rejects: []` to mean the package function never rejects", () => {
     expect(
       withFacts({ "quiet-client": { send: { rejects: ["Error"] } } }).map((f) => f.message),
-    ).toEqual(["`sending` stays `true` when `send()` fails"]);
+    ).toEqual(["`sending` stays `true` when `send(…)` fails"]);
     expect(withFacts({ "quiet-client": { send: { rejects: [] } } })).toEqual([]);
   });
 });

@@ -57,6 +57,7 @@ There is no quick fix: the values are the code's own. A read with a fallback (\`
 
 - A read whose type already includes \`undefined\` (an optional property, \`Partial<…>\`, \`noUncheckedIndexedAccess\`): TypeScript already makes you handle it.
 - A read checked first with \`key in table\`, \`Object.hasOwn(table, key)\`, \`hasOwnProperty\`, or by testing the read itself (\`table[key]\`, \`typeof table[key] === "object"\`, \`table[key] !== undefined\`), in an \`if\`, before \`&&\`, or in a \`?:\` condition.
+- A read of a table whose entries are typed to admit a missing value (\`Record<string, unknown>\`, \`any\`, or values with \`| undefined\`): TypeScript makes the code check the value before it is used. A read after an early \`return\` on a table typed \`Record<string, number>\` is still reported: stateward does not follow what runs between the test and the read.
 - A read compared with a literal (\`table[key] === true\`): a missing entry is not equal.
 - A read stored in a \`const\` whose first use checks for a missing entry (\`toggle?.kbd\`, \`if (!asset)\`, \`Array.isArray(shades)\`), also as the fallback of \`??\` or \`||\`, and a read after \`&&\` whose result has a fallback (\`(op && table[op]) ?? []\`).
 - A key typed \`string\` or \`number\`, with no fixed set of values, and a table whose keys come from a generic (\`Record<K, string>\`).
@@ -247,8 +248,30 @@ function isEnumObject(object: ts.Expression, ctx: FileContext): boolean {
  * (also `!= null`).
  */
 function testsRead(condition: ts.Expression, access: string, ctx: FileContext): boolean {
-  const text = (node: ts.Expression): string => compactText(stripParentheses(node), ctx.sourceFile);
+  // `current?.[field]` tests the same read as `current[field]`.
+  const text = (node: ts.Expression): string =>
+    compactText(stripParentheses(node), ctx.sourceFile)
+      .replace(/\?\.(?=\[)/g, "")
+      .replace(/\?\./g, ".");
   if (text(condition) === access) return true;
+  // `Array.isArray(t[k])`: an array is a value.
+  if (
+    ts.isCallExpression(condition) &&
+    condition.arguments.length === 1 &&
+    compactText(condition.expression, ctx.sourceFile) === "Array.isArray" &&
+    condition.arguments[0] !== undefined &&
+    text(condition.arguments[0]) === access
+  ) {
+    return true;
+  }
+  // `t[k] instanceof Date`.
+  if (
+    ts.isBinaryExpression(condition) &&
+    condition.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword &&
+    text(condition.left) === access
+  ) {
+    return true;
+  }
   if (!ts.isBinaryExpression(condition)) return false;
   const { kind } = condition.operatorToken;
   const other =
@@ -322,7 +345,43 @@ function establishes(
       );
     }
   }
-  return truth && testsKey(inner, object, key, access, ctx);
+  if (!truth) return testsMissing(inner, access, ctx);
+  return testsKey(inner, object, key, access, ctx);
+}
+
+/**
+ * Whether `condition`, when false, means the read `access` gave a value: `typeof t[k] !== "number"`
+ * (any name but `"undefined"`), `typeof t[k] === "undefined"`, `t[k] === undefined` (also
+ * `== null`). `t[k] === null` and `t[k] !== false` do not: the key can still be missing.
+ */
+function testsMissing(condition: ts.Expression, access: string, ctx: FileContext): boolean {
+  if (!ts.isBinaryExpression(condition)) return false;
+  // `table?.[s]` tests the same read as `table[s]`.
+  const text = (node: ts.Expression): string =>
+    compactText(stripParentheses(node), ctx.sourceFile)
+      .replace(/\?\.(?=\[)/g, "")
+      .replace(/\?\./g, ".");
+  const { kind } = condition.operatorToken;
+  const differs =
+    kind === ts.SyntaxKind.ExclamationEqualsEqualsToken ||
+    kind === ts.SyntaxKind.ExclamationEqualsToken;
+  const equals =
+    kind === ts.SyntaxKind.EqualsEqualsEqualsToken || kind === ts.SyntaxKind.EqualsEqualsToken;
+  if (!differs && !equals) return false;
+  const left = stripParentheses(condition.left);
+  const right = stripParentheses(condition.right);
+  const [test, name] = ts.isTypeOfExpression(left) ? [left, right] : [right, left];
+  if (ts.isTypeOfExpression(test) && text(test.expression) === access && ts.isStringLiteral(name)) {
+    return differs ? name.text !== "undefined" : name.text === "undefined";
+  }
+  if (!equals) return false;
+  const other = text(left) === access ? right : text(right) === access ? left : undefined;
+  if (other === undefined) return false;
+  // `=== undefined` misses only a missing value; `== null` and `== undefined` also take `null`.
+  const loose = kind === ts.SyntaxKind.EqualsEqualsToken;
+  return ts.isIdentifier(other) && other.text === "undefined"
+    ? true
+    : loose && other.kind === ts.SyntaxKind.NullKeyword;
 }
 
 /**
@@ -453,6 +512,9 @@ function checkAccess(
   const missing = keys.filter((key) => !known.has(String(key.value)));
   if (missing.length === 0 || ctx.types.canBeUndefined(node)) return;
   if (isEnumObject(node.expression, ctx) || isGuardedByKeyTest(node, ctx)) return;
+  // `Record<string, unknown>`: the entry's own type admits a missing value, so TypeScript makes the
+  // code check it before any use.
+  if (ctx.types.declaredEntryCanBeMissing(node)) return;
   if (filledBefore(node, ctx.sourceFile)) return;
   const map = oneLineText(node.expression, ctx.sourceFile);
   const access = oneLineText(node, ctx.sourceFile);

@@ -136,6 +136,19 @@ describe("records/unchecked-key: not flagged", () => {
   });
 });
 
+describe("records/unchecked-key: in tests", () => {
+  it("passes an `in` test on a key from `Object.keys` of the same object, in a predicate or a guard", () => {
+    expect(lines(inFile(findingsOf("not-flagged"), "in-tests.ts"))).toEqual([]);
+  });
+
+  it("reports an `in` test on a key from another object, and describes a predicate without a name", () => {
+    expect(lines(inFile(findingsOf("flagged"), "in-tests.ts"))).toEqual([
+      '7: the type predicate tests `key in TERMS`, which also finds inherited keys such as "toString"',
+      '10: the type predicate tests `key in TERMS`, which also finds inherited keys such as "toString"',
+    ]);
+  });
+});
+
 describe("records/unchecked-key: hints", () => {
   it("names the own-key test of the project's lib, read from another file when the file has no `Object`", () => {
     const [cast, predicate] = inFile(findingsOf("flagged"), "fixable.ts");

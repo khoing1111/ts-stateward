@@ -1,6 +1,6 @@
 {
   "name": "@stateward/plugin-react",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "stateward rules for React: react effects and memoized components that do not rerun on every render.",
   "license": "MIT",
   "repository": {

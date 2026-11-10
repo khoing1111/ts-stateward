@@ -57,6 +57,15 @@ export const RULES = {
           description:
             "JSX props whose async handler the component awaits itself, like a form library's onSubmit (globs allowed).",
         },
+        severities: {
+          kind: "severities",
+          default: {},
+          kinds: {
+            contradicted:
+              "a function tagged `@neverRejects` with a `throw`, or a call that is known to reject, outside a `try`: the rule's severity.",
+          },
+          description: "A severity per kind of finding.",
+        },
       },
       needsJsDoc: true,
     },

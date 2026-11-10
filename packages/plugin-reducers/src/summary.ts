@@ -60,8 +60,17 @@ export type Reducer = {
   unreadable: Unreadable[];
 };
 
-/** A `useReducer` call: the reducer's id, the states it starts in (null: any), and where. */
-export type Use = { reducer: string; starts: string[] | null; at: Place };
+/**
+ * Where a reducer starts: its states, and `null` or `undefined` when the start is one of them and
+ * the state type includes it (`useReducer(reducer, null)`).
+ */
+export type Starts = { tags: string[]; empty: Empty[] };
+
+/** A start that is no state: `null` or `undefined`, as the code writes it. */
+export type Empty = "null" | "undefined";
+
+/** A `useReducer` call: the reducer's id, where it starts (null: anywhere), and where. */
+export type Use = { reducer: string; starts: Starts | null; at: Place };
 
 /** A place where a reducer is called or handed on, other than `useReducer`'s first argument. */
 export type Reference = { id: string; kind: "call" | "value"; at: Place };
@@ -746,10 +755,76 @@ function finalConstOf(sig: Signature, sourceFile: ts.SourceFile): Reducer["final
   return null;
 }
 
+/**
+ * Whether a reducer is a setter, not a state machine: each `return` gives the action's payload
+ * whole (`action.payload`), an empty value (`null`, `undefined`, the state's default), or the
+ * state unchanged, and at least one gives the payload. Its states follow from what the caller
+ * sends, so there is no graph to read.
+ */
+function isSetter(sig: Signature, types: TypeQueries): boolean {
+  const action = sig.fn.parameters[1];
+  const actionId =
+    action !== undefined && ts.isIdentifier(action.name)
+      ? types.symbolAt(action.name)?.id
+      : undefined;
+  if (actionId === undefined) return false;
+  const stateParam = sig.fn.parameters[0];
+  // A setter's payload is a whole state: `payload: Sel` in a reducer of `Sel`. A payload typed as
+  // one state (`{ status: "loading" }`) is a transition of a machine.
+  const stateName =
+    stateParam !== undefined && ts.isIdentifier(stateParam.name) ? stateParam.name : undefined;
+  if (stateName === undefined) return false;
+  const named = (node: ts.Expression, id: string): boolean =>
+    ts.isIdentifier(node) && types.symbolAt(node)?.id === id;
+  const fallback = sig.fn.parameters[0]?.initializer;
+  const fallbackId =
+    fallback !== undefined && ts.isIdentifier(unwrapped(fallback))
+      ? types.symbolAt(unwrapped(fallback))?.id
+      : undefined;
+  const isEmpty = (node: ts.Expression, followed = 0): boolean => {
+    if (node.kind === ts.SyntaxKind.NullKeyword) return true;
+    if (!ts.isIdentifier(node)) return false;
+    if (node.text === "undefined") {
+      const literals = types.literalsOf(node);
+      if (literals !== "not-finite" && literals.length === 1 && literals[0]?.value === undefined)
+        return true;
+    }
+    if (fallbackId !== undefined && named(node, fallbackId)) return true;
+    const initializer = followed < MAX_FOLLOWED ? constantInitializer(node, types) : undefined;
+    return initializer !== undefined && isEmpty(unwrapped(initializer), followed + 1);
+  };
+  /** What a return gives: the payload, an empty value or the state; undefined for anything else. */
+  const kinds = (expression: ts.Expression): ("payload" | "same")[] | undefined => {
+    const inner = unwrapped(expression);
+    if (ts.isConditionalExpression(inner)) {
+      const a = kinds(inner.whenTrue);
+      const b = kinds(inner.whenFalse);
+      return a === undefined || b === undefined ? undefined : [...a, ...b];
+    }
+    if (
+      ts.isPropertyAccessExpression(inner) &&
+      named(unwrapped(inner.expression), actionId) &&
+      types.sameType(inner, stateName)
+    ) {
+      return ["payload"];
+    }
+    if (named(inner, sig.paramId) || isEmpty(inner)) return ["same"];
+    return undefined;
+  };
+  const found: ("payload" | "same")[] = [];
+  for (const { expression } of returnsOf(sig.fn)) {
+    const kind = kinds(expression);
+    if (kind === undefined) return false;
+    found.push(...kind);
+  }
+  return found.includes("payload");
+}
+
 function readReducer(sig: Signature, ctx: FileContext): Reducer | undefined {
   const { types, sourceFile } = ctx;
   const id = types.symbolAt(sig.name)?.id;
   if (id === undefined) return undefined;
+  if (isSetter(sig, types)) return undefined;
   const stateSource = sig.state.getSourceFile();
   const final = namesOf(sig.state, "final", stateSource);
   const initial = namesOf(sig.host, "initial", sourceFile) ?? defaultStart(sig, types, sourceFile);
@@ -793,7 +868,10 @@ function defaultStart(
   const fallback = sig.fn.parameters[0]?.initializer;
   if (fallback === undefined) return null;
   const starts = startsOf(fallback, sig, types);
-  return starts === null ? null : { names: starts, at: place(fallback, sourceFile), prose: false };
+  // `@initial` cannot name `null`: a default of `null` says nothing, as before.
+  return starts === null || starts.empty.length > 0
+    ? null
+    : { names: starts.tags, at: place(fallback, sourceFile), prose: false };
 }
 
 /** `useReducer` from React, called by its name or as a member (`React.useReducer`). */
@@ -840,19 +918,43 @@ function functionNamed(expression: ts.Expression, types: TypeQueries): FunctionN
   return declared === undefined ? undefined : functionOf(declared.node)?.fn;
 }
 
-/** The states an expression starts a reducer in; null when its tag cannot be read. */
+/** Both starts: the states and the empty values of each, sorted, each once. */
+function joined(a: Starts, b: Starts): Starts {
+  return {
+    tags: [...new Set([...a.tags, ...b.tags])].sort(),
+    empty: [...new Set([...a.empty, ...b.empty])].sort(),
+  };
+}
+
+/** `null` or `undefined` written as the start, when the state type includes it. */
+function emptyOf(expression: ts.Expression, sig: Signature, types: TypeQueries): Empty | undefined {
+  if (expression.kind === ts.SyntaxKind.NullKeyword) {
+    return types.canBeNull(sig.param) ? "null" : undefined;
+  }
+  if (!ts.isIdentifier(expression) || expression.text !== "undefined") return undefined;
+  // A local named `undefined` is not the value.
+  const literals = types.literalsOf(expression);
+  if (literals === "not-finite" || literals.length !== 1) return undefined;
+  return literals[0]?.value === undefined && types.canBeUndefined(sig.param)
+    ? "undefined"
+    : undefined;
+}
+
+/** Where an expression starts a reducer; null when its tag cannot be read. */
 function startsOf(
   expression: ts.Expression,
   sig: Signature,
   types: TypeQueries,
   followed = 0,
-): string[] | null {
+): Starts | null {
   const inner = unwrapped(expression);
   if (ts.isConditionalExpression(inner)) {
     const a = startsOf(inner.whenTrue, sig, types, followed);
     const b = startsOf(inner.whenFalse, sig, types, followed);
-    return a === null || b === null ? null : [...new Set([...a, ...b])].sort();
+    return a === null || b === null ? null : joined(a, b);
   }
+  const empty = emptyOf(inner, sig, types);
+  if (empty !== undefined) return { tags: [], empty: [empty] };
   if (ts.isIdentifier(inner) && followed < MAX_FOLLOWED) {
     // `const initialState: State = { status: "cart" }`: the annotation hides the tag.
     const initializer = constantInitializer(inner, types);
@@ -865,7 +967,7 @@ function startsOf(
   );
   if (tags.length !== found.length) return null;
   if (!ts.isObjectLiteralExpression(inner) && tags.length === sig.tags.length) return null;
-  return tags;
+  return { tags, empty: [] };
 }
 
 function useOf(call: ts.CallExpression, ctx: FileContext): Use | undefined {
@@ -881,13 +983,13 @@ function useOf(call: ts.CallExpression, ctx: FileContext): Use | undefined {
   // `useReducer(reducer, arg, init)` starts in what `init` returns.
   const fn = functionNamed(init, types);
   if (fn === undefined) return { reducer: behind.id, starts: null, at };
-  const tags = new Set<string>();
+  let all: Starts = { tags: [], empty: [] };
   for (const { expression } of returnsOf(fn)) {
     const starts = startsOf(expression, behind.sig, types);
     if (starts === null) return { reducer: behind.id, starts: null, at };
-    starts.forEach((tag) => tags.add(tag));
+    all = joined(all, starts);
   }
-  return { reducer: behind.id, starts: [...tags].sort(), at };
+  return { reducer: behind.id, starts: all, at };
 }
 
 /** Whether an identifier sits where a function value may be handed on or called. */

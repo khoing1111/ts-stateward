@@ -68,13 +68,13 @@ When the code is a plain run (a write, some awaited statements, then the write a
 
 It reads the shape of the code, not the names: in one function, state that outlives the call is written (\`setLoading(true)\`, \`this.isSaving = true\`, \`state.phase = "loading"\`, \`setState({ status: "loading" })\`), then a call that can reject is awaited, then the state is written again, but a failure, an early \`return\` or a \`throw\` in between skips that. A promise chain that writes it again only in \`.then()\` counts too. "State that outlives the call" is a setter (\`set…\` with one argument) or a place not declared inside the function: a field of \`this\`, a parameter's field, a module-level variable, a \`useState\` setter of the component around a handler. The finding is on the first write. It does not see:
 
-- state written through \`this.setState({ loading: true })\`, or a setter with more than one argument;
+- a class component's state set from a value computed elsewhere or an updater (\`this.setState(next)\`, \`this.setState((prev) => …)\`): only an object written in place (\`this.setState({ saving: true })\`) says what is running; a setter with more than one argument;
 - state that is never written again in the same function, or is written again in a different one;
 - a variable declared inside the function: it is gone when the function fails;
 - an \`await\` of a call it cannot see rejecting: a package function with no facts, a function received as a value or a prop (\`this.props.actions.save()\`), a declared function with no body;
 - a call whose promise settles with its error in the value (\`unwrap()\`, RTK Query's triggers): it does not reject.
 
-A call can reject when stateward can see that it does: \`fetch\`, a request of \`axios\`, \`ky\`, \`ofetch\`, \`got\`, \`node-fetch\` or \`superagent\`, a package function your config's \`facts\` say rejects or throws, \`Promise.all\` of one of those, or a function of your project that throws or awaits one of those outside a \`try\` that catches (followed four calls deep).
+A call can reject when stateward can see that it does: \`fetch\`, a request of \`axios\`, \`ky\`, \`ofetch\`, \`got\`, \`node-fetch\` or \`superagent\`, a package function your config's \`facts\` say rejects or throws, \`Promise.all\` of one of those, a \`.then\` or \`.catch\` callback written in place that throws or returns one of those, or a function of your project that throws or awaits one of those outside a \`try\` that catches (every function it calls is read; a \`throw\` after a value typed \`never\` cannot run).
 
 It guesses what the code means, so it is a warning in every preset, and it is wrong when the failure is handled somewhere it cannot see, such as a caller that always resets the state: say so above the line with \`// stateward-ignore async/pending-state-stuck-on-failure: <why>\`, or list the state's name under \`ignore\`.
 
@@ -240,7 +240,14 @@ function sameFlag(a: Flag, b: Flag): boolean {
   return a.kind === b.kind && a.target === b.target;
 }
 
-type Scope = { sourceFile: ts.SourceFile; flag: Flag; tracked: Tracked; rejects: CanReject };
+type Scope = {
+  sourceFile: ts.SourceFile;
+  flag: Flag;
+  tracked: Tracked;
+  rejects: CanReject;
+  /** The value the state is set to before the work (`true`), when known: setting it again is no reset. */
+  running?: string;
+};
 
 /** The statement is exactly `place = value` / `setPlace(value)` for the same place. */
 function isSetAgain(statement: ts.Node, scope: Scope): boolean {
@@ -267,11 +274,54 @@ function resetsIn(node: ts.Node | undefined, scope: Scope): boolean {
 /** The first `await` in source order whose call can reject, not looking inside nested functions. */
 function firstFailingAwait(node: ts.Node, scope: Scope): ts.AwaitExpression | undefined {
   const visit = (child: ts.Node): ts.AwaitExpression | undefined => {
-    if (ts.isAwaitExpression(child) && scope.rejects(child.expression)) return child;
+    if (
+      ts.isAwaitExpression(child) &&
+      scope.rejects(child.expression) &&
+      !chainResets(child.expression, scope)
+    ) {
+      return child;
+    }
     if (ts.isFunctionLike(child)) return undefined;
     return ts.forEachChild(child, visit);
   };
   return visit(node);
+}
+
+/**
+ * Whether a chain sets the state again where a failure runs: in a `.catch` or `.finally`
+ * callback, or the second callback of a `.then` (`await save().catch((e) => { setBusy(false);
+ * throw e; })`). The failure still goes on, but the state is not left behind.
+ */
+function chainResets(expression: ts.Expression, scope: Scope): boolean {
+  const chain = chainOf(expression);
+  if (chain === undefined) return false;
+  return chain.links.some((link) => {
+    const name = linkName(link);
+    // The callback itself: the link also holds the chain before it, whose `.then` runs on success.
+    const callback = name === "catch" || name === "finally" ? link.arguments[0] : link.arguments[1];
+    return setsOtherValue(callback, scope);
+  });
+}
+
+/** Whether the node sets the state to a value other than the one it ran with (`setLoading(true)` again is not a reset). */
+function setsOtherValue(node: ts.Node | undefined, scope: Scope): boolean {
+  if (node === undefined) return false;
+  let found = false;
+  const visit = (child: ts.Node): void => {
+    if (found) return;
+    const use = flagUse(child, scope.sourceFile, scope.tracked);
+    if (
+      use !== undefined &&
+      sameFlag(use.flag, scope.flag) &&
+      (scope.running === undefined || compact(use.value, scope.sourceFile) !== scope.running)
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(child, visit);
+  };
+  visit(node);
+  return found;
 }
 
 /** The first `await` (or `for await`) in source order, not looking inside nested functions. */
@@ -394,7 +444,8 @@ function coveredByEnclosingTry(container: ts.Node, scope: Scope): boolean {
 type Container = ts.Block | ts.CaseClause | ts.DefaultClause;
 
 /** What the message names as the thing that fails: `search()`, `api.save()`, `request`. */
-type Awaited = { text: string; call: boolean };
+/** What is awaited, as shown: a call's callee, and whether it was called and with arguments. */
+type Awaited = { text: string; call: boolean; args: boolean };
 
 function oneLine(node: ts.Node): string {
   return node.getText().replace(/\s+/g, " ").trim();
@@ -408,16 +459,19 @@ function unwrap(node: ts.Expression): ts.Expression {
     : node;
 }
 
-/** The expression a promise comes from: a call is shown as `callee()`, without its arguments. */
+/**
+ * The expression a promise comes from: a call is shown as `callee()`, or `callee(…)` when it has
+ * arguments, so `search().catch(…)` does not read as a `.catch` with no callback.
+ */
 function awaitedOf(expression: ts.Expression): Awaited {
   const inner = unwrap(expression);
   return ts.isCallExpression(inner)
-    ? { text: oneLine(inner.expression), call: true }
-    : { text: oneLine(inner), call: false };
+    ? { text: oneLine(inner.expression), call: true, args: inner.arguments.length > 0 }
+    : { text: oneLine(inner), call: false, args: false };
 }
 
 function shownAwaited(awaited: Awaited, cut: (text: string) => string): string {
-  return `${cut(awaited.text)}${awaited.call ? "()" : ""}`;
+  return `${cut(awaited.text)}${awaited.call ? (awaited.args ? "(…)" : "()") : ""}`;
 }
 
 function headline(flag: Flag, value: string, awaited: Awaited): string {
@@ -437,6 +491,18 @@ function clears(node: ts.Expression): boolean {
     node.kind === ts.SyntaxKind.FalseKeyword ||
     node.kind === ts.SyntaxKind.NullKeyword ||
     (ts.isIdentifier(node) && node.text === "undefined")
+  );
+}
+
+/**
+ * `this.setState(next)` or `this.setState((prev) => …)`: a class component's state replaced as a
+ * whole marks nothing as running. Only an object written in place names the keys it sets.
+ */
+function replacesClassState(use: FlagUse): boolean {
+  return (
+    use.flag.kind === "call" &&
+    use.flag.target === "this.setState" &&
+    !ts.isObjectLiteralExpression(unwrap(use.value))
   );
 }
 
@@ -647,7 +713,14 @@ function analyze(
     }
     // A write whose value waits for a call is the result arriving, not a state set before it.
     if (isEmptying(use.value)) return;
-    const scope: Scope = { sourceFile: ctx.sourceFile, flag: use.flag, tracked, rejects };
+    if (replacesClassState(use)) return;
+    const scope: Scope = {
+      sourceFile: ctx.sourceFile,
+      flag: use.flag,
+      tracked,
+      rejects,
+      running: compact(use.value, ctx.sourceFile),
+    };
     if (coveredByEnclosingTry(container, scope)) return;
     const first = { node: statement.expression, value: oneLine(use.value) };
     const found =

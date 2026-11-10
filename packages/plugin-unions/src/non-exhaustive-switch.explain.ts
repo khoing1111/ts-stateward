@@ -86,6 +86,8 @@ error[unions/non-exhaustive-switch]: \`switch\` on \`status\` does not handle a 
 
 \`stateward guarantees\`, the hover and the code lens list each open union with its switches.
 
+**Enum members by name.** A \`case "person":\` on an enum with \`PERSON = "person"\` handles that member at run time, and the rule counts it. TypeScript does not narrow an enum by its value, so it cannot check that \`switch\`: each such case gets an info with a quick fix, \`case StakeholderTypes.PERSON:\` (kind \`enum-value\`).
+
 A \`default\` that handles more than 5 cases (\`maxHidden\`), or a \`switch\` without one that misses more than 5, is reported as info: it often means "everything else". To keep a \`switch\` without a \`default\` unreported, set its kinds' severity: \`severities: { missing: "off", "many-missing": "off" }\`. To accept one \`switch\` with a reason, put \`// stateward-ignore unions/non-exhaustive-switch: <why>\` above it.
 
 ## Turn it on or off

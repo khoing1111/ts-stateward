@@ -189,3 +189,13 @@ export async function throughWrapper(): Promise<void> {
   setLoading(false);
   if (items !== null) setData(items);
 }
+
+/** The `.catch` callback sets the state again, then rethrows: the state is not left behind. */
+export async function catchCallbackResets(): Promise<void> {
+  setBusy(true);
+  await search().catch((error: unknown) => {
+    setBusy(false);
+    throw error;
+  });
+  setBusy(false);
+}

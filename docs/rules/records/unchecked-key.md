@@ -53,7 +53,7 @@ It reports a cast to the keys of a plain object (an object literal, an `as const
 
 - a cast checked first with `Object.hasOwn`, `Object.prototype.hasOwnProperty.call`, `hasOwnProperty` or a type predicate whose body does one of those (`isKeyOf`), in an `if`, before `&&`, in a `?:` condition or before an early `return`;
 - a key checked the same way against a list of valid keys: `VALID.has(key)` on a `Set` or `Map`, `VALID.includes(key)` on an array;
-- a key taken from the same table: `for (const key in LABELS)`, `Object.keys(LABELS).map((key) => …)` and the other array methods, `for (const [key] of Object.entries(LABELS))`;
+- a key taken from the same table, cast or tested with `in`: `for (const key in LABELS)`, `Object.keys(LABELS).map((key) => …)` and the other array methods (`Object.keys(LABELS).filter((key): key is Status => key in LABELS)`), `for (const [key] of Object.entries(LABELS))`;
 - a read that handles a missing key: `LABELS[key as K] ?? fallback` (or `||`), `LABELS[key as K]?.length`, or a `const` that holds the read and is next compared with `undefined` or `null` or passed to `isDefined`, `isNil` or `isNullish`. Not when the key is read from the URL or from storage (`params.get(…)`, `localStorage.getItem(…)`): a fallback does not stop an inherited key such as `"toString"`;
 - a key already typed as the table's keys;
 - a `Map`, a `Set`, an enum, or writes (`LABELS[key as K] = …`);

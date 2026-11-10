@@ -71,7 +71,7 @@ It reports:
 - a reducer also called or passed around elsewhere (outside tests), or exported from your package, without `@initial`: it may start in any state;
 - a name in `@initial` that is not a state, and a `@final` or `@initial` that does not start with a quoted state (`@final the order is done` is read as a comment; write `@final "delivered" | "refunded"`).
 
-It leaves alone a function with a reducer's signature that is never used or only called as a helper, a `return` typed `any` (`reducers/state-unreachable` reports that one), and state in `useState` or class fields, which do not have to become reducers.
+It leaves alone a start of `null` or `undefined` when the state type includes it (`useReducer(selectionReducer, null)`): it is a known start, which the other two rules read as any state coming first. It skips a setter, a reducer whose every `return` gives a property of the action typed as the whole state (`return action.payload` with `payload: Selection`), `null`, `undefined` or the state unchanged: its states are what the caller sends, so none of the reducers rules reads it; one `return` that builds a state (`return { status: "loading" }`) makes it a state machine again. It also leaves alone a function with a reducer's signature that is never used or only called as a helper, a `return` typed `any` (`reducers/state-unreachable` reports that one), and state in `useState` or class fields, which do not have to become reducers.
 
 ## Getting the best from it
 

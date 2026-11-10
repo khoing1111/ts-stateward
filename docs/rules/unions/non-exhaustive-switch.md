@@ -101,6 +101,8 @@ error[unions/non-exhaustive-switch]: `switch` on `status` does not handle a valu
 
 `stateward guarantees`, the hover and the code lens list each open union with its switches.
 
+**Enum members by name.** A `case "person":` on an enum with `PERSON = "person"` handles that member at run time, and the rule counts it. TypeScript does not narrow an enum by its value, so it cannot check that `switch`: each such case gets an info with a quick fix, `case StakeholderTypes.PERSON:` (kind `enum-value`).
+
 A `default` that handles more than 5 cases (`maxHidden`), or a `switch` without one that misses more than 5, is reported as info: it often means "everything else". To keep a `switch` without a `default` unreported, set its kinds' severity: `severities: { missing: "off", "many-missing": "off" }`. To accept one `switch` with a reason, put `// stateward-ignore unions/non-exhaustive-switch: <why>` above it.
 
 ## Turn it on or off
@@ -118,7 +120,7 @@ Options, set as `rules: { "unions/non-exhaustive-switch": ["error", { … }] }`:
 | --- | --- | --- | --- |
 | `maxHidden` | number, whole number, min 0 | `5` | A `default` that handles more cases than this, none allowed, or a `switch` without one that misses more, is reported as info: it often means "everything else". |
 | `ignore` | list of strings | `[]` | Union type names (globs like *Event) whose switches are not checked: matched against the type of the value tested, or of the object whose tag is tested. |
-| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of finding. Kinds: `hidden`: the default handles up to maxHidden cases it does not allow; `many-hidden`: the default handles more than maxHidden cases it does not allow (info unless set here); `missing`: a switch without a default does not list up to maxHidden cases (TypeScript reports the rest when a function must return a value); `many-missing`: a switch without a default does not list more than maxHidden cases (info unless set here); `open`: a switch over an open union (`OpenUnion<T>`) has no default. |
+| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of finding. Kinds: `hidden`: the default handles up to maxHidden cases it does not allow; `many-hidden`: the default handles more than maxHidden cases it does not allow (info unless set here); `missing`: a switch without a default does not list up to maxHidden cases (TypeScript reports the rest when a function must return a value); `many-missing`: a switch without a default does not list more than maxHidden cases (info unless set here); `open`: a switch over an open union (`OpenUnion<T>`) has no default; `enum-value`: a case names an enum member by its value (`case "person":`), which TypeScript does not check (info unless set here). |
 | `projectTypesOnly` | boolean | `true` | Check only unions declared in the project, not in packages or TypeScript's lib: a member a library adds later is not a state the app designed. |
 
 Core rule: error under `recommended` and `strict`. Group: `unions/cases`.

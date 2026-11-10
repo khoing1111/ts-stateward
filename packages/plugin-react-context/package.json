@@ -1,6 +1,6 @@
 {
   "name": "@stateward/plugin-react-context",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "stateward rules for React context: every reader is under its Provider, defaults are real values, Provider values keep their identity, and stated traits are proven.",
   "license": "MIT",
   "repository": {

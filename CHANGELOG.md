@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.2.1 (2026-11-10)
+
+- **`async/pending-state-stuck-on-failure` sees more failures** (it shares how `rejects.ts` reads
+  calls): a `.then` or `.catch` callback that throws or returns a request, a function more than
+  four calls deep, a class method, an arrow function that returns a request
+  (`(x) => api.post(x)`), and a synchronous helper of the project that throws. A `throw` after a value typed `never` cannot run and no
+  longer counts, and a `.catch` callback that sets the state again before it rethrows resets it.
+  Its messages show a call with arguments as `api.fetchAll(…)`, not `api.fetchAll()`. A class
+  component's `this.setState(next)` or `this.setState((prev) => …)` replaces the state and is not
+  read as a running state; `this.setState({ saving: true })` still is.
+- **`@neverRejects` is checked where it can be:** a tagged function with a `throw` or a call known
+  to reject outside a `try` is reported (`handler-rejection-lost`, kind `contradicted`).
+- **`handler-rejection-lost` reads the project's functions it awaits** (`rejectionsOf` with
+  `unknownRejects`): a chain that ends in a `.catch(…)` whose callback, written in place, does not
+  throw, a function that awaits only calls that cannot reject (however deep), or none, and
+  `Promise.allSettled(…)` are not a failure. A `.catch` or `.then` callback that throws, rejects or
+  is passed by name, a `for await`, a package with no facts, a promise in a variable or a list, or a
+  recursive call still is. The answer is the same whatever is read first.
+- **`records/lookup-misses-key` skips a read whose entry type admits a missing value**: a table
+  typed `Record<string, unknown>` (or `any`, or values with `| undefined`) makes TypeScript check
+  each value before use, so the rule has nothing to add. New query
+  `TypeQueries.declaredEntryCanBeMissing`. Inside an `if` that tests the read, `Array.isArray`,
+  `instanceof`, `t?.[k]` and the `else` of `t[k] === undefined` also count as a test.
+- **`records/unchecked-key` skips an `in` test on a key from the same object**: a type predicate
+  given to an array method of `Object.keys(T)` that tests `key in T`. A predicate without a name
+  is described in the message ("the type predicate tests `key in T`"), not put in code font.
+- **`unions/non-exhaustive-switch` reads plain values on an enum**: a `case "person":` on a string
+  enum with `PERSON = "person"` handles that member, with or without a `default`. Each such case
+  gets an info (kind `enum-value`) with a quick fix that names the member, which TypeScript checks.
+- **`reducers/reducer-not-readable` accepts `null` and `undefined` as a start** when the state type
+  includes it (`useReducer(reducer, null)`), as the argument or from an `init` function.
+- **The reducers rules skip setters**: a reducer whose every `return` gives a property of the
+  action typed as the whole state (`return action.payload` with `payload: Selection`), `null`,
+  `undefined` or the state unchanged is not a state
+  machine and gets no finding. One `return` that builds a state keeps it checked.
+
 ## 1.2.0 (2026-11-09)
 
 - **`unions/non-exhaustive-switch` checks a `switch` without a `default`** (rc.2). One over a

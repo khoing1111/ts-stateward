@@ -51,7 +51,7 @@ export function indentUnit(indent: string): string {
 }
 
 /** `Color.Red` as the enum (`Color`) and the member (`Red`); undefined for any other label. */
-function enumParts(label: string): { owner: string; member: string } | undefined {
+export function enumParts(label: string): { owner: string; member: string } | undefined {
   if (!/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/.test(label)) return undefined;
   const dot = label.lastIndexOf(".");
   return { owner: label.slice(0, dot), member: label.slice(dot + 1) };

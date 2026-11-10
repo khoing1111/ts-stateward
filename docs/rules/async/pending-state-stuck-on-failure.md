@@ -25,12 +25,12 @@ export function useSearch() {
 `stateward check` prints:
 
 ```text
-warning[async/pending-state-stuck-on-failure]: `loading` stays `true` when `fetch()` fails
+warning[async/pending-state-stuck-on-failure]: `loading` stays `true` when `fetch(…)` fails
  --> example.ts:8:5
   |
 8 |     setLoading(true);
   |     ^^^^^^^^^^^^^^^^
-  = fix: set `loading` again in a `finally`, so a failure resets it too: `try { await fetch(); } finally { setLoading(false); }`
+  = fix: set `loading` again in a `finally`, so a failure resets it too: `try { await fetch(…); } finally { setLoading(false); }`
   = note: `loading` and `results` are written together here: one status union holds them without contradictions
   = docs: stateward explain async/pending-state-stuck-on-failure
 ```
@@ -68,13 +68,13 @@ When the code is a plain run (a write, some awaited statements, then the write a
 
 It reads the shape of the code, not the names: in one function, state that outlives the call is written (`setLoading(true)`, `this.isSaving = true`, `state.phase = "loading"`, `setState({ status: "loading" })`), then a call that can reject is awaited, then the state is written again, but a failure, an early `return` or a `throw` in between skips that. A promise chain that writes it again only in `.then()` counts too. "State that outlives the call" is a setter (`set…` with one argument) or a place not declared inside the function: a field of `this`, a parameter's field, a module-level variable, a `useState` setter of the component around a handler. The finding is on the first write. It does not see:
 
-- state written through `this.setState({ loading: true })`, or a setter with more than one argument;
+- a class component's state set from a value computed elsewhere or an updater (`this.setState(next)`, `this.setState((prev) => …)`): only an object written in place (`this.setState({ saving: true })`) says what is running; a setter with more than one argument;
 - state that is never written again in the same function, or is written again in a different one;
 - a variable declared inside the function: it is gone when the function fails;
 - an `await` of a call it cannot see rejecting: a package function with no facts, a function received as a value or a prop (`this.props.actions.save()`), a declared function with no body;
 - a call whose promise settles with its error in the value (`unwrap()`, RTK Query's triggers): it does not reject.
 
-A call can reject when stateward can see that it does: `fetch`, a request of `axios`, `ky`, `ofetch`, `got`, `node-fetch` or `superagent`, a package function your config's `facts` say rejects or throws, `Promise.all` of one of those, or a function of your project that throws or awaits one of those outside a `try` that catches (followed four calls deep).
+A call can reject when stateward can see that it does: `fetch`, a request of `axios`, `ky`, `ofetch`, `got`, `node-fetch` or `superagent`, a package function your config's `facts` say rejects or throws, `Promise.all` of one of those, a `.then` or `.catch` callback written in place that throws or returns one of those, or a function of your project that throws or awaits one of those outside a `try` that catches (every function it calls is read; a `throw` after a value typed `never` cannot run).
 
 It guesses what the code means, so it is a warning in every preset, and it is wrong when the failure is handled somewhere it cannot see, such as a caller that always resets the state: say so above the line with `// stateward-ignore async/pending-state-stuck-on-failure: <why>`, or list the state's name under `ignore`.
 
