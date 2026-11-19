@@ -205,7 +205,7 @@ const STABLE: Shown[] = [
     file: "Actions.tsx",
     at: "useActions()",
     message:
-      "`ActionsContext` is stated `Stable`, but its value is not proven to stay the same: `useActions()` cannot be followed",
+      "`ActionsContext` is stated `Stable`, but its value comes from `useActions()`, a hook of the project that stateward does not follow",
     hint: "one of\n- build the value in the Provider's component from setters, a `dispatch`, refs, module constants, or `useMemo` over them\n- or remove `Stable` from the type of `ActionsContext`, if its value is meant to change",
     notes: [STATED_NOTE],
     fixes: [],

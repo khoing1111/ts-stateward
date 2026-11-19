@@ -19,7 +19,10 @@ const TWICE = (fn: string, state: string, running: string) => ({
   message: `\`${fn}\` starts again while \`${state}\` is \`${running}\``,
   hint: [
     "one of",
-    `- return early while it runs, read from a ref (state read in a handler can be one render old): \`if (${state}Ref.current) return;\``,
+    "- return early while it runs, read from a ref, since state read in a handler can be one render old",
+    `    const ${state}Ref = useRef(false); // in the component, once`,
+    `    if (${state}Ref.current) return;`,
+    `    ${state}Ref.current = true; try { … } finally { ${state}Ref.current = false; }`,
     `- or disable the control while it runs: \`disabled={${state}}\``,
   ].join("\n"),
 });
@@ -41,7 +44,7 @@ describe("async/pending-state-stuck-on-failure: a state stated `Pending`", () =>
         name: "setSaving(true)",
         // Any `await` may fail: `post` is declared with no body, yet the state says it must settle.
         message: "`saving` stays `true` when `post(…)` fails",
-        hint: "set `saving` back in `finally`: `finally { setSaving(false); }`",
+        hint: "set `saving` back in `finally`: `try { await post(…); … } finally { setSaving(false); }`",
         notes: ["`saving` is stated `Pending` here"],
         fix: "Reset the state in a finally",
       },
@@ -52,8 +55,8 @@ describe("async/pending-state-stuck-on-failure: a state stated `Pending`", () =>
         // The start value in `finally`; each other value that is not running in a `catch`.
         hint: [
           "one of",
-          '- set `status` back in `finally`: `finally { this.status = "idle"; }`',
-          '- or set it to "failed" in a `catch`: `catch (error) { this.status = "failed"; throw error; }`',
+          '- set `status` back in `finally`: `try { await post(…); … } finally { this.status = "idle"; }`',
+          '- or set it to "failed" in a `catch`: `try { await post(…); … } catch (error) { this.status = "failed"; throw error; }`',
         ].join("\n"),
         notes: ["`status` is stated `Pending` here"],
         fix: undefined,
@@ -62,7 +65,7 @@ describe("async/pending-state-stuck-on-failure: a state stated `Pending`", () =>
         file: "save.ts",
         name: "setBusy(true)",
         message: "`busy` stays `true` after `start` returns",
-        hint: "set `busy` back in `finally`: `finally { setBusy(false); }`",
+        hint: "set `busy` back in `finally`: `try { … } finally { setBusy(false); }`",
         notes: ["`busy` is stated `Pending` here"],
         fix: undefined,
       },
@@ -74,11 +77,37 @@ describe("async/pending-state-stuck-on-failure: a state stated `Pending`", () =>
         notes: ["`Pending<Status>` is stated here"],
         fix: undefined,
       },
+      {
+        file: "save.ts",
+        name: "setStatus",
+        message:
+          "not checked: `setStatus` is stored, returned or passed on, so its writes cannot be followed",
+        hint: "call the setter only in the component that declares it",
+        notes: [],
+        fix: undefined,
+      },
     ]);
   });
 
   it("is silent when it settles in `finally` and a ref guards the start, or the function never awaits", () => {
     expect(found.filter((finding) => finding.file === "clean.ts")).toEqual([]);
+  });
+});
+
+describe("async/pending-state-stuck-on-failure: a field that can start again", () => {
+  it("reads the field itself, not a ref that the code does not have", () => {
+    const dir = fixture("pending-field");
+    const [one, ...rest] = shown(check(dir, OFF));
+    expect(rest).toEqual([]);
+    expect(one?.message).toBe('`save` starts again while `status` is `"saving"`');
+    expect(one?.hint).toBe(
+      [
+        "one of",
+        '- return early while it runs: `if (this.status === "saving") return;`',
+        "- or disable the control while it runs",
+      ].join("\n"),
+    );
+    expect(one?.hint).not.toContain("Ref");
   });
 });
 
@@ -116,7 +145,8 @@ describe("async/pending-state-stuck-on-failure: how severe a stated finding is",
       .map((finding) => (finding.kind === "problem" ? finding.severity : "unknown"));
 
   it("is an error for a state stated `Pending`, though the rule's shape-based findings are warnings", () => {
-    expect(severities({})).toEqual(["error", "error", "error", "error", "error"]);
+    // The last is a place not checked: `useStatus` returns its setter.
+    expect(severities({})).toEqual(["error", "error", "error", "error", "error", "unknown"]);
   });
 
   it("follows the severity the config gives the kind `stated`", () => {
@@ -126,6 +156,7 @@ describe("async/pending-state-stuck-on-failure: how severe a stated finding is",
       "warning",
       "warning",
       "warning",
+      "unknown",
     ]);
   });
 });

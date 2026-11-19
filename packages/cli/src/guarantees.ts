@@ -20,10 +20,16 @@ export type Locate = (location: Location) => Place;
 /** At most this many covered places, and errors, are listed per guarantee; the rest are counted. */
 const MAX_LISTED = 10;
 
-type Counts = { proven: number; unproven: number; unused: number; off: number };
+type Counts = {
+  proven: number;
+  unproven: number;
+  unchecked: number;
+  unused: number;
+  off: number;
+};
 
 function countsOf(proofs: readonly GuaranteeProof[]): Counts {
-  const counts: Counts = { proven: 0, unproven: 0, unused: 0, off: 0 };
+  const counts: Counts = { proven: 0, unproven: 0, unchecked: 0, unused: 0, off: 0 };
   for (const proof of proofs) counts[proof.status.kind] += 1;
   return counts;
 }
@@ -38,7 +44,11 @@ function listed<T>(items: readonly T[], line: (item: T) => string): string[] {
   return rest > 0 ? [...shown, `    … and ${String(rest)} more`] : shown;
 }
 
-/** Exit code: 1 when a guarantee is stated but not proven, else 0. */
+/**
+ * Exit code, as `guarantees --help` says: 1 when a guarantee is stated but not proven (an error, or
+ * a finding an ignore comment hides); 0 when every one is proven, unused or not checked (a place
+ * the rules cannot follow, or a rule that is off).
+ */
 export function guaranteesExitCode(proofs: readonly GuaranteeProof[]): 0 | 1 {
   return proofs.some((proof) => proof.status.kind === "unproven") ? 1 : 0;
 }
@@ -61,6 +71,19 @@ export function formatGuaranteesPretty(proofs: readonly GuaranteeProof[], locate
     if (status.kind === "unproven") {
       lines.push(
         ...listed(status.errors, (error) => `    ${at(locate(error.location))}  ${error.message}`),
+        ...listed(
+          status.ignored,
+          ({ finding, reason }) =>
+            `    ${at(locate(finding.location))}  ${finding.message} (ignored${reason === "" ? "" : `: ${reason}`})`,
+        ),
+      );
+    }
+    if (status.kind === "unchecked") {
+      lines.push(
+        ...listed(
+          status.places,
+          (one) => `    ${at(locate(one.location))}  not checked: ${one.reason}`,
+        ),
       );
     }
     if (stated.covered.length > 0 && status.kind !== "unused") {
@@ -76,7 +99,9 @@ export function formatGuaranteesPretty(proofs: readonly GuaranteeProof[], locate
     `${String(counts.proven)} proven`,
     ...(counts.unproven > 0 ? [`${String(counts.unproven)} not proven`] : []),
     ...(counts.unused > 0 ? [`${String(counts.unused)} unused`] : []),
-    ...(counts.off > 0 ? [`${String(counts.off)} not checked`] : []),
+    ...(counts.off + counts.unchecked > 0
+      ? [`${String(counts.off + counts.unchecked)} not checked`]
+      : []),
   ];
   const next =
     counts.unproven > 0 ? " `stateward check` shows each error with the path to it." : "";
@@ -89,12 +114,25 @@ export function formatGuaranteesJson(proofs: readonly GuaranteeProof[], locate: 
     source: stated.source ?? MARKER,
     marker: stated.marker,
     name: stated.name,
+    declaration: stated.declaration,
     ...locate(stated.location),
     rule: stated.ruleId,
     status: status.kind,
     errors:
       status.kind === "unproven"
         ? status.errors.map((error) => ({ ...locate(error.location), message: error.message }))
+        : [],
+    ignored:
+      status.kind === "unproven"
+        ? status.ignored.map(({ finding, reason }) => ({
+            ...locate(finding.location),
+            message: finding.message,
+            reason,
+          }))
+        : [],
+    unchecked:
+      status.kind === "unchecked"
+        ? status.places.map((one) => ({ ...locate(one.location), reason: one.reason }))
         : [],
     covers: stated.covers.many,
     covered: stated.covered.map((place) => ({ name: place.name, ...locate(place.location) })),

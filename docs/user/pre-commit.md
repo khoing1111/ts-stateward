@@ -44,9 +44,16 @@ It checks the staged version of each staged file, and reports only findings in s
 point into one:
 
 ```text
-error[unions/non-exhaustive-switch]: `switch` on `status` does not handle "failed"
+error[unions/non-exhaustive-switch]: the `default` of the `switch` on `status` takes "failed", which no `case` names
  --> src/status.ts:9:5
-...
+  |
+9 |     default:
+  |     ^^^^^^^
+  = fix: one of
+      - add `case "failed":` with its own code
+      - or allow it in `default`: `default: void (status satisfies "failed");`
+  = docs: stateward explain unions/non-exhaustive-switch
+
 1 error in 1 changed file (4 problems elsewhere not shown, 0.4 s).
 ```
 

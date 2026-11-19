@@ -32,12 +32,15 @@ info[reducers/reducer-not-readable]: `advance(state, event)` can return any stat
    |
 12 |   return advance(state, event);
    |          ^^^^^^^^^^^^^^^^^^^^^
-   = fix: declare its return type as the states it returns, e.g. `Extract<JobState, { status: "done" }>`
+   = fix: one of
+       - write the steps of `advance` in the reducer, so each state it gives is read
+       - or declare its return type as the states it gives, `Extract<JobState, { status: … }>`: only if it never gives back the state it is passed, which a return type cannot say
+       - or, if it may be any state on purpose, turn this kind off: `severities: { "whole-return": "off" }` in the rule's options
    = note: example.ts:11: in `job`
    = docs: stateward explain reducers/reducer-not-readable
 ```
 
-Write the steps in the reducer itself, or give the helper a return type that names its states (`Extract<JobState, { status: "running" | "done" }>`):
+Write the steps in the reducer itself. A helper that gives back the state it is passed, as `advance` does, cannot say so in its return type; one that only builds new states can name them (`Extract<JobState, { status: "running" | "done" }>`). A start or a constant that is one state gets the same kind of type, and the rule's `severities` option turns the kind off where any state is meant:
 
 ```ts
 import { useReducer } from "react";
@@ -66,9 +69,10 @@ There is no quick fix: only you know which states the helper gives.
 It reports:
 
 - a `return` typed as the whole state union, like `return advance(state, event)` above. A returned constant is read from its value (`const initialState: State = { status: "idle" }`), and reported only when that value cannot be read either (`const restored: State = restore()`);
-- a `useReducer` start that is not a known state: a parameter, a call, data from storage;
+- a `useReducer` start that is not a known state: a parameter, a call, data from storage, unless the reducer lists where it starts with `/** @initial "queued" | "running" */`;
 - a reducer-like function passed around as a value (`reducers = [queueReducer]`), without `useReducer` or `@initial`;
 - a reducer also called or passed around elsewhere (outside tests), or exported from your package, without `@initial`: it may start in any state;
+- a `useReducer` start in a state the reducer's `@initial` does not list (`useReducer(light, { color: "yellow" })` with `@initial "red"`, or an `init` function that returns it): the tag says where it starts, so a start it leaves out is reported. `stateward guarantees` lists `@initial` as "not checked" at a start it cannot read, a reducer given to another function or another name, and a direct call of the reducer in a state the tag does not list;
 - a name in `@initial` that is not a state, and a `@final` or `@initial` that does not start with a quoted state (`@final the order is done` is read as a comment; write `@final "delivered" | "refunded"`).
 
 It leaves alone a start of `null` or `undefined` when the state type includes it (`useReducer(selectionReducer, null)`): it is a known start, which the other two rules read as any state coming first. It skips a setter, a reducer whose every `return` gives a property of the action typed as the whole state (`return action.payload` with `payload: Selection`), `null`, `undefined` or the state unchanged: its states are what the caller sends, so none of the reducers rules reads it; one `return` that builds a state (`return { status: "loading" }`) makes it a state machine again. It also leaves alone a function with a reducer's signature that is never used or only called as a helper, a `return` typed `any` (`reducers/state-unreachable` reports that one), and state in `useState` or class fields, which do not have to become reducers.
@@ -90,6 +94,6 @@ Options, set as `rules: { "reducers/reducer-not-readable": ["info", { … }] }`:
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
-| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of place stateward cannot read. Kinds: `whole-return`: a `return` typed as the whole state union, or a constant whose state cannot be read; `unknown-start`: a `useReducer` start that is not a known state; `may-start-anywhere`: a reducer used outside `useReducer`, or exported from your package, with no `@initial`; `unquoted-tag`: an `@initial` or `@final` tag that lists states without quotes; `unknown-initial`: a name in `@initial` that is not a state. |
+| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of place stateward cannot read. Kinds: `whole-return`: a `return` typed as the whole state union, or a constant whose state cannot be read; `unknown-start`: a `useReducer` start that is not a known state; `may-start-anywhere`: a reducer used outside `useReducer`, or exported from your package, with no `@initial`; `unquoted-tag`: an `@initial` or `@final` tag that lists states without quotes; `unknown-initial`: a name in `@initial` that is not a state; `start-not-listed`: a `useReducer` start in a state the reducer's `@initial` does not list. |
 
 Coverage rule (it points at code whose types do not say enough to check it): info under `recommended`, error under `strict`. Group: `reducers/graph`.

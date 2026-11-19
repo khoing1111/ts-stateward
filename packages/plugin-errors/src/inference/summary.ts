@@ -138,6 +138,11 @@ export type Doc = {
   readonly entries: readonly DocEntry[];
   /** A tag without a type (`@throws when …`): it says the function throws, not what. */
   readonly untyped: readonly Span[];
+  /**
+   * Where the declaration the tags are on starts, as the reference ledger names it (a property by
+   * its name): a finding about the tags is against that declaration.
+   */
+  readonly declared: number;
 };
 
 export type FunctionFact = {
@@ -348,7 +353,10 @@ function readDoc(value: Json | undefined): Doc | null | undefined {
     return { id: entry.id, name: entry.name, at };
   });
   const untyped = each(f.untyped, spanOf);
-  return entries === undefined || untyped === undefined ? undefined : { entries, untyped };
+  if (typeof f.declared !== "number") return undefined;
+  return entries === undefined || untyped === undefined
+    ? undefined
+    : { entries, untyped, declared: f.declared };
 }
 
 function readFunction(value: Json): FunctionFact | undefined {

@@ -1,0 +1,12 @@
+{
+  "rules": {
+    "ownership/state-written-outside-owner": [
+      "error",
+      {
+        "severities": {
+          "direct": "info"
+        }
+      }
+    ]
+  }
+}

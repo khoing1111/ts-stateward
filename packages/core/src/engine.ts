@@ -2,8 +2,10 @@ import path from "node:path";
 import type ts from "typescript";
 import { readRollout } from "./rollout.js";
 import { ruleKey, sha1, summaryOf, summaryText, summaryValue } from "./cache.js";
-import type { CachedSummary, FileEntry, ResultCache, RuleResult } from "./cache.js";
+import type { CachedSummary, FileEntry, ResultCache, RuleMark, RuleResult } from "./cache.js";
+import { fileLedger, ledgerKey, ledgerTraits, provesOf, tagRulesOf, withRule } from "./ledger.js";
 import { defaultOptions } from "./options.js";
+import { declarationId, fileStated } from "./stated.js";
 import { codeOf, loadRule } from "./lazy.js";
 import { IGNORE_EXPLAIN, IGNORE_RULE_ID, applyIgnores, fileDirectives } from "./ignores.js";
 import type { IgnoreDirective, IgnoreScope } from "./ignores.js";
@@ -33,6 +35,9 @@ import type {
   Fix,
   HiddenFindings,
   Json,
+  Ledger,
+  LedgerMark,
+  LedgerRef,
   Location,
   Options,
   OptionValue,
@@ -42,6 +47,8 @@ import type {
   RuleSelection,
   RuleSetting,
   Severity,
+  StatedDeclaration,
+  SymbolRef,
   TypeQueries,
   UnknownsSetting,
 } from "./types.js";
@@ -359,7 +366,11 @@ function ruleSets(config: Config, selection: RuleSelection): RuleSets {
             entry.name,
             entry.rule.meta,
           );
-          if (setting === "off") return [];
+          if (setting === "off") {
+            if (entry.rule.summarize === undefined) return [];
+            const quiet = entryOf(config, entry.plugin, entry.name, entry.rule, entry.severity, []);
+            return [{ ...quiet, key: `${quiet.key}:quiet`, quiet: true as const }];
+          }
           const prefix = `${entry.plugin}/`;
           const addons = addonsWith(config, applied)
             .filter((one) => one.startsWith(prefix))
@@ -479,18 +490,26 @@ function problemFinding(
     severity?: "info" | "warning";
     /** A finding against a stated guarantee (`ReportProblem.stated`): an error while the rule is on. */
     stated?: true;
+    /** A finding against a stated guarantee (`ReportProblem.against`). */
+    against?: true;
+    /** The declarations it is against (`ReportProblem.against` as a node or a symbol). */
+    guarantees?: readonly string[];
     about?: Location;
   },
 ): Finding | undefined {
+  const linked = problem.guarantees !== undefined && problem.guarantees.length > 0;
+  const against = problem.stated === true || problem.against === true || linked;
   const setting = kindSetting(entry, problem.findingKind);
-  if (setting === "off") return undefined;
+  // A kind set to off hides the finding, unless it is against a stated guarantee: no setting
+  // makes a guarantee read proven, so it stays, as an info.
+  if (setting === "off" && !against) return undefined;
   // The config's severity for this kind wins; then the rule's own choice for this finding; then
   // the rule's severity. A finding's own choice can only lower it, never raise it above the rule.
   return {
     kind: "problem",
     ruleId: entry.id,
     severity:
-      setting ??
+      (setting === "off" ? "info" : setting) ??
       (problem.stated === true
         ? "error"
         : problem.severity === undefined
@@ -503,7 +522,29 @@ function problemFinding(
     fixes: problem.fixes,
     ...(problem.findingKind === undefined ? {} : { findingKind: problem.findingKind }),
     ...(problem.about === undefined ? {} : { about: problem.about }),
+    ...(against ? { against: true as const } : {}),
+    ...(linked ? { guarantees: problem.guarantees } : {}),
   };
+}
+
+/**
+ * The ids of the declarations a rule says a finding is against: a node is the declaration itself,
+ * a symbol is looked up. None when it says `true` (the finding is linked from where it lies, in
+ * the proof), says nothing, or names a symbol with no declaration.
+ */
+function declarationsAgainst(
+  against: true | ts.Node | SymbolRef | undefined,
+  types: TypeQueries,
+): readonly string[] {
+  if (against === undefined || against === true) return [];
+  const node = "kind" in against ? against : types.declarationOf(against)?.node;
+  return node === undefined ? [] : [declarationId(nodeLocation(node))];
+}
+
+/** The ids of the declarations a project rule names by where they are listed (`ProjectContext`). */
+function declarationsAt(against: true | readonly Location[] | undefined): readonly string[] {
+  if (against === undefined || against === true) return [];
+  return [...new Set(against.map(declarationId))];
 }
 
 function fileContext(
@@ -511,10 +552,16 @@ function fileContext(
   sourceFile: ts.SourceFile,
   types: TypeQueries,
   findings: Finding[],
+  ledger: readonly LedgerRef[] = [],
+  marks: RuleMark[] = [],
 ): FileContext {
   const { id, addons, options, facts, shippedFacts } = entry;
   return {
     file: sourceFile.fileName,
+    ledger,
+    read(ref, outcome) {
+      marks.push({ ref: ref.id, trait: ref.trait, outcome });
+    },
     sourceFile,
     types,
     addons,
@@ -534,11 +581,14 @@ function fileContext(
         ...(problem.findingKind === undefined ? {} : { findingKind: problem.findingKind }),
         ...(problem.severity === undefined ? {} : { severity: problem.severity }),
         ...(problem.stated === true ? { stated: true as const } : {}),
+        ...(problem.against === true ? { against: true as const } : {}),
+        guarantees: declarationsAgainst(problem.against, types),
         ...(problem.about === undefined ? {} : { about: nodeLocation(problem.about) }),
       });
       if (finding !== undefined) findings.push(finding);
     },
-    unknown({ message, hint, node }) {
+    unknown({ message, hint, node, against }) {
+      const guarantees = declarationsAgainst(against, types);
       findings.push({
         kind: "unknown",
         ruleId: id,
@@ -546,15 +596,23 @@ function fileContext(
         hint,
         location: nodeLocation(node),
         ...listedFlag(entry),
+        ...(guarantees.length > 0 ? { guarantees } : {}),
       });
     },
   };
 }
 
-function projectContext(entry: ActiveRule, findings: Finding[]): ProjectContext {
+function projectContext(
+  entry: ActiveRule,
+  findings: Finding[],
+  marks: RuleMark[] = [],
+): ProjectContext {
   const { id, options } = entry;
   return {
     options,
+    read(ref, outcome) {
+      marks.push({ ref: ref.id, trait: ref.trait, outcome });
+    },
     report(problem) {
       const finding = problemFinding(entry, {
         message: problem.message,
@@ -564,11 +622,23 @@ function projectContext(entry: ActiveRule, findings: Finding[]): ProjectContext 
         fixes: problem.fixes ?? [],
         ...(problem.findingKind === undefined ? {} : { findingKind: problem.findingKind }),
         ...(problem.severity === undefined ? {} : { severity: problem.severity }),
+        ...(problem.stated === true ? { stated: true as const } : {}),
+        ...(problem.against === true ? { against: true as const } : {}),
+        guarantees: declarationsAt(problem.against),
       });
       if (finding !== undefined) findings.push(finding);
     },
-    unknown({ message, hint, location }) {
-      findings.push({ kind: "unknown", ruleId: id, message, hint, location, ...listedFlag(entry) });
+    unknown({ message, hint, location, against }) {
+      const guarantees = declarationsAt(against);
+      findings.push({
+        kind: "unknown",
+        ruleId: id,
+        message,
+        hint,
+        location,
+        ...listedFlag(entry),
+        ...(guarantees.length > 0 ? { guarantees } : {}),
+      });
     },
   };
 }
@@ -593,7 +663,38 @@ function summaryMap(sorted: readonly (readonly [string, CachedSummary])[]): Map<
   return new Map(sorted.map(([file, summary]) => [file, summaryValue(summary)] as const));
 }
 
-type RuleEntry = ActiveRule & { key: string };
+/**
+ * A rule with its cache key. `quiet`: the config turns the rule off for this file, but the rule
+ * keeps a summary of it (a guarantee's places), so a guarantee is never "unused" only because the
+ * rule is off there: it runs, and its findings are dropped.
+ */
+type RuleEntry = ActiveRule & { key: string; quiet?: true };
+
+/** A rule's marks in a fixed order (by reference, trait, then outcome), so the cache is stable. */
+function sortedMarks(marks: readonly RuleMark[]): RuleMark[] {
+  return [...marks].sort(
+    (a, b) =>
+      compareText(a.ref, b.ref) ||
+      compareText(a.trait, b.trait) ||
+      compareText(JSON.stringify(a.outcome), JSON.stringify(b.outcome)),
+  );
+}
+
+/** The run's marks in a fixed order: by rule, then as `sortedMarks`. */
+function sortedLedger(marks: readonly LedgerMark[]): LedgerMark[] {
+  return [...marks].sort(
+    (a, b) =>
+      compareText(a.ruleId, b.ruleId) ||
+      compareText(a.ref, b.ref) ||
+      compareText(a.trait, b.trait) ||
+      compareText(JSON.stringify(a.outcome), JSON.stringify(b.outcome)),
+  );
+}
+
+/** Whether a finding names the guarantees it is about (`Finding.guarantees`). */
+function isLinked(finding: Finding): boolean {
+  return finding.kind !== "failure" && (finding.guarantees?.length ?? 0) > 0;
+}
 
 /**
  * A project rule's findings as the files they are in see the rule: dropped where an override turns
@@ -604,16 +705,20 @@ function atTheirFiles(
   sets: RuleSets,
   entry: RuleEntry,
   found: readonly Finding[],
+  silenced: Finding[],
 ): readonly Finding[] {
   if (!sets.perFile) return found;
   return found.flatMap((finding): Finding[] => {
     if (finding.kind === "failure") return [finding];
     const setting = sets.settingAt(entry.id, finding.location.file);
-    if (setting === "off") return [];
+    if (setting === "off") {
+      if (isLinked(finding)) silenced.push(finding);
+      return [];
+    }
     if (finding.kind === "unknown") return [finding];
     // A severity the config gives this kind of finding holds in every file the rule is on in.
     const own = kindSetting(entry, finding.findingKind);
-    if (own === "off") return [];
+    if (own === "off") return finding.against === true ? [{ ...finding, severity: "info" }] : [];
     return [{ ...finding, severity: own ?? setting }];
   });
 }
@@ -638,16 +743,19 @@ function runOnFile(
   sourceFile: ts.SourceFile,
   types: TypeQueries,
   same: Map<string, CachedSummary>,
+  ledger: readonly LedgerRef[],
 ): { result: RuleResult; failed: boolean } {
   const findings: Finding[] = [];
-  const ctx = fileContext(entry, sourceFile, types, findings);
+  const marks: RuleMark[] = [];
+  const ctx = fileContext(entry, sourceFile, types, findings, ledger, marks);
   try {
     const value = runFileSide(entry.rule, ctx);
-    if (value === undefined) return { result: { findings }, failed: false };
+    const marked = marks.length === 0 ? {} : { marks: sortedMarks(marks) };
+    if (value === undefined) return { result: { findings, ...marked }, failed: false };
     const made = summaryOf(value);
     const summary = same.get(made.hash) ?? made;
     same.set(summary.hash, summary);
-    return { result: { findings, summary }, failed: false };
+    return { result: { findings, summary, ...marked }, failed: false };
   } catch (error) {
     const startOfFile: Location = { file: sourceFile.fileName, start: 0, end: 0 };
     findings.push(failureFinding(entry, startOfFile, error));
@@ -676,6 +784,12 @@ export type FilePhase = {
   readonly notes: CheckNotes | undefined;
   /** The own files of the projects without `strictNullChecks`. */
   readonly looseNulls: ReadonlySet<string>;
+  /** The linked findings of a rule the config turned off where they lie (`CheckResult.silenced`). */
+  readonly silenced: readonly Finding[];
+  /** The declarations that state a guarantee in their written type, for every own file. */
+  readonly stated: readonly StatedDeclaration[];
+  /** The reference ledger of every own file, and the marks the rules' file sides made on it. */
+  readonly ledger: Ledger;
 };
 
 /**
@@ -773,6 +887,13 @@ function* filePhaseSteps(
     : undefined;
   const testsByPattern = new Map<string, number>();
   const findings: Finding[] = [];
+  /** The linked findings of a rule the config turned off where they lie: not shown, still not proven. */
+  const silenced: Finding[] = [];
+  const stated: StatedDeclaration[] = [];
+  const proves = provesOf(rules.map((entry) => entry.rule.meta.proves));
+  const ledgerAt = ledgerKey(proves);
+  const ledgerRefs: LedgerRef[] = [];
+  const ledgerMarks: LedgerMark[] = [];
   const summaries = new Map<string, Map<string, CachedSummary>>();
   const directives = new Map<string, readonly IgnoreDirective[]>();
   let fileCount = 0;
@@ -839,6 +960,33 @@ function* filePhaseSteps(
       }
       // One file's queries for all its rules (`ProjectUnit.typesFor`), made when one runs.
       let fileTypes: TypeQueries | undefined;
+      // The declarations that state a guarantee, for the guarantees no plugin lists.
+      const scanned = fileStated(results, () => {
+        const sourceFile =
+          timing === undefined
+            ? boundSourceFile(unit, file)
+            : timed(timing, "program", () => boundSourceFile(unit, file));
+        if (sourceFile === undefined) return undefined;
+        fileTypes ??= unit.typesFor(file);
+        return { types: fileTypes, sourceFile };
+      });
+      if (scanned.stored && cache !== undefined) cache.changed = true;
+      stated.push(...scanned.stated);
+      const readLedger = () =>
+        fileLedger(
+          results,
+          ledgerAt,
+          () => {
+            const sourceFile = boundSourceFile(unit, file);
+            if (sourceFile === undefined) return undefined;
+            fileTypes ??= unit.typesFor(file);
+            return { types: fileTypes, sourceFile };
+          },
+          proves,
+        );
+      const ledger = timing === undefined ? readLedger() : timed(timing, "ledger", readLedger);
+      if (ledger.stored && cache !== undefined) cache.changed = true;
+      ledgerRefs.push(...ledger.refs);
       for (const entry of sets.forFile(file)) {
         let result = reusable?.get(entry.key);
         if (result === undefined) {
@@ -851,9 +999,15 @@ function* filePhaseSteps(
           const types = fileTypes;
           const ran =
             timing === undefined
-              ? runOnFile(entry, sourceFile, types, sameSummaries)
+              ? runOnFile(entry, sourceFile, types, sameSummaries, ledger.refs)
               : timing.fileSide(entry.id, entry.rule.kind, () =>
-                  runOnFile(entry, sourceFile, timing.timedTypes(types), sameSummaries),
+                  runOnFile(
+                    entry,
+                    sourceFile,
+                    timing.timedTypes(types),
+                    sameSummaries,
+                    ledger.refs,
+                  ),
                 );
           result = ran.result;
           if (cache !== undefined) cache.changed = true;
@@ -865,7 +1019,10 @@ function* filePhaseSteps(
         } else {
           timing?.reused(entry.id, entry.rule.kind);
         }
-        findings.push(...result.findings);
+        if (entry.quiet === true) silenced.push(...result.findings.filter(isLinked));
+        else findings.push(...result.findings);
+        // A rule off for this file still reads its references: the proof says "off" there.
+        if (result.marks !== undefined) ledgerMarks.push(...withRule(entry.id, result.marks));
         if (result.summary !== undefined) summaries.get(entry.id)?.set(file, result.summary);
       }
       if (fingerprint !== undefined) {
@@ -901,7 +1058,23 @@ function* filePhaseSteps(
         : undefined,
     notes: notesOf(units, rules),
     looseNulls: looseNullFiles(units),
+    silenced,
+    stated,
+    ledger: {
+      traits: ledgerTraits(proves),
+      refs: ledgerRefs,
+      marks: ledgerMarks,
+      ...withTagRules(
+        tagRulesOf(rules.map((entry) => ({ id: entry.id, proves: entry.rule.meta.proves }))),
+      ),
+    },
   };
+}
+
+function withTagRules(tagRules: Readonly<Record<string, string>> | undefined): {
+  tagRules?: Readonly<Record<string, string>>;
+} {
+  return tagRules === undefined ? {} : { tagRules };
 }
 
 /** The rules' project sides: each project rule's check over the summaries, and the result. */
@@ -932,6 +1105,8 @@ export function* projectPhaseSteps(
 ): Generator<CheckProgress, CheckResult, undefined> {
   const { sets, findings, summaries, directives, fileCount, testsByPattern, tsconfigLocation } =
     phase;
+  const silenced = [...phase.silenced];
+  const marks = [...phase.ledger.marks];
   const rules = sets.anywhere;
   const total = rules.filter(
     (entry) => entry.rule.kind === "project" && summaries.has(entry.id),
@@ -961,30 +1136,39 @@ export function* projectPhaseSteps(
     const inputs = sha1(sorted.map(([file, summary]) => `${file}\u0000${summary.hash}`).join("\n"));
     const before = cache?.projects.get(entry.key);
     if (before?.inputs === inputs) {
-      findings.push(...atTheirFiles(sets, entry, before.findings));
+      findings.push(...atTheirFiles(sets, entry, before.findings, silenced));
+      marks.push(...withRule(entry.id, before.marks ?? []));
       // Built only if a hover asks: a CLI run whose summaries are unchanged never parses them.
       keepSummaries?.set(entry.id, () => (before.summaries ??= summaryMap(sorted)));
       continue;
     }
     const own: Finding[] = [];
+    const read: RuleMark[] = [];
     const rule = entry.rule;
     const runCheck = (): ReadonlyMap<string, Json> => {
       const asJson = summaryMap(sorted);
       keepSummaries?.set(entry.id, () => asJson);
-      rule.check(asJson, projectContext(entry, own));
+      rule.check(asJson, projectContext(entry, own, read));
       return asJson;
     };
     try {
       const asJson = timing === undefined ? runCheck() : timing.projectSide(entry.id, runCheck);
+      const settledMarks = sortedMarks(read);
+      marks.push(...withRule(entry.id, settledMarks));
       if (cache !== undefined) {
-        cache.projects.set(entry.key, { inputs, findings: own, summaries: asJson });
+        cache.projects.set(entry.key, {
+          inputs,
+          findings: own,
+          ...(settledMarks.length === 0 ? {} : { marks: settledMarks }),
+          summaries: asJson,
+        });
         cache.changed = true;
       }
     } catch (error) {
       own.push(failureFinding(entry, tsconfigLocation, error));
       cache?.projects.delete(entry.key);
     }
-    findings.push(...atTheirFiles(sets, entry, own));
+    findings.push(...atTheirFiles(sets, entry, own, silenced));
   }
 
   const covered = applyIgnores(
@@ -1000,6 +1184,13 @@ export function* projectPhaseSteps(
     findings: shown,
     hidden,
     ignored: covered.ignored,
+    ...(silenced.length === 0 ? {} : { silenced }),
+    ledger: {
+      traits: phase.ledger.traits,
+      refs: phase.ledger.refs,
+      marks: sortedLedger(marks),
+      ...withTagRules(phase.ledger.tagRules),
+    },
     ...(phase.notes === undefined ? {} : { notes: phase.notes }),
     stats: {
       files: fileCount,
@@ -1106,6 +1297,12 @@ function limitPerRuleAndFile(sorted: readonly Finding[]): {
     .map((finding, index) => ({ finding, index }))
     .sort((a, b) => capRank(a.finding) - capRank(b.finding) || a.index - b.index);
   for (const { finding } of byRank) {
+    // A finding that names a guarantee it is against is never hidden: it is what keeps the
+    // guarantee from reading proven, and the list must show why.
+    if (isLinked(finding)) {
+      kept.add(finding);
+      continue;
+    }
     const key = JSON.stringify([finding.location.file, finding.ruleId]);
     const entry = seen.get(key) ?? {
       file: finding.location.file,
@@ -1143,7 +1340,7 @@ function secondPass(units: readonly ProjectUnit[], sets: RuleSets, timing: Timin
       const types = timing.timedTypes(unit.typesFor(file));
       for (const entry of sets.forFile(file)) {
         timing.warmSide(entry.id, entry.rule.kind, () => {
-          runOnFile(entry, sourceFile, types, same);
+          runOnFile(entry, sourceFile, types, same, []);
         });
       }
     }
@@ -1203,7 +1400,11 @@ function boundSourceFile(unit: ProjectUnit, file: string): ts.SourceFile | undef
 }
 
 /** `run`'s result, its wall time added to a phase of `timing`. */
-function timed<T>(timing: TimingRecorder, phase: "program" | "fingerprint", run: () => T): T {
+function timed<T>(
+  timing: TimingRecorder,
+  phase: "program" | "fingerprint" | "ledger",
+  run: () => T,
+): T {
   const at = performance.now();
   try {
     return run();
@@ -1228,6 +1429,16 @@ function runFileSide(rule: Rule, ctx: FileContext): Json | undefined {
 }
 
 /** Ids of the rules that `selection` runs somewhere (not off everywhere; the rollout applied for `configured`). */
+/**
+ * Whether the config turns a rule off for a file (the rule off, or an `overrides` entry that
+ * does): `stateward guarantees` reads it for the places a guarantee covers, where the rule never
+ * looked. Built once; every rule counts, whatever the rollout.
+ */
+export function ruleOffAtFn(config: Config): (ruleId: string, file: string) => boolean {
+  const sets = ruleSets(config, { kind: "all" });
+  return (ruleId, file) => sets.settingAt(ruleId, file) === "off";
+}
+
 export function activeRuleIds(config: Config, selection: RuleSelection): ReadonlySet<string> {
   return new Set(ruleSets(config, selection).anywhere.map((entry) => entry.id));
 }
@@ -1339,7 +1550,7 @@ export function runFileRules(
       const startOfFile: Location = { file, start: 0, end: 0 };
       let types: TypeQueries | undefined;
       for (const entry of sets.forFile(file)) {
-        if (entry.rule.kind !== "file") continue;
+        if (entry.rule.kind !== "file" || entry.quiet === true) continue;
         const result = results.get(entry.key);
         if (result !== undefined) {
           findings.push(...result.findings);

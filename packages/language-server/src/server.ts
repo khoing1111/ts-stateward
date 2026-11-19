@@ -473,7 +473,12 @@ export function startServer(
       const pass = layBaseline(state.config, raw, active, open);
       // Before the baseline: an accepted error still leaves its guarantee unproven.
       engine.proofs = proofView(
-        proveGuarantees(state.checker.guarantees(), raw.findings, active),
+        proveGuarantees(state.checker.guarantees(), raw.findings, active, {
+          // An ignore comment hides a finding from the editor, not from the proof.
+          ignored: raw.ignored ?? [],
+          ...(raw.ledger === undefined ? {} : { ledger: raw.ledger }),
+          ruleOffAt: (ruleId, file) => state.checker.ruleOffAt(ruleId, file),
+        }),
         (file) => state.checker.analysedText(file),
         engine.cwd,
       );

@@ -44,6 +44,12 @@ export type Verdict =
   | { readonly kind: "pass" }
   /** The signal comes from the effect's controller, which the cleanup never aborts. */
   | { readonly kind: "abort"; readonly controller: ts.VariableDeclaration; readonly name: string }
+  /** The cleanup aborts the effect's controller only on some paths (`if (keep) c.abort()`). */
+  | {
+      readonly kind: "conditional";
+      readonly controller: ts.VariableDeclaration;
+      readonly name: string;
+    }
   /** The signal comes from something the effect does not create, or stateward cannot follow it. */
   | { readonly kind: "foreign" }
   /** The effect returns a cleanup stateward cannot read. */
@@ -308,14 +314,18 @@ function sourceOf(
   return { kind: "foreign" };
 }
 
-/** Whether the effect's cleanup calls `controller.abort()`. */
+/**
+ * Whether the effect's cleanup calls `controller.abort()` on every path (`"always"`), only on some
+ * (`"some"`: under an `if`, a `?:`, `&&`, `||`, `??`, a loop, a `switch` case or a `catch`), or
+ * not at all.
+ */
 function abortsInCleanup(
   types: TypeQueries,
   effect: Effect,
   cleanups: Cleanups,
   controller: ts.VariableDeclaration,
-): boolean {
-  return cleanupCalls(types, effect, cleanups).some((call) => {
+): "always" | "some" | "none" {
+  const aborts = cleanupCalls(types, effect, cleanups).filter((call) => {
     const callee = unwrapped(call.expression);
     return (
       ts.isPropertyAccessExpression(callee) &&
@@ -323,6 +333,38 @@ function abortsInCleanup(
       controllerOf(types, effect, unwrapped(callee.expression)) === controller
     );
   });
+  if (aborts.length === 0) return "none";
+  return aborts.some((call) => !onSomePaths(call)) ? "always" : "some";
+}
+
+/** Whether a call runs only on some paths of the function it is written in. */
+function onSomePaths(call: ts.Node): boolean {
+  for (let child = call; !isFunctionNode(child.parent); child = child.parent) {
+    const parent = child.parent;
+    if (ts.isSourceFile(parent)) return false;
+    if (ts.isIfStatement(parent) && parent.expression !== child) return true;
+    if (ts.isConditionalExpression(parent) && parent.condition !== child) return true;
+    if (
+      ts.isBinaryExpression(parent) &&
+      parent.right === child &&
+      (parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+        parent.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+        parent.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)
+    ) {
+      return true;
+    }
+    if (
+      ts.isIterationStatement(parent, false) ||
+      ts.isCaseClause(parent) ||
+      ts.isDefaultClause(parent) ||
+      ts.isCatchClause(parent)
+    ) {
+      return true;
+    }
+    // `c?.abort()`: the call runs only when `c` is there.
+    if (ts.isCallExpression(child) && child.questionDotToken !== undefined) return true;
+  }
+  return false;
 }
 
 /** The node that names a function declared in the effect, by which calls to it are found. */
@@ -354,10 +396,11 @@ function callsTo(
 
 const ORDER: Readonly<Record<Verdict["kind"], number>> = {
   proven: 0,
-  abort: 1,
-  pass: 2,
-  foreign: 3,
-  unreadable: 4,
+  conditional: 1,
+  abort: 2,
+  pass: 3,
+  foreign: 4,
+  unreadable: 5,
 };
 
 function worst(verdicts: readonly Verdict[]): Verdict {
@@ -379,9 +422,15 @@ function proveSignal(
   switch (source.kind) {
     case "controller":
       if (cleanups.unreadable) return { kind: "unreadable" };
-      return abortsInCleanup(types, effect, cleanups, source.declaration)
-        ? { kind: "proven" }
-        : { kind: "abort", controller: source.declaration, name: source.name };
+      {
+        const aborts = abortsInCleanup(types, effect, cleanups, source.declaration);
+        if (aborts === "always") return { kind: "proven" };
+        return {
+          kind: aborts === "some" ? "conditional" : "abort",
+          controller: source.declaration,
+          name: source.name,
+        };
+      }
     case "parameter": {
       // Every call of the function in the effect hands it the effect's signal.
       const calls = callsTo(types, effect, source.fn);
@@ -462,10 +511,51 @@ function flagsOf(types: TypeQueries, effect: Effect, cleanups: Cleanups): readon
         visit(fn);
         return found;
       });
-      if (flipped) flags.push({ declaration, start });
+      if (flipped && !writtenOutside(types, effect, cleanups, declaration)) {
+        flags.push({ declaration, start });
+      }
     }
   }
   return flags;
+}
+
+/**
+ * Whether the effect writes the flag anywhere but its declaration and its cleanups: a write such as
+ * `active = true` after the `await` sets it back before its test, so the test no longer tells a
+ * late answer.
+ */
+function writtenOutside(
+  types: TypeQueries,
+  effect: Effect,
+  cleanups: Cleanups,
+  declaration: ts.VariableDeclaration,
+): boolean {
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found || cleanups.functions.some((fn) => fn === node)) return;
+    const target =
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+        ? node.left
+        : (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+            (node.operator === ts.SyntaxKind.PlusPlusToken ||
+              node.operator === ts.SyntaxKind.MinusMinusToken)
+          ? node.operand
+          : undefined;
+    const inner = target === undefined ? undefined : unwrapped(target);
+    if (
+      inner !== undefined &&
+      ts.isIdentifier(inner) &&
+      declarationNode(types, inner) === declaration
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(effect.callback.body);
+  return found;
 }
 
 /** The value of the flag under which a test is true (`!ignore`: false), or undefined. */
@@ -527,6 +617,24 @@ function exits(statement: ts.Statement): boolean {
   return last !== undefined && ts.isReturnStatement(last);
 }
 
+/** Whether `node` has an `await` (or `for await`) that starts before `end`, not in a function inside it. */
+function awaitsIn(node: ts.Node, end: number): boolean {
+  let found = false;
+  const visit = (child: ts.Node): void => {
+    if (found || child.getStart() >= end || isFunctionNode(child)) return;
+    if (
+      ts.isAwaitExpression(child) ||
+      (ts.isForOfStatement(child) && child.awaitModifier !== undefined)
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(child, visit);
+  };
+  visit(node);
+  return found;
+}
+
 /**
  * Whether a write runs only while the flag is fresh: inside `if (!ignore)`, after `!ignore &&`,
  * or after an `if (ignore) return;` in a block around it, all in the write's own function.
@@ -554,10 +662,14 @@ function guardedByFlag(types: TypeQueries, write: ts.Node, flag: Flag, stop: ts.
       return true;
     }
     if (ts.isBlock(current) || ts.isSourceFile(current)) {
-      const before = current.statements.slice(
+      const all = current.statements.slice(
         0,
         current.statements.findIndex((s) => s === child),
       );
+      // A check before an `await` runs when the request starts, not when it answers: only the
+      // checks after the last `await` before the write count.
+      const lastAwait = all.findLastIndex((statement) => awaitsIn(statement, statement.end));
+      const before = awaitsIn(child, write.getStart()) ? [] : all.slice(lastAwait + 1);
       if (
         before.some(
           (statement) =>
@@ -710,6 +822,143 @@ function abortEdit(sourceFile: ts.SourceFile, body: ts.Block, name: string): Tex
   );
 }
 
+/** The call as the quick fix writes it, with the controller's signal passed: `fetchUser(userId, controller.signal)`. */
+export function withSignalText(
+  sourceFile: ts.SourceFile,
+  call: ts.CallExpression,
+  at: SignalParameter,
+  name: string,
+): string | undefined {
+  const start = call.getStart(sourceFile);
+  const { text } = sourceFile;
+  const pass = passEdit(sourceFile, call, at, name);
+  if (pass === undefined) {
+    // A signal from elsewhere in a plain argument (`ref.current.signal`) is replaced by the controller's.
+    const argument = at.property === undefined ? call.arguments[at.index] : undefined;
+    return argument === undefined
+      ? undefined
+      : (
+          text.slice(start, argument.getStart(sourceFile)) +
+          `${name}.signal` +
+          text.slice(argument.end, call.end)
+        ).replace(/\s+/g, " ");
+  }
+  const written =
+    text.slice(start, pass.location.start) + pass.newText + text.slice(pass.location.end, call.end);
+  return written.replace(/\s+/g, " ");
+}
+
+/**
+ * What handles the rejection of a request: a `.catch(…)` (or the second argument of `.then`) after
+ * the call, or the `catch` of a `try` around its `await`. `block` is a handler with a parameter
+ * and a body whose first statement the quick fix can put a line before; `voidReturn` says whether
+ * `return;` is a statement that function can end with.
+ */
+export type RejectionHandler =
+  | {
+      readonly kind: "block";
+      readonly param: string;
+      readonly at: number;
+      readonly voidReturn: boolean;
+    }
+  | { readonly kind: "other" };
+
+function returnsValue(fn: ts.FunctionLikeDeclaration): boolean {
+  if (fn.type !== undefined && !/^(?:Promise<)?(?:void|undefined)>?$/.test(fn.type.getText())) {
+    return true;
+  }
+  if (fn.body === undefined || !ts.isBlock(fn.body)) return true;
+  const visit = (node: ts.Node): boolean =>
+    (ts.isReturnStatement(node) && node.expression !== undefined) ||
+    (!isFunctionNode(node) && ts.forEachChild(node, visit) === true);
+  return ts.forEachChild(fn.body, visit) === true;
+}
+
+/** The function that contains `node`, when it is one that has a body. */
+function enclosingFunction(node: ts.Node): ts.FunctionLikeDeclaration | undefined {
+  for (let current = node.parent; !ts.isSourceFile(current); current = current.parent) {
+    if (
+      ts.isArrowFunction(current) ||
+      ts.isFunctionExpression(current) ||
+      ts.isFunctionDeclaration(current) ||
+      ts.isMethodDeclaration(current)
+    ) {
+      return current;
+    }
+  }
+  return undefined;
+}
+
+function handlerOf(sourceFile: ts.SourceFile, handler: ts.Expression): RejectionHandler {
+  const fn = unwrapped(handler);
+  if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn)) return { kind: "other" };
+  const [first] = fn.parameters;
+  const statement = ts.isBlock(fn.body) ? fn.body.statements[0] : undefined;
+  if (first === undefined || !ts.isIdentifier(first.name) || statement === undefined) {
+    return { kind: "other" };
+  }
+  return {
+    kind: "block",
+    param: first.name.text,
+    at: statement.getStart(sourceFile),
+    voidReturn: !returnsValue(fn),
+  };
+}
+
+export function rejectionHandlerOf(
+  sourceFile: ts.SourceFile,
+  call: ts.CallExpression,
+): RejectionHandler | undefined {
+  let current: ts.Node = call;
+  let awaited = false;
+  for (;;) {
+    const parent: ts.Node = current.parent;
+    if (ts.isParenthesizedExpression(parent)) {
+      current = parent;
+    } else if (ts.isAwaitExpression(parent)) {
+      awaited = true;
+      current = parent;
+    } else if (
+      ts.isPropertyAccessExpression(parent) &&
+      parent.expression === current &&
+      ts.isCallExpression(parent.parent) &&
+      parent.parent.expression === parent
+    ) {
+      const [first, second] = parent.parent.arguments;
+      const handler =
+        parent.name.text === "catch" ? first : parent.name.text === "then" ? second : undefined;
+      if (handler !== undefined) return handlerOf(sourceFile, handler);
+      current = parent.parent;
+    } else break;
+  }
+  if (!awaited) return undefined;
+  for (let node: ts.Node = current; !ts.isSourceFile(node); node = node.parent) {
+    if (isFunctionNode(node)) return undefined;
+    const parent: ts.Node = node.parent;
+    if (ts.isTryStatement(parent) && parent.tryBlock === node && parent.catchClause !== undefined) {
+      const clause = parent.catchClause;
+      const name = clause.variableDeclaration?.name;
+      const statement = clause.block.statements[0];
+      const fn = enclosingFunction(parent);
+      if (name === undefined || !ts.isIdentifier(name) || statement === undefined) {
+        return { kind: "other" };
+      }
+      return {
+        kind: "block",
+        param: name.text,
+        at: statement.getStart(sourceFile),
+        voidReturn: fn !== undefined && !returnsValue(fn),
+      };
+    }
+  }
+  return undefined;
+}
+
+/** The line that ignores the abort the cleanup now causes, written for a catch parameter. */
+export function ignoreAbortLine(param: string): string {
+  return `if (${param} instanceof DOMException && ${param}.name === "AbortError") return;`;
+}
+
 /**
  * The quick fix for an effect: one controller for the effect, its signal passed to every loader
  * that is given none, and its `abort()` in the cleanup. Undefined when it cannot be written
@@ -725,7 +974,15 @@ export function abortFix(
 ): Fix | undefined {
   const body = effect.callback.body;
   if (!ts.isBlock(body) || cleanups.unreadable) return undefined;
-  if (missing.some(({ verdict }) => verdict.kind === "foreign" || verdict.kind === "unreadable")) {
+  // An abort on some paths is the developer's to move: no edit can tell which path meant it.
+  if (
+    missing.some(
+      ({ verdict }) =>
+        verdict.kind === "foreign" ||
+        verdict.kind === "unreadable" ||
+        verdict.kind === "conditional",
+    )
+  ) {
     return undefined;
   }
   const first = body.statements[0];
@@ -755,10 +1012,28 @@ export function abortFix(
     if (pass === undefined) return undefined;
     edits.push(pass);
   }
-  if (existing === undefined || !abortsInCleanup(types, effect, cleanups, existing)) {
+  if (existing === undefined || abortsInCleanup(types, effect, cleanups, existing) === "none") {
     const abort = abortEdit(sourceFile, body, name);
     if (abort === undefined) return undefined;
     edits.push(abort);
   }
-  return { title, edits };
+  // The abort now rejects the request, so a `catch` that shows an error would run on every change
+  // and on unmount: it ignores the abort first (a form without this is kept when that does not compile).
+  const catches: TextEdit[] = [];
+  for (const { loader, verdict } of missing) {
+    if (verdict.kind !== "pass" && verdict.kind !== "abort") continue;
+    const handler = rejectionHandlerOf(sourceFile, loader.call);
+    if (handler?.kind !== "block" || !handler.voidReturn) continue;
+    catches.push(
+      edit(
+        sourceFile,
+        handler.at,
+        handler.at,
+        `${ignoreAbortLine(handler.param)}\n${indentAt(sourceFile, handler.at)}`,
+      ),
+    );
+  }
+  return catches.length === 0
+    ? { title, edits }
+    : { title, edits: [...edits, ...catches], alternatives: [{ title, edits }] };
 }

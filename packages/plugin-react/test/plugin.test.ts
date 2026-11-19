@@ -16,7 +16,8 @@ describe("react", () => {
       "closure-reads-stale-state",
       "index-key-on-reordered-list",
     ]);
-    expect(plugin.editor).toBeUndefined();
+    // It lists "latest wins" for the loaders of the project that effects call.
+    expect(Object.keys(plugin.editor ?? {})).toEqual(["guarantees"]);
   });
 
   it("gives each rule its kind, tier, group and severity; effect-response-race is a core proof its add-on widens, and index-key a heuristic core rule", () => {

@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createChecker, parseConfig } from "@stateward/core";
 import { proveGuarantees, describeStatus, type Finding } from "@stateward/core/internal";
@@ -40,8 +42,13 @@ function fix(subject: string, labels: readonly string[]): string {
   ].join("\n");
 }
 
+/** The headline of a `default` that takes cases no `case` names: it handles them, so it says so. */
+function takes(subject: string, labels: readonly string[]): string {
+  return `the \`default\` of the \`switch\` on \`${subject}\` takes ${listed(labels)}, which no \`case\` names`;
+}
+
 function expected(file: string, subject: string, labels: readonly string[]) {
-  return says(file, headline(subject, labels), fix(subject, labels));
+  return says(file, takes(subject, labels), fix(subject, labels));
 }
 
 describe(`${ID}: a default that handles cases it does not allow`, () => {
@@ -71,9 +78,9 @@ describe(`${ID}: a default that handles cases it does not allow`, () => {
 
   it("lists every case up to maxHidden (5), and asks for a case for each above 3", () => {
     expect(shown(inDir("flagged", "long.ts")).map((one) => one.message)).toEqual([
-      headline("word", ['"bravo"', '"charlie"', '"delta"', '"echo"', '"foxtrot"']),
-      headline("word", ['"delta"', '"echo"', '"foxtrot"']),
-      headline("word", ['"charlie"', '"delta"', '"echo"', '"foxtrot"']),
+      takes("word", ['"bravo"', '"charlie"', '"delta"', '"echo"', '"foxtrot"']),
+      takes("word", ['"delta"', '"echo"', '"foxtrot"']),
+      takes("word", ['"charlie"', '"delta"', '"echo"', '"foxtrot"']),
     ]);
     expect(shown(inDir("flagged", "long.ts"))[0]?.hint).toBe(
       [
@@ -92,7 +99,7 @@ describe(`${ID}: a default that handles cases it does not allow`, () => {
     expect(long).toEqual(
       says(
         "long-names.ts",
-        headline(subject, ['"initialisingTheConnection"', '"uploadingTheFirstChunk"']),
+        takes(subject, ['"initialisingTheConnection"', '"uploadingTheFirstChunk"']),
         [
           "one of",
           '- add `case "initialisingTheConnection":` and `case "uploadingTheFirstChunk":` with their own code',
@@ -128,7 +135,7 @@ describe(`${ID}: a default that handles cases it does not allow`, () => {
     expect(found).toEqual([
       says(
         "computed.ts",
-        headline("getAlertMode()", ['"banner"', '"sound"']),
+        takes("getAlertMode()", ['"banner"', '"sound"']),
         [
           "one of",
           '- add `case "banner":` and `case "sound":` with their own code',
@@ -232,7 +239,7 @@ describe(`${ID}: open unions (OpenUnion<T>)`, () => {
     expect(shown(found())).toEqual([
       says(
         "orders.ts",
-        "`switch` on `order.status` does not handle a value outside `OrderStatus`, which is open",
+        "`switch` on `order.status` has no `default` for a value outside `OrderStatus`, which is open",
         "add `default:` that handles an unknown status",
       ),
       expected("orders.ts", "status", ['"paid"', '"shipped"']),
@@ -431,7 +438,64 @@ describe(`${ID}: plain values on an enum`, () => {
     ).toEqual([
       ["missing", headline("type", ["StakeholderTypes.ORGANIZATION"])],
       ["missing", headline("type", ["StakeholderTypes.PERSON"])],
-      ["hidden", headline("type", ["StakeholderTypes.PERSON"])],
+      ["hidden", takes("type", ["StakeholderTypes.PERSON"])],
     ]);
+  });
+});
+
+describe(`unions/${RULE}: an enum the code never writes a member of`, () => {
+  const dir = fixture(`${RULE}/enum-type-import`);
+  const [found, ...rest] = checkOnly(dir, RULE);
+
+  it("states the allowance with the enum's own name, and says a `case` needs the enum as a value", () => {
+    expect(rest).toEqual([]);
+    expect(found?.hint).toBe(
+      [
+        "one of",
+        "- add `case Color.Blue:`, `case Color.Green:` and `case Color.Red:` with their own code (with `Color` imported as a value)",
+        "- or allow them in `default`: `default: void (c satisfies Color.Blue | Color.Green | Color.Red);`",
+      ].join("\n"),
+    );
+    // The old advice, an ignore comment, is gone: the allowance can be written as a type.
+    expect(found?.hint).not.toContain("stateward-ignore");
+  });
+
+  it("writes an allowance that compiles where `Color` is imported as a type only", () => {
+    const edits = found?.kind === "problem" ? (found.fixes[0]?.edits ?? []) : [];
+    expect(edits.length).toBeGreaterThan(0);
+    const copy = mkdtempSync(path.join(tmpdir(), "stateward-enum-"));
+    try {
+      cpSync(dir, copy, { recursive: true });
+      const text = readFileSync(path.join(dir, "name.ts"), "utf8");
+      writeFileSync(path.join(copy, "name.ts"), applied(text, edits));
+      expect(typeErrors(copy)).toBe("");
+      expect(readFileSync(path.join(copy, "name.ts"), "utf8")).toContain(
+        "void (c satisfies Color.Blue | Color.Green | Color.Red);",
+      );
+    } finally {
+      rmSync(copy, { recursive: true, force: true });
+    }
+  });
+});
+
+describe(`${ID}: the tag of a union stated open`, () => {
+  it("asks for a `default` on a `switch` over the tag, as for a status stated open", () => {
+    const found = shown(inDir("open-tag"));
+    expect(found).toEqual([
+      says(
+        "part.ts",
+        "`switch` on `part.kind` has no `default` for a value outside `Part`, which is open",
+        "add `default:` that handles an unknown kind",
+      ),
+    ]);
+  });
+
+  it("notes where the union is stated, and is silent with a `default` or on a union not stated open", () => {
+    const [finding] = inDir("open-tag");
+    expect(finding?.kind === "problem" ? finding.related.map((note) => note.message) : []).toEqual([
+      "`Part` is stated open (`OpenUnion`)",
+    ]);
+    // Only `noDefault` is reported: `withDefault` has the `default`, `plain` is not stated open.
+    expect(inDir("open-tag")).toHaveLength(1);
   });
 });

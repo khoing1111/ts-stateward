@@ -29,7 +29,11 @@ warning[reducers/state-cannot-leave]: `payment` reaches "failed" but never leave
   |
 7 | function payment(state: PaymentState, event: PaymentEvent): PaymentState {
   |          ^^^^^^^
-  = fix: handle an event that leaves "failed", or mark it final (quick fix available)
+  = fix: one of
+      - handle an event that leaves "failed", so a case returns another state
+      - or add "failed" to `@final` on `PaymentState` (quick fix)
+      - or, to treat it as final in every reducer, list it under the rule's `finalStates` option:
+            { finalStates: ["failed"] }
   = note: example.ts:13: starts at "paying"
   = note: example.ts:9: "paying" goes to "failed"
   = docs: stateward explain reducers/state-cannot-leave
@@ -65,9 +69,9 @@ A state nothing leaves is where the user stays for good: a payment that failed w
 
 It reports a state the reducer reaches and never leaves, not marked final (the message shows the path that reaches it); a name in `@final` that is not a state of the type (`@final "payed"`); and a state in `@final` that the reducer does leave, from a branch that checks the state (`switch (state.status)`, an `if` on it). It does not see:
 
-- a reducer with no `useReducer` call and no `@initial`;
+- a reducer with no `useReducer` call and no `@initial` (a state in `@final` it leaves is still reported);
 - a way out that depends on data (`if (state.attempt < 3)`): both branches count as possible;
-- a final state left by a return that does not check which state it is in: that return counts as leaving every state, so it is not held against `@final`;
+- a final state left by a return that does not check which state it is in (the state's tag copied to a variable or destructured, `switch (true)`, a helper such as `isDone(state)`), or a return whose state cannot be read: it is not held against `@final`, and `stateward guarantees` lists `@final` as "not checked" there;
 - state in `useState` or class fields, and nested or parallel states.
 
 ## Getting the best from it

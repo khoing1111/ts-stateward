@@ -31,3 +31,20 @@ export function fitted(build: (cut: Cut) => string): string {
     path: (inserted) => shortenPath(inserted),
   });
 }
+
+/** One way to fix a finding: what to do, in lowercase, and the code that does it when it can be shown. */
+export type Way = { readonly text: string; readonly example?: readonly string[] };
+
+/**
+ * A fix hint of ways (`one of`, a `- ` line each, every one after the first starting with `or`),
+ * each followed by its code example indented by 4 spaces.
+ */
+export function waysHint(ways: readonly Way[]): string {
+  return [
+    "one of",
+    ...ways.flatMap((way, index) => [
+      `- ${index === 0 ? "" : "or "}${way.text}${way.example === undefined ? "" : ":"}`,
+      ...(way.example ?? []).map((line) => `    ${line}`),
+    ]),
+  ].join("\n");
+}

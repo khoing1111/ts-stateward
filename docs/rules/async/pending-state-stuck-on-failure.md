@@ -30,7 +30,10 @@ warning[async/pending-state-stuck-on-failure]: `loading` stays `true` when `fetc
   |
 8 |     setLoading(true);
   |     ^^^^^^^^^^^^^^^^
-  = fix: set `loading` again in a `finally`, so a failure resets it too: `try { await fetch(…); } finally { setLoading(false); }`
+  = fix: one of
+      - set `loading` again in a `finally`, so a failure resets it too: `try { await fetch(…); } finally { setLoading(false); }`
+      - or, if a caller sets `loading` again where this rule cannot see, list it under the rule's `ignore` option
+      - or state it `Pending<boolean>`, a type you add once in `guarantees.ts` (the rule's page shows it), and stateward proves it settles
   = note: `loading` and `results` are written together here: one status union holds them without contradictions
   = docs: stateward explain async/pending-state-stuck-on-failure
 ```
@@ -76,7 +79,7 @@ It reads the shape of the code, not the names: in one function, state that outli
 
 A call can reject when stateward can see that it does: `fetch`, a request of `axios`, `ky`, `ofetch`, `got`, `node-fetch` or `superagent`, a package function your config's `facts` say rejects or throws, `Promise.all` of one of those, a `.then` or `.catch` callback written in place that throws or returns one of those, or a function of your project that throws or awaits one of those outside a `try` that catches (every function it calls is read; a `throw` after a value typed `never` cannot run).
 
-It guesses what the code means, so it is a warning in every preset, and it is wrong when the failure is handled somewhere it cannot see, such as a caller that always resets the state: say so above the line with `// stateward-ignore async/pending-state-stuck-on-failure: <why>`, or list the state's name under `ignore`.
+It guesses what the code means, so it is a warning in every preset, and it is wrong when the failure is handled somewhere it cannot see, such as a caller that always resets the state: say so above the line with `// stateward-ignore async/pending-state-stuck-on-failure: <why>`, or list the state's name under `ignore` (a state stated `Pending` is always checked: an ignore comment hides its finding, and the guarantee then reads not proven).
 
 ## Getting the best from it
 
@@ -94,8 +97,10 @@ const [saving, setSaving] = useState<Pending<boolean>>(false); // true means run
 status: Pending<"idle" | "saving" | "saved" | "failed", "saving"> = "idle"; // "saving" means running
 ```
 
-- **It settles:** every way out of the function (success, a failed `await`, an early `return`, a `throw`) leaves a value that is not running. Every `await` counts as one that can fail, except of a promise a `facts` line states `neverRejects: true`. The fix names the value the declaration starts with, in `finally`; for a union, each other value that is not running (`"failed"`) in a `catch`.
-- **It does not start twice:** an async function that sets it returns early while it runs, `if (savingRef.current) return;` (a ref, because a state value read in a handler can be one render old, so two quick clicks both see `false`), or the control is disabled with it (`disabled={saving}` in the same file).
+- **It settles:** every way out of the function (success, a failed `await`, an early `return`, a `throw`) leaves a value that is not running. Every `await` and every `for await` counts as one that can fail, except an `await` of a promise a `facts` line states `neverRejects: true`; so do a `yield` and any call or `new` (synchronous code throws too), but not a write of another state (`setError(null)`). A `.then(done, failed)` whose `failed` does not set it back leaves it running, as `.then(done).catch(failed)` does: a link counts only its own callbacks, so `.then(reset).catch(() => undefined)` resets on success only. The fix names the value the declaration starts with, in `finally`; for a union, each other value that is not running (`"failed"`) in a `catch`.
+- **It does not start twice:** a function that leaves it running (it awaits, or sets it back only in a callback) returns early while it runs, on every path before the running write: `if (savingRef.current) return;` with a ref whose every write sits next to the state's (a ref, because a state value read in a handler can be one render old, so two quick clicks both see `false`), or `if (saving) return;`; or the element whose handler starts it is disabled with it (`<button disabled={saving} onClick={save}>`). A test of the state in another form is not checked.
+
+The proof lists every write of the state and every way out after a running write, and reads these forms: the setter called as a statement of a function with a literal (`setSaving(true);`, `this.status = "saving";`), a reset that runs on every way out (a `finally` or a `catch` that writes a resting literal on every path, or a statement after the work), and a resting literal in a `.then`, `.catch` or `.finally` callback. A reset only on some paths is not proven (`finally { if (…) setSaving(false); }`). Everything else is "not checked", with the place, and the guarantee reads "not checked", never "unused", while one is left: the setter copied, passed on, stored or returned (`const set = setBusy`); an updater (`setLoading((v) => !v)`) or a value that is not a literal; a running write that is not a statement of its function (`setTimeout(() => setSaving(true))`); a reset in another callback (`setTimeout(() => setSaving(false))`); a compound or logical assignment of a field. Every reference to the state is read, or listed as "not checked" at its place: a field, a `#private` field (its guard `if (this.#saving) return;` counts as a public field's), a member of an object type (`store: { saving: Pending<boolean> }`) and both names of a `useState` pair, or the setter alone (`const [, setSaving] = …`); a write through another name for the object (`const self = this; self.saving = true`) or a computed key (`store["saving"] = true`) is not checked. So is an object holding the state written without naming it: `Object.assign(this, { saving: true })`, `Reflect.set`, a new object for a state that holds it (`setForm({ ...form, saving: true })` with `useState<{ saving: Pending<boolean> }>`), a reducer's state.
 
 For `boolean` the running value is `true`; for any other type, name it: a `Pending` with no running value is reported. These findings are errors, since the guarantee is stated and proven strictly (the kind `stated` under `severities` changes that); unmarked state keeps the checks above, as warnings.
 
@@ -129,7 +134,7 @@ Options, set as `rules: { "async/pending-state-stuck-on-failure": ["warning", { 
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
-| `ignore` | list of strings | `[]` | State names (globs like *Busy) that are set again somewhere this rule cannot see. |
+| `ignore` | list of strings | `[]` | State names (globs like *Busy) that are set again somewhere this rule cannot see. Not for a state stated `Pending`: it is always checked. |
 | `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of finding. Kinds: `stated`: a state stated `Pending` that does not settle, starts twice, or names no running value: an error unless set here; `shape`: unmarked state read from the shape of the code: the rule's severity (a warning). |
 
 Core rule: warning under `recommended` and `strict`. It judges from patterns in the code, not only from types, so it can be wrong: it is never an error unless you make it one. Group: `async/failures`.

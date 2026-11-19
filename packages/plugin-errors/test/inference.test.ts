@@ -70,6 +70,15 @@ const cases: readonly (readonly [string, string, string, string])[] = [
     "function abortable",
     "rejects: AbortError (DOMException) | TypeError",
   ],
+  // `Response.json()` rejects with a SyntaxError for a body that is not JSON: the set is not
+  // "NotFoundError | TypeError" (a body read can fail like `fetch`, with a TypeError).
+  [
+    "Response.json",
+    "body.ts",
+    "function getJson",
+    "rejects: NotFoundError | SyntaxError | TypeError",
+  ],
+  ["Response.blob", "body.ts", "function getBlob", "rejects: TypeError"],
   ["map's callback", "callbacks.ts", "function parseAll", "throws: SyntaxError"],
   ["forEach with a function", "callbacks.ts", "function findEach", "throws: NotFoundError"],
   [
@@ -183,6 +192,10 @@ const cases: readonly (readonly [string, string, string, string])[] = [
 describe("errors: what a function throws, on hover", () => {
   it.each(cases)("%s", (_name, file, name, expected) => {
     expect(hoverOn(solved, file, name.split(" ")[1] ?? name)).toBe(expected);
+  });
+
+  it("no longer shows the set without the SyntaxError of `Response.json()` as complete", () => {
+    expect(hoverOn(solved, "body.ts", "getJson")).not.toBe("rejects: NotFoundError | TypeError");
   });
 
   it("answers on a call as on the declaration", () => {

@@ -32,7 +32,10 @@ warning[errors/narrow-try]: the `try` for `savePlan(…)` also catches errors fr
    |
 12 |     close();
    |     ^^^^^^^^
-   = fix: move the line after the `try`, so a bug in it is not handled like a failed `savePlan(…)` (quick fix)
+   = fix: one of
+       - move the line after the `try`, so a bug in it is not handled like a failed `savePlan(…)` (quick fix)
+       - or test the error in the `catch` and rethrow the rest (import `RequestError` if the file does not), leaving out `TypeError`, which a bug throws too:
+             if (e instanceof RequestError) { … } else { throw e; }
    = docs: stateward explain errors/narrow-try
 ```
 
@@ -59,6 +62,8 @@ export async function submit(plan: string, close: () => void): Promise<void> {
 ```
 
 The quick fix moves the lines after the `try`. It is offered only when the move keeps what runs the same for every outcome but a bug: the `catch` ends with `return` or `throw`, there is no `finally`, and the moved lines use nothing declared in the `try`. Where they use the result, declare it before the `try` (`let plan: Plan;`), assign it inside, and return from the `catch`.
+
+The other reading keeps the line where it is and makes the `catch` pick its error: `if (e instanceof RequestError) { … } else { throw e; }`, with the classes the call throws (a `TypeError` is left out, since a bug throws it too). The rule then counts the `catch` as one that lets bugs through (see below), and the message shows this form with your names.
 
 ## Why it matters
 

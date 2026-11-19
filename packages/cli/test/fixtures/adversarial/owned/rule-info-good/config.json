@@ -1,0 +1,5 @@
+{
+  "rules": {
+    "ownership/state-written-outside-owner": "info"
+  }
+}

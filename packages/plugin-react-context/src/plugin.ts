@@ -1,6 +1,6 @@
 import { definePlugin, lazyRule, moduleLoader } from "@stateward/core";
 import { codeActions } from "./declare-action.js";
-import { guarantees } from "./guarantees.js";
+import { createGuarantees } from "./guarantees.js";
 import { hover } from "./hover.js";
 import { parseOptions, type ReactContextOptions } from "./provider-missing/options.js";
 import { RULES } from "./rules.meta.js";
@@ -44,6 +44,6 @@ export function reactContext(options?: ReactContextOptions) {
         (module) => module.valueChangedByReader,
       ),
     },
-    editor: { hover, codeActions, guarantees },
+    editor: { hover, codeActions, guarantees: createGuarantees(entries) },
   });
 }

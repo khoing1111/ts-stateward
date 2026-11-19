@@ -41,6 +41,16 @@ export const RULES = {
           description:
             "Variable names (globs like *_MESSAGES) that may stay typed as open-ended records.",
         },
+        severities: {
+          kind: "severities",
+          default: {},
+          kinds: {
+            record:
+              "a table typed `Record<string, V>` whose keys the code shows to be fixed or from outside",
+            map: "a Map of literal pairs that no code changes: a question, since its `get` already handles a missing key (info unless set here)",
+          },
+          description: "A severity per kind of finding.",
+        },
       },
     },
   },

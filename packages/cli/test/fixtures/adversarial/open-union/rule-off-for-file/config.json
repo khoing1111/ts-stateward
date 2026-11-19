@@ -1,0 +1,12 @@
+{
+  "overrides": [
+    {
+      "files": [
+        "src/o.ts"
+      ],
+      "rules": {
+        "unions/non-exhaustive-switch": "off"
+      }
+    }
+  ]
+}

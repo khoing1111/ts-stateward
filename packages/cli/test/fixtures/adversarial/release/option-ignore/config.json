@@ -1,0 +1,12 @@
+{
+  "rules": {
+    "ownership/resource-not-released": [
+      "error",
+      {
+        "ignore": [
+          "watchPrices"
+        ]
+      }
+    ]
+  }
+}

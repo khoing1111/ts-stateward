@@ -70,7 +70,11 @@ const toolbar = found(
 const select = found(
   "onSelect",
   "`<RowList>` re-renders every time: `onSelect` from `useRows()` is a new function each time",
-  "keep the latest handler in a ref (React's `useEffectEvent`, or your own hook)",
+  [
+    "one of",
+    "- wrap `onSelect` in `useCallback` inside `useRows` (hooks.ts:32), listing what it reads as dependencies (a state setter needs none)",
+    "- or keep the latest handler in a ref with your own hook, and name that hook in the rule's `stableHooks` option",
+  ].join("\n"),
   "(id: string) => setRows(rows.filter((row) => row !== id)): `onSelect` is created on every render of `useRows`",
 );
 const swatch = found(
@@ -97,7 +101,11 @@ describe("react/dependency-changes-every-render: advice that matches the cause",
   it("names the project's hook for it when `stableHooks` lists one", () => {
     expect(ofRule({ stableHooks: ["use*Store", "useLatestHandler"] })[5]).toEqual({
       ...select,
-      hint: "keep the latest handler in a ref with `useLatestHandler`",
+      hint: [
+        "one of",
+        "- wrap `onSelect` in `useCallback` inside `useRows` (hooks.ts:32), listing what it reads as dependencies (a state setter needs none)",
+        "- or keep the latest handler in a ref with `useLatestHandler`",
+      ].join("\n"),
     });
   });
   it("reports a value built from the state behind the render as info: stabilising gains nothing", () => {

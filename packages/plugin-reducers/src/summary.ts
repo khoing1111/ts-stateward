@@ -29,6 +29,10 @@ export type Reducer = {
   name: string;
   /** The reducer's name. */
   at: Place;
+  /** Where the reducer's declaration starts, as the reference ledger names it (`@initial`). */
+  declared: number;
+  /** Where the state type's declaration starts, as the reference ledger names it (`@final`). */
+  stateDeclared: number;
   stateName: string;
   stateFile: string;
   /** The state type's name, where it is declared. */
@@ -54,9 +58,16 @@ export type Reducer = {
     add: { at: number; before: string };
   } | null;
   initial: Names | null;
+  /** `initial` is an `@initial` tag the developer wrote, not the default of the state parameter. */
+  initialTagged: boolean;
   /** Exported from a package entry: code outside the project may call it. */
   external: boolean;
   edges: Edge[];
+  /**
+   * The events some case of which returns the state unchanged (`case "refund": return state;`),
+   * in source order: a case that exists and does nothing, where a missing state could be returned.
+   */
+  idleEvents: string[];
   unreadable: Unreadable[];
 };
 
@@ -82,10 +93,10 @@ export function isTestFile(file: string): boolean {
   return /\.(?:test|spec)\.[^/]+$/.test(file) || /(?:^|\/)__tests__\//.test(file);
 }
 
-type FunctionNode = ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression;
+export type FunctionNode = ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression;
 
 /** What the signature `(state: S, …): S` says about a function: its state type and tag. */
-type Signature = {
+export type Signature = {
   fn: FunctionNode;
   name: ts.Identifier;
   /** The statement the function's comment belongs to. */
@@ -125,7 +136,7 @@ function stringOf(expression: ts.Expression): string | undefined {
 }
 
 /** A function a name stands for: `function f`, or `const f = () => …`. */
-function functionOf(
+export function functionOf(
   declaration: ts.Node,
 ): { fn: FunctionNode; name: ts.Identifier; host: ts.Node } | undefined {
   if (ts.isFunctionDeclaration(declaration) && declaration.name !== undefined) {
@@ -165,7 +176,7 @@ function memoOf(types: TypeQueries): Memo {
  * Whether a function is shaped like a reducer: its first parameter is a state type (a type alias
  * of a union with exactly one tag) and it returns that same type, declared or inferred.
  */
-function signatureOf(
+export function signatureOf(
   found: { fn: FunctionNode; name: ts.Identifier; host: ts.Node },
   types: TypeQueries,
 ): Signature | undefined {
@@ -292,9 +303,57 @@ function constantInitializer(name: ts.Identifier, types: TypeQueries): ts.Expres
     ts.isIdentifier(node.name) &&
     node.initializer !== undefined &&
     ts.isVariableDeclarationList(node.parent) &&
-    (node.parent.flags & ts.NodeFlags.Const) !== 0
+    (node.parent.flags & ts.NodeFlags.Const) !== 0 &&
+    symbol !== undefined &&
+    !changedAfter(node.name, symbol.id, types)
     ? node.initializer
     : undefined;
+}
+
+/**
+ * Whether the object a `const` holds may be changed after it is made, so its initializer is not
+ * what it holds: a reference that is the root of a write (`start.color = "yellow"`, `start.n++`,
+ * `delete start.x`), or given to `Object.assign` or `Object.defineProperty`.
+ */
+function changedAfter(name: ts.Identifier, id: string, types: TypeQueries): boolean {
+  let changed = false;
+  const visit = (node: ts.Node): void => {
+    if (changed) return;
+    if (
+      ts.isIdentifier(node) &&
+      node !== name &&
+      node.text === name.text &&
+      types.symbolAt(node)?.id === id
+    ) {
+      let at: ts.Node = node;
+      while (
+        (ts.isPropertyAccessExpression(at.parent) || ts.isElementAccessExpression(at.parent)) &&
+        at.parent.expression === at
+      ) {
+        at = at.parent;
+      }
+      const parent = at.parent;
+      const written =
+        at !== node &&
+        ((ts.isBinaryExpression(parent) &&
+          parent.left === at &&
+          parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+          parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) ||
+          ((ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) &&
+            (parent.operator === ts.SyntaxKind.PlusPlusToken ||
+              parent.operator === ts.SyntaxKind.MinusMinusToken)) ||
+          ts.isDeleteExpression(parent));
+      const assigned =
+        ts.isCallExpression(node.parent) &&
+        node.parent.arguments[0] === node &&
+        /^Object\.(assign|defineProperty|defineProperties)$/.test(node.parent.expression.getText());
+      changed = written || assigned;
+      if (changed) return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(name.getSourceFile());
+  return changed;
 }
 
 /** The reading of one reducer: the states each return starts from, and the event it is on. */
@@ -564,14 +623,26 @@ function reader(sig: Signature, ctx: FileContext) {
 }
 
 /** The edges and unreadable returns of one reducer. */
-function graphOf(sig: Signature, ctx: FileContext): Pick<Reducer, "edges" | "unreadable"> {
+function graphOf(
+  sig: Signature,
+  ctx: FileContext,
+): Pick<Reducer, "edges" | "idleEvents" | "unreadable"> {
   const { sourceFile } = ctx;
   const read = reader(sig, ctx);
   const edges: Edge[] = [];
   const unreadable: Unreadable[] = [];
+  // Per event: whether every return it has is the state itself (`return state`).
+  const idle = new Map<string, boolean>();
   for (const { expression, anchor } of returnsOf(sig.fn)) {
     const to = new Set<string>();
-    for (const target of read.targetsOf(expression)) {
+    const targets = read.targetsOf(expression);
+    const event = read.eventOf(anchor);
+    if (event !== null) {
+      const inner = unwrapped(expression);
+      const unchanged = ts.isIdentifier(inner) && ctx.types.symbolAt(inner)?.id === sig.paramId;
+      idle.set(event, (idle.get(event) ?? true) && unchanged);
+    }
+    for (const target of targets) {
       if (target.kind === "identity") continue;
       if (target.kind === "tags") {
         target.tags.forEach((tag) => to.add(tag));
@@ -600,7 +671,8 @@ function graphOf(sig: Signature, ctx: FileContext): Pick<Reducer, "edges" | "unr
   }
   edges.sort((a, b) => a.start - b.start || a.end - b.end);
   unreadable.sort((a, b) => a.start - b.start || a.end - b.end);
-  return { edges, unreadable };
+  const idleEvents = [...idle].flatMap(([event, unchanged]) => (unchanged ? [event] : []));
+  return { edges, idleEvents, unreadable };
 }
 
 /**
@@ -608,7 +680,7 @@ function graphOf(sig: Signature, ctx: FileContext): Pick<Reducer, "edges" | "unr
  * `|` or spaces, up to the first token that is not a quoted literal; where the tag is; and where
  * a name can be added (after the last literal, or after the tag).
  */
-function namesOf(
+export function namesOf(
   host: ts.Node,
   tagName: string,
   sourceFile: ts.SourceFile,
@@ -827,7 +899,8 @@ function readReducer(sig: Signature, ctx: FileContext): Reducer | undefined {
   if (isSetter(sig, types)) return undefined;
   const stateSource = sig.state.getSourceFile();
   const final = namesOf(sig.state, "final", stateSource);
-  const initial = namesOf(sig.host, "initial", sourceFile) ?? defaultStart(sig, types, sourceFile);
+  const tagged = namesOf(sig.host, "initial", sourceFile);
+  const initial = tagged ?? defaultStart(sig, types, sourceFile);
   let finalFix: Reducer["finalFix"] = null;
   if (final !== null)
     finalFix = final.prose
@@ -840,6 +913,8 @@ function readReducer(sig: Signature, ctx: FileContext): Reducer | undefined {
     id,
     name: sig.name.text,
     at: place(sig.name, sourceFile),
+    declared: (ts.isFunctionDeclaration(sig.host) ? sig.host : sig.name).getStart(sourceFile),
+    stateDeclared: sig.state.getStart(stateSource),
     stateName: sig.state.name.text,
     stateFile: sig.stateFile,
     stateAt: place(sig.state.name, stateSource),
@@ -851,6 +926,7 @@ function readReducer(sig: Signature, ctx: FileContext): Reducer | undefined {
     finalConst: finalConstOf(sig, sourceFile),
     initial:
       initial === null ? null : { names: initial.names, at: initial.at, prose: initial.prose },
+    initialTagged: tagged !== null,
     external: isExported(sig.host) && types.isPackageEntry(ctx.file),
     ...graphOf(sig, ctx),
   };
@@ -875,7 +951,7 @@ function defaultStart(
 }
 
 /** `useReducer` from React, called by its name or as a member (`React.useReducer`). */
-function isUseReducer(call: ts.CallExpression, types: TypeQueries): boolean {
+export function isUseReducer(call: ts.CallExpression, types: TypeQueries): boolean {
   const callee = call.expression;
   const named = ts.isPropertyAccessExpression(callee) ? callee.name : callee;
   if (!ts.isIdentifier(named) || named.text !== "useReducer") return false;
@@ -891,7 +967,7 @@ function isUseReducer(call: ts.CallExpression, types: TypeQueries): boolean {
 }
 
 /** The function a reducer reference names, when it is shaped like a reducer. */
-function signatureBehind(
+export function signatureBehind(
   name: ts.Expression,
   types: TypeQueries,
 ): { sig: Signature; id: string } | undefined {
@@ -941,13 +1017,17 @@ function emptyOf(expression: ts.Expression, sig: Signature, types: TypeQueries):
 }
 
 /** Where an expression starts a reducer; null when its tag cannot be read. */
-function startsOf(
+export function startsOf(
   expression: ts.Expression,
   sig: Signature,
   types: TypeQueries,
   followed = 0,
 ): Starts | null {
-  const inner = unwrapped(expression);
+  // `({ color: "yellow" }) as Light`: the states are the value's own, not the type it is cast to.
+  let inner = unwrapped(expression);
+  while (ts.isAsExpression(inner) || ts.isTypeAssertionExpression(inner)) {
+    inner = unwrapped(inner.expression);
+  }
   if (ts.isConditionalExpression(inner)) {
     const a = startsOf(inner.whenTrue, sig, types, followed);
     const b = startsOf(inner.whenFalse, sig, types, followed);
@@ -970,7 +1050,7 @@ function startsOf(
   return { tags, empty: [] };
 }
 
-function useOf(call: ts.CallExpression, ctx: FileContext): Use | undefined {
+export function useOf(call: ts.CallExpression, ctx: FileContext): Use | undefined {
   const { types, sourceFile } = ctx;
   const [reducer, initial, init] = call.arguments;
   if (reducer === undefined || call.arguments.some(ts.isSpreadElement)) return undefined;

@@ -91,6 +91,7 @@ function run(order: readonly (readonly [string, ReactSummary])[]): Finding[] {
         stableFunctions: [],
         severities: {},
       },
+      read: () => undefined,
       report(problem: {
         message: string;
         hint: string;

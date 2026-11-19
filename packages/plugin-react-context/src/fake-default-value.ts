@@ -58,7 +58,7 @@ It reads React's \`createContext\` (also \`React.createContext\`) called with a 
 
 ## Turn it on or off
 
-It is an info under \`recommended\` (shown in the editor, it does not fail \`check\`) and an error under \`strict\`. Turn it off when the defaults are real values (a default theme, a logger that does nothing):
+It is an info under \`recommended\` (shown in the editor, it does not fail \`check\`) and an error under \`strict\`. A real default is never reported (a default theme, a logger that does nothing); a placeholder that is meant is listed under \`ignore\`, or the rule is turned off:
 
 \`\`\`ts
 rules: { "react-context/fake-default-value": "off" } // or "warning"
@@ -218,29 +218,59 @@ function headline(name: string, argument: string, kind: "cast" | "empty"): strin
     : `${context} defaults to \`${argument}\`, an empty object typed as the full value`;
 }
 
+/** The type the context holds, as the code says it: the type argument, else the cast's type. */
+function valueType(call: ts.CallExpression, sourceFile: ts.SourceFile): string | undefined {
+  const clean = (type: ts.TypeNode): string =>
+    type
+      .getText(sourceFile)
+      .replace(/\s*\|\s*(?:null|undefined)\b/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  const [given] = call.typeArguments ?? [];
+  if (given !== undefined) return clean(given);
+  let inner: ts.Expression | undefined = call.arguments[0];
+  while (inner !== undefined) {
+    if (ts.isParenthesizedExpression(inner) || ts.isNonNullExpression(inner)) {
+      inner = inner.expression;
+    } else if (ts.isAsExpression(inner) || ts.isTypeAssertionExpression(inner)) {
+      return ts.isConstTypeReference(inner.type) ? undefined : clean(inner.type);
+    } else break;
+  }
+  return undefined;
+}
+
 /**
- * The plain TypeScript form, in the developer's names: a context created with `undefined` and a
- * hook that throws when it is missing.
+ * The readings of a placeholder default, in the developer's names: the context stated required
+ * (`requiredContext`, which proves every reader is under a Provider), or created with `undefined`
+ * and read through a hook that throws; and, if the default is meant, `ignore`. A type the code
+ * does not give is described in words.
  */
 function hint(name: string, call: ts.CallExpression, sourceFile: ts.SourceFile): string {
-  const stem = /^([A-Z]\w*)Context$/.exec(name)?.[1];
-  const typeArgument = call.typeArguments?.[0]
-    ?.getText(sourceFile)
-    .replace(/\s*\|\s*(?:null|undefined)\b/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  const type = typeArgument !== undefined && typeArgument.length > 0 ? typeArgument : (stem ?? "T");
-  const contextName = stem === undefined ? "MyContext" : name;
-  const label = stem ?? "My";
-  const lines = [
-    `    const ${contextName} = createContext<${type} | undefined>(undefined);`,
-    `    // in use${label}(): if (value === undefined) throw new Error("${contextName} needs a Provider");`,
-  ].map((line) =>
-    line.length <= MAX_EXAMPLE_LINE ? line : `${line.slice(0, MAX_EXAMPLE_LINE - 1)}\u2026`,
-  );
-  const head =
-    "create it with `undefined`, and read it in a hook that throws when the Provider is missing:";
-  return [head, ...lines].join("\n");
+  // Without the value's type in the code, the lines that need it are written in words.
+  const type = valueType(call, sourceFile);
+  // Not a name of the project's: the hook that reads the context is the one to write it in.
+  const hook = "the hook that reads it";
+  const created = `createContext<${type ?? ""} | undefined>(undefined)`;
+  const creation = name === UNNAMED ? `    ${created}` : `    const ${name} = ${created};`;
+  const reading =
+    name === UNNAMED
+      ? `    // ${hook}: throw when the value is undefined`
+      : `    // ${hook}: throw when the value is undefined, as "${name} needs a Provider"`;
+  const withMessage = reading.length <= MAX_EXAMPLE_LINE;
+  return [
+    "one of",
+    `- state it required, with \`requiredContext\`, a helper you add once in \`guarantees.ts\` (\`stateward explain react-context/provider-missing\` shows it), so a missing Provider is a finding${type === undefined ? ", with the value's type" : ""}`,
+    ...(type === undefined ? [] : [`    requiredContext<${type}>()`]),
+    type === undefined
+      ? "- or create it with `undefined`, typed as the value or `undefined`, and read it in a hook that throws when the Provider is missing"
+      : "- or create it with `undefined`, and read it in a hook that throws when the Provider is missing",
+    ...(type === undefined
+      ? []
+      : [creation, withMessage ? reading : `    // ${hook}: throw when the value is undefined`]),
+    name === UNNAMED
+      ? "- or, if the placeholder is meant, list the context under the rule's `ignore` option"
+      : `- or, if the placeholder is meant, list \`${name}\` under the rule's \`ignore\` option`,
+  ].join("\n");
 }
 
 const MAX_EXAMPLE_LINE = 100;

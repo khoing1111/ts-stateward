@@ -1303,6 +1303,12 @@ async function runGuarantees(
     checker.guarantees(),
     result.findings,
     activeRuleIds(config, { kind: "configured" }),
+    {
+      // An ignore comment hides a finding from `check`, not from the proof.
+      ignored: result.ignored ?? [],
+      ...(result.ledger === undefined ? {} : { ledger: result.ledger }),
+      ruleOffAt: (ruleId, file) => checker.ruleOffAt(ruleId, file),
+    },
   );
   const texts = new Map<string, string>();
   const locate: Locate = (location) => {

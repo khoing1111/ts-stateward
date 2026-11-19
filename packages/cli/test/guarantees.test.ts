@@ -38,6 +38,26 @@ async function run(
   return { code, stdout, stderr };
 }
 
+/**
+ * The JSON of `guarantees` with each entry's `declaration` checked and left out: it is the
+ * declaration's `<absolute file>#<offset>`, which differs on each machine.
+ */
+function withoutDeclarations(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || !("guarantees" in value)) return value;
+  const { guarantees, ...rest } = value;
+  if (!Array.isArray(guarantees)) return value;
+  return {
+    ...rest,
+    guarantees: guarantees.map((entry: unknown): unknown => {
+      if (typeof entry !== "object" || entry === null || !("declaration" in entry)) return entry;
+      const { declaration, ...others } = entry;
+      const file = "file" in others && typeof others.file === "string" ? others.file : "";
+      expect(String(declaration)).toMatch(new RegExp(`${file.replace(".", "\\.")}#\\d+$`));
+      return others;
+    }),
+  };
+}
+
 describe("stateward guarantees", { timeout: 30_000 }, () => {
   it("lists each guarantee with its declaration, its proof and its readers, and exits 1 when one is not proven", async () => {
     const { code, stdout, stderr } = await run(["guarantees"]);
@@ -112,7 +132,7 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
   it("prints the same as JSON", async () => {
     const { code, stdout } = await run(["guarantees", "--format", "json"]);
     expect(code).toBe(1);
-    const parsed: unknown = JSON.parse(stdout);
+    const parsed = withoutDeclarations(JSON.parse(stdout));
     expect(parsed).toEqual({
       guarantees: [
         {
@@ -125,6 +145,8 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
           rule: "react-context/provider-missing",
           status: "proven",
           errors: [],
+          ignored: [],
+          unchecked: [],
           covers: "readers",
           covered: [
             { name: "<Header>", file: "src/Readers.tsx", line: 4 },
@@ -147,6 +169,8 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
               message: "`<App>` is rendered without `AuthContext.Provider`",
             },
           ],
+          ignored: [],
+          unchecked: [],
           covers: "readers",
           covered: [{ name: "<Profile>", file: "src/Readers.tsx", line: 12 }],
         },
@@ -160,6 +184,8 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
           rule: "react-context/provider-missing",
           status: "unused",
           errors: [],
+          ignored: [],
+          unchecked: [],
           covers: "readers",
           covered: [],
         },
@@ -173,6 +199,8 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
           rule: "ownership/resource-not-released",
           status: "proven",
           errors: [],
+          ignored: [],
+          unchecked: [],
           covers: "callers",
           covered: [{ name: "feed.ts", file: "src/feed.ts", line: 9 }],
         },
@@ -192,6 +220,8 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
               message: "`session` is changed outside its owner, `src/session.ts`",
             },
           ],
+          ignored: [],
+          unchecked: [],
           covers: "writers",
           covered: [
             { name: "session.ts", file: "src/session.ts", line: 6 },
@@ -208,6 +238,8 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
           rule: "ownership/state-written-outside-owner",
           status: "proven",
           errors: [],
+          ignored: [],
+          unchecked: [],
           covers: "writers",
           covered: [{ name: "settings.ts", file: "src/settings.ts", line: 6 }],
         },
@@ -221,6 +253,8 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
           rule: "react-context/provider-nested",
           status: "proven",
           errors: [],
+          ignored: [],
+          unchecked: [],
           covers: "Providers",
           covered: [{ name: "<StoreContext.Provider>", file: "src/Providers.tsx", line: 7 }],
         },
@@ -234,6 +268,8 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
           rule: "react-context/provider-value-changes-every-render",
           status: "proven",
           errors: [],
+          ignored: [],
+          unchecked: [],
           covers: "Providers",
           covered: [{ name: "<StoreContext.Provider>", file: "src/Providers.tsx", line: 7 }],
         },
@@ -254,11 +290,13 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
                 "`ModeContext` is stated `Stable`, but its value changes when `mode` changes",
             },
           ],
+          ignored: [],
+          unchecked: [],
           covers: "Providers",
           covered: [{ name: "<ModeContext.Provider>", file: "src/Providers.tsx", line: 13 }],
         },
       ],
-      summary: { proven: 5, unproven: 3, unused: 1, off: 0 },
+      summary: { proven: 5, unproven: 3, unchecked: 0, unused: 1, off: 0 },
     });
   });
 
@@ -276,7 +314,7 @@ describe("stateward guarantees", { timeout: 30_000 }, () => {
     );
     const { code, stdout } = await run(["guarantees"], dir);
     expect(stdout).toContain(
-      "ThemeContext: RequiredContext<Theme>  src/contexts.ts:6\n  stated by the project's marker\n  not checked: react-context/provider-missing is not on\n",
+      "ThemeContext: RequiredContext<Theme>  src/contexts.ts:6\n  stated by the project's marker\n  not checked: react-context/provider-missing is not on: turn it on in the config, or with `stateward next`\n",
     );
     expect(stdout).toContain("9 guarantees: 0 proven, 9 not checked.");
     expect(code).toBe(0);

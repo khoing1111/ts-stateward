@@ -18,6 +18,16 @@ function find(findings: readonly Finding[], file: string, at: string) {
   return found;
 }
 
+/** The hint of a change to a value stated `Owned`: the way to fix it, then the `owners` reading. */
+function ownedHint(first: string, owner: string, writer: string): string {
+  return [
+    "one of",
+    `- ${first}`,
+    "- or, if these files share it on purpose, list them under the rule's `owners` option:",
+    `    { owners: { ${JSON.stringify(owner)}: [${JSON.stringify(writer)}] } }`,
+  ].join("\n");
+}
+
 const SETTINGS_STATED = "settings: `settings` is declared owned: only `settings.ts` may change it";
 
 describe("ownership/state-written-outside-owner: values stated `Owned`", () => {
@@ -36,7 +46,7 @@ describe("ownership/state-written-outside-owner: values stated `Owned`", () => {
       // A cast that drops the type, one through `unknown`, and `any`, which cannot be followed.
       "cast.ts (settings as Loose).theme: `settings` is changed outside its owner, `settings.ts`",
       "cast.ts (registry as unknown as Map<string, number>).delete: `registry` is changed outside its owner, `mine.ts`",
-      'cast.ts (registry as any).set: not checked: whether `(registry as any).set("b", 2)` changes `registry`, owned by `mine.ts`',
+      'cast.ts (registry as any).set: not checked: `(registry as any).set("b", 2)` may change `registry`, owned by `mine.ts`',
       "direct.ts settings.theme: `settings` is changed outside its owner, `settings.ts`",
       // Changing methods, `Object.assign`, `delete`, a static, replacing a static.
       "methods.ts settings.tags.push: `settings` is changed outside its owner, `settings.ts`",
@@ -49,7 +59,7 @@ describe("ownership/state-written-outside-owner: values stated `Owned`", () => {
       "param.ts target.theme: not checked: whose `target` is, in `param.ts`: it is typed `Owned`, but its declaration is not found",
       // Handed to a function of another module that changes it; to a function it cannot tell.
       "passes.ts settings: `settings` is changed outside its owner, `settings.ts`",
-      "passes.ts settings: not checked: whether `handlers[name](…)` changes `settings`, owned by `settings.ts`",
+      "passes.ts settings: not checked: `handlers[name](…)` may change `settings`, owned by `settings.ts`",
       // Through a re-export, renamed, and a namespace import of it.
       "reexport.ts appSettings.fontSize: `settings` is changed outside its owner, `settings.ts`",
       "reexport.ts all.registry.clear: `registry` is changed outside its owner, `mine.ts`",
@@ -72,7 +82,11 @@ describe("ownership/state-written-outside-owner: values stated `Owned`", () => {
       file: "direct.ts",
       at: "settings.theme",
       message: "`settings` is changed outside its owner, `settings.ts`",
-      hint: "call `setTheme` from `settings.ts` instead: it owns the value",
+      hint: ownedHint(
+        "call `setTheme` from `settings.ts` instead: it owns the value",
+        "settings.ts",
+        "direct.ts",
+      ),
       notes: [SETTINGS_STATED],
     });
     expect(find(findings, "alias.ts", "s.fontSize").notes).toEqual([
@@ -83,8 +97,13 @@ describe("ownership/state-written-outside-owner: values stated `Owned`", () => {
       "settings: `getSettings` returns `settings`",
       SETTINGS_STATED,
     ]);
+    // `Store.add` pushes to `items`; `Store.items[0] = …` is another change, so it is not named.
     expect(find(findings, "alias.ts", "Store.items[0]").hint).toBe(
-      "call `Store.add` from `store.ts` instead: it owns the value",
+      ownedHint(
+        'add a function in `store.ts` that makes the change (e.g. `setItems("first")`), and call it instead',
+        "store.ts",
+        "alias.ts",
+      ),
     );
     const elements = shown(OWNED, findings).filter((one) => one.at === "job.done");
     expect(elements.map((one) => one.notes)).toEqual([
@@ -97,14 +116,25 @@ describe("ownership/state-written-outside-owner: values stated `Owned`", () => {
         "jobs: `jobs` is declared owned: only `store.ts` may change it",
       ],
     ]);
-    expect(elements[0]?.hint).toBe("call `finishAll` from `store.ts` instead: it owns the value");
+    expect(elements[0]?.hint).toBe(
+      ownedHint(
+        // `finishAll` sets `done` to `true`: not the same value, so it is not named.
+        "add a function in `store.ts` that makes the change (e.g. `setDone(false)`), and call it instead",
+        "store.ts",
+        "alias.ts",
+      ),
+    );
     expect(find(findings, "passes.ts", "settings").notes).toEqual([
       "target.theme: `apply` changes its argument",
       SETTINGS_STATED,
     ]);
     // When the owner has no function for it, the example of one.
     expect(find(findings, "methods.ts", "registry.set").hint).toBe(
-      'add a function in `mine.ts` that makes the change (e.g. `setRegistry("a", 1)`), and call it instead',
+      ownedHint(
+        'add a function in `mine.ts` that makes the change (e.g. `setRegistry("a", 1)`), and call it instead',
+        "mine.ts",
+        "methods.ts",
+      ),
     );
   });
 
@@ -125,11 +155,17 @@ describe("ownership/state-written-outside-owner: values stated `Owned`", () => {
     };
     const again = check(OWNED, quiet);
     expect(lines(again)).toEqual(lines(findings));
+    // A place the rule cannot follow is "not checked", never an error: the guarantee lists it.
+    const problems = again.filter((finding) => finding.kind === "problem");
     expect(
-      again.every(
-        (finding) =>
-          finding.kind === "problem" && finding.severity === "error" && finding.fixes.length === 0,
-      ),
+      problems.every((finding) => finding.severity === "error" && finding.fixes.length === 0),
+    ).toBe(true);
+    expect(
+      again
+        .filter((finding) => finding.kind !== "problem")
+        .every(
+          (finding) => finding.kind === "unknown" && finding.message.startsWith("not checked: "),
+        ),
     ).toBe(true);
   });
 
@@ -142,5 +178,22 @@ describe("ownership/state-written-outside-owner: values stated `Owned`", () => {
 
   it("gives the same findings in the same order on a second run", () => {
     expect(checkFixture(OWNED, [ownership()]).findings).toEqual(findings);
+  });
+});
+
+describe("ownership/state-written-outside-owner: an owner's function for another property", () => {
+  const OTHER = fixture("state-written-outside-owner/owned-other-prop");
+
+  it("does not name `signOut` for a change to `tags`; it offers a new function and `owners`", () => {
+    const [one, ...rest] = shown(OTHER, check(OTHER));
+    expect(rest).toEqual([]);
+    expect(one?.hint).toBe(
+      ownedHint(
+        "add a function in `session.ts` that makes the change (e.g. `sortTags()`), and call it instead",
+        "session.ts",
+        "other.ts",
+      ),
+    );
+    expect(one?.hint).not.toContain("signOut");
   });
 });

@@ -282,7 +282,7 @@ function declaredIn(container: ts.Node): Map<string, ts.Node> {
 }
 
 /** The declaration of `name` seen from `from`, looking out to `fn` and no further. */
-function localDeclaration(name: string, from: ts.Node, fn: ts.Node): ts.Node | undefined {
+export function localDeclaration(name: string, from: ts.Node, fn: ts.Node): ts.Node | undefined {
   let current: ts.Node = from.parent;
   for (;;) {
     const found = declaredIn(current).get(name);

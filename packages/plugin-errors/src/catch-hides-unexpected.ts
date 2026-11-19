@@ -52,7 +52,7 @@ export async function submit(order: string, show: (text: string) => void): Promi
 }
 \`\`\`
 
-A quick fix adds \`else { throw e; }\` to an \`if\` chain. For a \`switch (true)\`, add \`default: throw e;\` yourself; the message shows it. Wrapping the error with \`{ cause: e }\`, or any statement after the chain, counts too, since it runs for every error.
+A quick fix adds \`else { throw e; }\` to an \`if\` chain. The message offers three readings: rethrow, handle the rest in the last branch, or, when dropping them is on purpose, an \`else\` (or \`default:\`) with a comment that says why: a branch with only a comment is taken as the drop, stated, and reported no more. For a \`switch (true)\`, add \`default: throw e;\` yourself; the message shows it. Wrapping the error with \`{ cause: e }\`, or any statement after the chain, counts too, since it runs for every error.
 
 ## Why it matters
 
@@ -136,6 +136,8 @@ type Dispatch = {
   classes: readonly string[];
   /** The statements of the last `else` or `default`: what runs for the rest; empty when none does. */
   rest: readonly ts.Statement[];
+  /** The last `else` block or `default` clause, when it holds no statement. */
+  emptyBranch: ts.Block | ts.DefaultClause | undefined;
   /** The last link, when it is an `if` chain that ends without any `else`. */
   openChainEnd: ts.IfStatement | undefined;
   kind: "if" | "switch";
@@ -157,6 +159,12 @@ function dispatchOf(
       start: statement,
       classes,
       rest: realStatements(end.elseStatement),
+      emptyBranch:
+        end.elseStatement !== undefined &&
+        ts.isBlock(end.elseStatement) &&
+        realStatements(end.elseStatement).length === 0
+          ? end.elseStatement
+          : undefined,
       openChainEnd: end.elseStatement === undefined ? end : undefined,
       kind: "if",
     };
@@ -172,6 +180,12 @@ function dispatchOf(
       start: statement,
       classes,
       rest: (fallback?.statements ?? []).filter((inner) => !ts.isEmptyStatement(inner)),
+      emptyBranch:
+        fallback !== undefined &&
+        ts.isDefaultClause(fallback) &&
+        fallback.statements.every((inner) => ts.isEmptyStatement(inner))
+          ? fallback
+          : undefined,
       openChainEnd: undefined,
       kind: "switch",
     };
@@ -197,17 +211,69 @@ function headline(classes: readonly string[]): string {
   return fitted((cut) => `\`catch\` ignores errors other than ${codeList(classes, cut)}`);
 }
 
+/** The three readings of a chain with no branch for the rest: rethrow, handle, or drop on purpose. */
 function hint(dispatch: Dispatch, variable: string): string {
   if (dispatch.kind === "switch") {
-    return withExample(
-      "end the switch with a case that rethrows the rest, so they reach the caller:",
-      ["default:", `  throw ${variable};`],
-    );
+    return [
+      "one of",
+      withExample("- end the switch with a case that rethrows the rest, so they reach the caller", [
+        "default:",
+        `  throw ${variable};`,
+      ]),
+      withExample("- or handle the rest in a `default` case, where the `…` is", [
+        "default:",
+        "  …",
+      ]),
+      withExample("- or, if dropping the rest is on purpose, state it in a `default` case", [
+        "default:",
+        "  // other errors are dropped because …",
+      ]),
+    ].join("\n");
   }
-  return withExample(
-    "end the chain with a branch that rethrows the rest, so they reach the caller:",
-    ["} else {", `  throw ${variable};`, "}"],
-  );
+  return [
+    "one of",
+    withExample("- end the chain with a branch that rethrows the rest, so they reach the caller", [
+      "} else {",
+      `  throw ${variable};`,
+      "}",
+    ]),
+    withExample("- or handle the rest in an `else`, where the `…` is", ["} else {", "  …", "}"]),
+    withExample("- or, if dropping the rest is on purpose, state it in an `else` with a comment", [
+      "} else {",
+      "  // other errors are dropped because …",
+      "}",
+    ]),
+  ].join("\n");
+}
+
+/** The hint for a last branch that does not use the error, when `restUsesError` asks it to. */
+function restHint(variable: string): string {
+  return [
+    "one of",
+    withExample("- rethrow the rest, so they reach the caller", [`throw ${variable};`]),
+    `- or use \`${variable}\` in the branch that handles the rest: report it, record it or wrap it`,
+    "- or, if that branch is right for every other error, set the rule's `restUsesError` option to `false`",
+  ].join("\n");
+}
+
+/**
+ * Whether the last branch is empty on purpose: an `else { … }` or a `default:` with no statement,
+ * and a comment that says why. A branch with nothing in it at all is a forgotten one.
+ */
+function dropsOnPurpose(dispatch: Dispatch, sourceFile: ts.SourceFile): boolean {
+  const branch = dispatch.emptyBranch;
+  if (branch === undefined) return false;
+  let inside: string;
+  if (ts.isBlock(branch)) {
+    inside = branch.getText(sourceFile).slice(1, -1);
+  } else {
+    // A comment after `default:` belongs to what follows it: read up to the next clause or the `}`.
+    const clauses = branch.parent.clauses;
+    const next = clauses[clauses.indexOf(branch) + 1];
+    const end = next === undefined ? branch.parent.getEnd() - 1 : next.getStart(sourceFile);
+    inside = sourceFile.text.slice(branch.getStart(sourceFile), end).replace(/^default\s*:/, "");
+  }
+  return /\/\/|\/\*/.test(inside);
 }
 
 /** The whitespace at the start of the line that holds `position`. */
@@ -256,14 +322,14 @@ function checkCatch(clause: ts.CatchClause, ctx: FileContext<Settings>): void {
   // A branch for the rest, or any statement that runs for every error after the chain.
   const after = statements.slice(index + 1).filter((statement) => !ts.isEmptyStatement(statement));
   const rest = [...dispatch.rest, ...after];
+  // An empty last branch with a comment is the drop, stated: nothing is guessed.
+  if (rest.length === 0 && dropsOnPurpose(dispatch, ctx.sourceFile)) return;
   if (rest.length > 0) {
     if (!ctx.options.restUsesError || mentions(rest, variable)) return;
     ctx.report({
       node: dispatch.start.getFirstToken(ctx.sourceFile) ?? dispatch.start,
       message: ignoringHeadline(classes, variable),
-      hint: withExample("rethrow the rest, or pass the error on where you handle it:", [
-        `throw ${variable};`,
-      ]),
+      hint: restHint(variable),
     });
     return;
   }

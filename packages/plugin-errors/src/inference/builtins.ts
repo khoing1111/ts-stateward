@@ -69,6 +69,27 @@ export const THROWING_MEMBERS: ReadonlyMap<string, readonly string[]> = new Map(
   ["JSON.stringify", [TYPE]],
   // A digit count outside 0 to 100.
   ["Number.toFixed", [RANGE]],
+  ["Number.toPrecision", [RANGE]],
+  ["Number.toExponential", [RANGE]],
+  // A radix outside 2 to 36 (with no radix it cannot throw).
+  ["Number.toString", [RANGE]],
+  // A name or value that is not a valid header, or headers that cannot be changed.
+  ["Headers.set", [TYPE]],
+  ["Headers.append", [TYPE]],
+]);
+
+/**
+ * Methods of the platform's interfaces, as `<interface>.<method>`, that return a promise which
+ * can reject. `Response.json()` rejects with a `SyntaxError` for a body that is not JSON; every
+ * way to read a body rejects with a `TypeError` when the body was already read or the connection
+ * fails while it is read.
+ */
+export const REJECTING_MEMBERS: ReadonlyMap<string, readonly string[]> = new Map([
+  ["Body.json", [SYNTAX, TYPE]],
+  ...["text", "arrayBuffer", "blob", "formData", "bytes"].map((method): [string, string[]] => [
+    `Body.${method}`,
+    [TYPE],
+  ]),
 ]);
 
 /** Global functions that throw synchronously. */

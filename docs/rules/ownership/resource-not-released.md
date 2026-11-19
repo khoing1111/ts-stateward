@@ -36,7 +36,8 @@ error[ownership/resource-not-released]: `stop` from `watchPrices(…)` is never 
   = fix: one of
       - call `stop()` when it is no longer needed
       - or return it, so the caller releases it
-      - or, if it lives as long as the app, say so on the line above: `// stateward-ignore ownership/resource-not-released: lives as long as the app`
+      - or, if it lives as long as the app, say so on the line above; the guarantee then reads not proven, ignored:
+            // stateward-ignore ownership/resource-not-released: lives as long as the app
   = note: `watchPrices` returns a release function (its return type is stated `Release`)
   = note: prices.ts:3: `watchPrices` is stated `Release` here
   = docs: stateward explain ownership/resource-not-released
@@ -59,17 +60,21 @@ A subscription that is never released keeps calling its listener, and a connecti
 
 ## What it does not catch
 
-It checks every value whose release trait is stated (see below), on every way out of the function that holds it: a `return`, a `throw` and a failed `await`. An `await` of a promise that a `facts` line states `neverRejects: true` is not a way out: RTK Query's `cacheEntryRemoved` only resolves, so the release after `await cacheEntryRemoved` in `onCacheEntryAdded` runs. Released means:
+It checks every value whose release trait is stated (see below), on every way out of the function that holds it: a `return`, a `throw` and a failed `await`. For a value stated with the marker, every piece of code between the start and the release is a way out unless it is one of these, which cannot throw or leave (names, literals, reads of members declared as properties (as far as the declared types say: a class that gives an interface's property as a getter is not seen), assignments to local names, comparisons and arithmetic of plain values, `typeof`, `instanceof`, `if`, `switch` and loops over arrays and over a `Map` or `Set`, and the platform's calls that cannot throw on the platform's own types, such as `console.log` or `push` on an array, `String(x)` on a primitive): a call of the project or a package (`JSON.parse(text)`), `new`, `yield`, a getter, an element read further (`items[0].length`) and a labelled `break` that skips the release are ways out, unless a `try` with a `catch` around them, after the start, catches what they throw and the release comes after that `try`. A release in a callback given to a call (`done.then(() => stop())`) is not checked, unless the call always runs it (`setTimeout`, `queueMicrotask`, the executor of `new Promise`). An `await` of a promise that a `facts` line states `neverRejects: true` is not a way out: RTK Query's `cacheEntryRemoved` only resolves, so the release after `await cacheEntryRemoved` in `onCacheEntryAdded` runs. Released means:
 
 - calling it (a release function), calling the stated method, or `using`, `await using` or `[Symbol.dispose]()` (a `Disposable`); a call in `finally` covers every way out;
-- calling it in a function written inside, such as a cleanup or a callback;
-- returning it, or passing it to a parameter typed `Release`: the caller now owns it;
-- storing it in a place the file releases (`this.stop = …` and `this.stop()` in another method), or in a place stated `Owned`, whose module releases it.
+- calling it in a function written inside, such as a cleanup or a callback, on every path of that function;
+- returning it, or passing it to a parameter typed `Release`: the caller now owns it, if that parameter is proven in its function (it releases, hands on or returns it on every way out; a parameter that does not is reported there, and the caller with it);
+- storing it in a place the file releases (`this.stop = …` and `this.stop()` in another method). A place stated `Owned` says who changes it, not that anyone releases it: it is not read as a release.
+
+A release only in a function that nothing calls (`const later = () => stop()`) is not read as a release: the place is not checked, and the guarantee reads "not checked". For a value stated with the marker kept in a module `let` or a field, the file releases it only by a release on every path of a function something can call: a release under an `if` is an error, and one only in a function nothing calls is not checked; a value pushed to a list is released by a loop that releases each item. A release on one branch only (an `if` in the function, or in a cleanup or callback written inside), only inside a loop (`for`, `for…of`, `while`), or only in a `forEach` or `map` callback (zero times for an empty list) is not on every way out: an error.
+
+Every reference to a function stated `Release`, and to a parameter typed `Release`, is read or listed as "not checked" at its place (stateward lists each one as the editor's "find all references" does). A call the rule traces, an import and a type are read; the function given as a value (`["a"].map(on)`) or copied to another name, and a call whose result the rule cannot release (a promise of a `Release`, a value taken apart), are not checked. So are a value kept in an instance field (`private stop = watchPrices(…)`), returned from a callback (`[1, 2].map(() => watchPrices(…))`) or from a getter (reading it is not followed), or given to a rest parameter. A function of the project that returns the value with no return type of its own (a function, an object's method, a static method) passes the trait on: a caller that drops its result is an error against the function stated `Release`. The guarantee reads "unused" only when nothing refers to the function.
 
 A place it cannot follow is an error that says why: the value passed to a function whose parameter is not typed `Release`, or stored in an array or an object. It does not report:
 
 - a value started at the top of a module: it lives as long as the program;
-- a value started in a React effect: `react/effect-missing-cleanup` reads the same trait there;
+- a value started in a React effect whose trait the code does not state with the `Release` marker: `react/effect-missing-cleanup` reads it there. A `Release` value started in an effect is proven here: the cleanup the effect returns releases it, or a ref it is stored in that the file releases;
 - a value whose trait nobody states: a function with no marker, no `facts` line and no `Disposable` type.
 
 ## Getting the best from it
@@ -82,7 +87,7 @@ State the trait in the plainest way that fits:
 
 The ownership pack ships facts for Firebase `onSnapshot`, RxJS `Observable.subscribe` (`unsubscribe`), Redux `Store.subscribe`, zustand `StoreApi.subscribe`, and RTK Query's `cacheEntryRemoved` (`neverRejects`); a config line for the same function wins. Each finding's note says where its trait comes from, and `stateward guarantees` lists every source in use.
 
-A value meant to live as long as the app (a store subscription started once at startup) is never released on purpose. At the top of a module it is not reported; started in a function, say so on the line above with the reason: `// stateward-ignore ownership/resource-not-released: lives as long as the app`.
+A value meant to live as long as the app (a store subscription started once at startup) is never released on purpose. At the top of a module it is not reported; started in a function, say so on the line above with the reason: `// stateward-ignore ownership/resource-not-released: lives as long as the app`. The comment hides the finding, but the guarantee reads "not proven: 1 ignored", never proven.
 
 ## Turn it on or off
 
@@ -95,6 +100,6 @@ Options, set as `rules: { "ownership/resource-not-released": ["error", { … }] 
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
-| `ignore` | list of strings | `[]` | Functions whose results are not checked, as the note names them (globs like `Observable.*`). |
+| `ignore` | list of strings | `[]` | Functions whose results are not checked, as the note names them (globs like `Observable.*`); only for the facts stateward ships. A function the code states (a `Release` marker, a `Disposable` type, a `facts` line) is always checked: no setting silences a stated guarantee. |
 
 Core rule: error under `recommended` and `strict`. Group: `ownership/owners`.

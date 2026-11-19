@@ -2,7 +2,11 @@ import { defineRule, matchesName, option } from "@stateward/core";
 import { machinesOf, quoted } from "./machines.js";
 import { at, finalFix, pathNotes } from "./notes.js";
 import { summarizeFile } from "./summary.js";
+import { markFinalReferences } from "./tag-reads.js";
 import { fitted, MAX_HINT, shorten } from "./text.js";
+
+/** A finding against a guarantee the code states (`@final`): an error while the rule is on. */
+const STATED: { readonly stated: true } = { stated: true };
 
 const EXPLAIN = `# reducers/state-cannot-leave
 
@@ -55,9 +59,9 @@ A state nothing leaves is where the user stays for good: a payment that failed w
 
 It reports a state the reducer reaches and never leaves, not marked final (the message shows the path that reaches it); a name in \`@final\` that is not a state of the type (\`@final "payed"\`); and a state in \`@final\` that the reducer does leave, from a branch that checks the state (\`switch (state.status)\`, an \`if\` on it). It does not see:
 
-- a reducer with no \`useReducer\` call and no \`@initial\`;
+- a reducer with no \`useReducer\` call and no \`@initial\` (a state in \`@final\` it leaves is still reported);
 - a way out that depends on data (\`if (state.attempt < 3)\`): both branches count as possible;
-- a final state left by a return that does not check which state it is in: that return counts as leaving every state, so it is not held against \`@final\`;
+- a final state left by a return that does not check which state it is in (the state's tag copied to a variable or destructured, \`switch (true)\`, a helper such as \`isDone(state)\`), or a return whose state cannot be read: it is not held against \`@final\`, and \`stateward guarantees\` lists \`@final\` as "not checked" there;
 - state in \`useState\` or class fields, and nested or parallel states.
 
 ## Getting the best from it
@@ -78,6 +82,43 @@ rules: { "reducers/state-cannot-leave": ["warning", { finalStates: ["done", "can
 \`\`\`
 `;
 
+/**
+ * The ways out of a state nothing leaves: an event that leaves it, marking it final (where the
+ * mark goes depends on what the module already has), and the `finalStates` option for every reducer.
+ */
+function neverLeftHint(input: {
+  tag: string;
+  stateName: string;
+  /** The module's `FINAL_STATES` constant, when it has one. */
+  constName: string | undefined;
+  /** The quick fix writes a new `@final` comment above the type. */
+  created: boolean;
+  /** A quick fix is offered. */
+  fixed: boolean;
+}): string {
+  const { tag, constName, created, fixed } = input;
+  const q = quoted(tag);
+  const quick = fixed ? " (quick fix)" : "";
+  return fitted((cut) =>
+    [
+      "one of",
+      `- handle an event that leaves ${q}, so a case returns another state`,
+      ...(created
+        ? [
+            `- or mark it final, above \`${cut.name(input.stateName)}\`${quick}:`,
+            `    /** @final ${q} */`,
+          ]
+        : [
+            constName !== undefined
+              ? `- or add ${q} to \`${cut.name(constName)}\`${quick}`
+              : `- or add ${q} to \`@final\` on \`${cut.name(input.stateName)}\`${quick}`,
+          ]),
+      `- or, to treat it as final in every reducer, list it under the rule's \`finalStates\` option:`,
+      `    { finalStates: [${q}] }`,
+    ].join("\n"),
+  );
+}
+
 export const stateCannotLeave = defineRule({
   kind: "project",
   meta: {
@@ -88,6 +129,7 @@ export const stateCannotLeave = defineRule({
     tier: "core",
     group: "graph",
     needsJsDoc: true,
+    proves: { tags: ["final"] },
     options: {
       finalStates: option.strings({
         default: [],
@@ -105,12 +147,21 @@ export const stateCannotLeave = defineRule({
     },
     explain: EXPLAIN,
   },
-  summarize: summarizeFile,
+  summarize: (ctx) => {
+    markFinalReferences(ctx);
+    return summarizeFile(ctx);
+  },
   check(summaries, ctx) {
     const wrongNames = new Set<string>();
     for (const machine of machinesOf(summaries)) {
-      if (!machine.active) continue;
+      // A state marked final is checked in every reducer over it, used or not; the rest only in
+      // a reducer that starts somewhere.
       const { reducer } = machine;
+      const againstFinal = {
+        against: [
+          { file: reducer.stateFile, start: reducer.stateDeclared, end: reducer.stateDeclared },
+        ],
+      };
       const { finalConst } = reducer;
       const final = [...(reducer.final?.names ?? []), ...(finalConst?.names ?? [])];
       for (const name of reducer.final?.names ?? []) {
@@ -126,6 +177,8 @@ export const stateCannotLeave = defineRule({
           location: at(reducer.stateFile, reducer.final.at),
           related: [],
           findingKind: "unknown-final",
+          ...againstFinal,
+          ...STATED,
         });
       }
       for (const tag of reducer.tags) {
@@ -162,9 +215,12 @@ export const stateCannotLeave = defineRule({
               },
             ],
             findingKind: "final-left",
+            // Left against `@final`, a stated guarantee: an error, as `guarantees` reads it.
+            ...(reducer.final?.names.includes(tag) === true ? { ...againstFinal, ...STATED } : {}),
           });
           continue;
         }
+        if (!machine.active) continue;
         if (!machine.reached.has(tag) || outgoing.length > 0) continue;
         if (matchesName(tag, ctx.options.finalStates)) continue;
         const fix = finalFix(machine, tag);
@@ -172,13 +228,13 @@ export const stateCannotLeave = defineRule({
           message: fitted(
             (cut) => `\`${cut.name(reducer.name)}\` reaches ${quoted(tag)} but never leaves it`,
           ),
-          hint: fitted((cut) =>
-            fix === undefined
-              ? finalConst === null
-                ? `handle an event that leaves ${quoted(tag)}, or add it to \`@final\` on \`${cut.name(reducer.stateName)}\``
-                : `handle an event that leaves ${quoted(tag)}, or add it to \`${cut.name(finalConst.name)}\``
-              : `handle an event that leaves ${quoted(tag)}, or mark it final (quick fix available)`,
-          ),
+          hint: neverLeftHint({
+            tag,
+            stateName: reducer.stateName,
+            constName: finalConst?.name,
+            created: fix !== undefined && finalConst === null && reducer.finalFix?.create === true,
+            fixed: fix !== undefined,
+          }),
           location: at(machine.file, reducer.at),
           related: pathNotes(machine, tag),
           fixes: fix === undefined ? [] : [fix],

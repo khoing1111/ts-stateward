@@ -14,7 +14,7 @@ import { createChecker, parseConfig } from "@stateward/core";
 import type { Finding, FixForm, TextEdit } from "@stateward/core";
 import { typeErrors } from "@stateward/core/testing";
 import { reactContext } from "../src/index.js";
-import { GUARANTEES_TEXT } from "../src/provider-missing/declare-fix.js";
+import { GUARANTEES_TEXT, HELPER_TEXT } from "../src/provider-missing/declare-fix.js";
 
 const SLOW = 300_000;
 const FIXTURE = fileURLToPath(new URL("./fixtures/declare-guarded", import.meta.url));
@@ -122,6 +122,37 @@ describe("react-context: stating a guarded context required", () => {
       expect(error?.kind === "problem" ? error.related.at(-1)?.message : "").toBe(
         "`AuthCtx` is stated required: every reader must be proven under its Provider",
       );
+    },
+  );
+
+  it(
+    "adds the helper to a guarantees file that holds other markers and imports Context, and it compiles",
+    { timeout: SLOW },
+    () => {
+      const existing = [
+        'import type { Context } from "react";',
+        "",
+        'export type Stable<T = unknown> = T & { readonly "__guarantee:stable"?: true };',
+        "export type Holder = Context<unknown>;",
+        "",
+      ].join("\n");
+      writeFileSync(src("guarantees.ts"), existing);
+      const finding = reviewed().find((one) => one.ruleId === "react-context/provider-missing");
+      const fix = onlyFix(finding);
+      // Not "no automatic fix": the form that adds the helper compiles.
+      expect(finding?.hint).not.toContain("no automatic fix");
+      expect(fix.edits.some((edit) => edit.newText === `${HELPER_TEXT}\n`)).toBe(true);
+      apply(fix.edits);
+      const written = readFileSync(src("guarantees.ts"), "utf8");
+      expect(written).toBe(`${HELPER_TEXT}\n${existing}`);
+      expect(written.match(/import .* from "react"/g)).toHaveLength(2);
+      expect(readFileSync(src("contexts.ts"), "utf8")).toContain(
+        "export const AuthCtx = requiredContext<User>();",
+      );
+      expect(typeErrors(dir)).toBe("");
+      expect(summary(reviewed())).toEqual([
+        "react-context/provider-missing src/main.tsx: `<Profile>` is rendered without `AuthCtx.Provider`",
+      ]);
     },
   );
 

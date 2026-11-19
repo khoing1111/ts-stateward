@@ -1,7 +1,8 @@
 import ts from "@stateward/core/typescript";
 import { defineRule } from "@stateward/core";
 import type { FileContext, Fix } from "@stateward/core";
-import { example, resultShapeOf, shorten, type ResultShape } from "./result-type.js";
+import { example, freeName, resultShapeOf, shorten, type ResultShape } from "./result-type.js";
+import { oneLine } from "./text.js";
 
 const EXPLAIN = `# errors/result-unchecked
 
@@ -38,7 +39,9 @@ export async function submit(values: string): Promise<void> {
 }
 \`\`\`
 
-For an RTK Query trigger, add \`.unwrap()\` so a failure throws: \`await deletePlan(id).unwrap()\`. Where the result is dropped, a quick fix adds it.
+For an RTK Query trigger, add \`.unwrap()\` so a failure throws: \`await deletePlan(id).unwrap()\`. Where the result is dropped, a quick fix adds it; outside a \`try\` with a \`catch\` the thrown failure needs one around it, or a caller that catches. The message names three readings: the \`.unwrap()\`, a check (\`if ("error" in result) throw result.error;\` inside a \`try\`, so the \`catch\` and its rollback run; a stop outside one), and an \`else\` for the success path when the lines after the call should run either way.
+
+Where the check is there and the code goes on after it, the message offers two readings: end the branch that handles the failure (a \`return\` in a function that returns nothing, a \`throw\` of the error inside a \`try\` with a \`catch\` so its rollback runs, and in words where the function returns a value), or an \`else\` for the success path when the lines after the \`if\` should run either way. Where only \`data\` is taken out of the result, there is nothing to check: the message says to keep the whole result, check it, then take \`data\` out of it.
 
 ## Why it matters
 
@@ -92,6 +95,10 @@ type AliasKind = "error" | "data" | "ok";
 type Tracked = {
   readonly whole: string | undefined;
   readonly aliases: ReadonlyMap<string, AliasKind>;
+  /** The local name bound to the result's `error` property (`const { error } = …`), if any. */
+  readonly errorName?: string;
+  /** The binding pattern a destructured result was stored in, as written. */
+  readonly pattern?: string;
   readonly callee: string;
   readonly kind: Kind;
 };
@@ -144,22 +151,94 @@ function callText(call: ts.CallExpression, ctx: FileContext): string {
     : whole;
 }
 
-/** The line that returns when the call failed, in the result's own shape and names. */
-function checkLine(tracked: Tracked): string {
-  const errorAlias = [...tracked.aliases].find(([, kind]) => kind === "error")?.[0];
-  if (tracked.whole === undefined && errorAlias !== undefined) return `if (${errorAlias}) return;`;
+/** What the code does when the call failed: `return;` fits, a `throw` reaches the `catch`, or neither is known. */
+type Exit = "return" | "throw" | "other";
+
+/** Whether the function returns a value anywhere in its own body (not in a nested function). */
+function returnsValue(body: ts.Node): boolean {
+  return inBody(body, (one) => ts.isReturnStatement(one) && one.expression !== undefined);
+}
+
+/**
+ * How the code stops where `node` is: inside a `try` with a `catch` it throws (a `return` would
+ * skip the `catch` and its rollback); in a function that returns nothing it returns; otherwise
+ * what to return depends on the function, which the example leaves to its writer.
+ */
+function exitOf(node: ts.Node, ctx: FileContext): Exit {
+  for (let child = node; !ts.isSourceFile(child); child = child.parent) {
+    if (isFunctionLike(child)) break;
+    const parent = child.parent;
+    if (
+      ts.isTryStatement(parent) &&
+      parent.tryBlock === child &&
+      parent.catchClause !== undefined
+    ) {
+      return "throw";
+    }
+  }
+  const fn = ts.findAncestor(node.parent, ts.isFunctionLike);
+  if (fn === undefined) return "other";
+  if (fn.type !== undefined) {
+    const returnType = fn.type.getText(ctx.sourceFile).replace(/\s+/g, "");
+    return returnType === "void" || returnType === "Promise<void>" ? "return" : "other";
+  }
+  const body =
+    ts.isFunctionDeclaration(fn) ||
+    ts.isFunctionExpression(fn) ||
+    ts.isArrowFunction(fn) ||
+    ts.isMethodDeclaration(fn)
+      ? fn.body
+      : undefined;
+  return body !== undefined && ts.isBlock(body) && !returnsValue(body) ? "return" : "other";
+}
+
+/** What ends the branch that handles a failure, as one statement, or `{ … }` when it cannot be written. */
+function stopStatement(exit: Exit, error: string | undefined): string {
+  if (exit === "return") return "return;";
+  return exit === "throw" && error !== undefined ? `throw ${error};` : "{ … }";
+}
+
+/** The condition that is true when the call failed, in the result's own shape and names, and the error it holds. */
+function failureTest(tracked: Tracked): { test: string; error: string | undefined } {
+  const errorAlias =
+    tracked.errorName ?? [...tracked.aliases].find(([, kind]) => kind === "error")?.[0];
+  if (tracked.whole === undefined && errorAlias !== undefined) {
+    return { test: errorAlias, error: tracked.errorName };
+  }
   const name = tracked.whole ?? "result";
   switch (tracked.kind) {
     case "trigger":
-      return `if ("error" in ${name}) return;`;
+      return { test: `"error" in ${name}`, error: `${name}.error` };
     case "ok":
-      return `if (!${name}.ok) return;`;
+      return { test: `!${name}.ok`, error: `${name}.error` };
     case "success":
-      return `if (!${name}.success) return;`;
+      return { test: `!${name}.success`, error: `${name}.error` };
     case "isErr":
-      return `if (${name}.isErr()) return;`;
+      return { test: `${name}.isErr()`, error: undefined };
     default: {
       const unreachable: never = tracked.kind;
+      return unreachable;
+    }
+  }
+}
+
+/** The line that stops when the call failed, in the result's own shape and names. */
+function checkLine(tracked: Tracked, exit: Exit): string {
+  const { test, error } = failureTest(tracked);
+  return `if (${test}) ${stopStatement(exit, error)}`;
+}
+
+/** The sentence that says what the check does when the call failed. */
+function stopsWith(exit: Exit): string {
+  switch (exit) {
+    case "return":
+      return "return when it failed";
+    case "throw":
+      return "throw its error when it failed, so the `catch` runs";
+    case "other":
+      return "stop when it failed (return what the function returns, or throw)";
+    default: {
+      const unreachable: never = exit;
       return unreachable;
     }
   }
@@ -453,13 +532,7 @@ function checkTry(statement: ts.TryStatement, ctx: FileContext): void {
       ctx.report({
         node: inner,
         message: `code after the call runs even when \`${calleeText(call, ctx)}(…)\` failed, and the \`catch\` does not`,
-        hint: [
-          'add `.unwrap()` so a failure reaches the `catch` (quick fix), or check `"error" in result` and return:',
-          example([
-            `const result = await ${callText(call, ctx)};`,
-            `if ("error" in result) return;`,
-          ]),
-        ].join("\n"),
+        hint: triggerHint(inner, call, "catch", ctx),
         fixes: [unwrapFix(call, "Add `.unwrap()` so a failure reaches the `catch`", ctx)],
       });
     }
@@ -470,13 +543,41 @@ function checkTry(statement: ts.TryStatement, ctx: FileContext): void {
       // The statement, as `errors/result-ignored` reports it, so that rule can yield to this one.
       node: inner,
       message: `\`catch\` never runs for \`${calleeText(call, ctx)}(…)\`: it does not throw when it fails`,
-      hint: [
-        'add `.unwrap()` (quick fix), or check `"error" in result` and return, so the code after it does not run on failure:',
-        example([`const result = await ${callText(call, ctx)};`, `if ("error" in result) return;`]),
-      ].join("\n"),
+      hint: triggerHint(inner, call, "catch", ctx),
       fixes: [unwrapFix(call, "Add `.unwrap()` so a failure reaches the `catch`", ctx)],
     });
   }
+}
+
+/** The three readings of a trigger whose failure is not checked: stop, throw it, or go on on purpose. */
+function triggerHint(
+  statement: ts.Statement,
+  call: ts.CallExpression,
+  where: "catch" | "outside",
+  ctx: FileContext,
+): string {
+  const fn = ts.findAncestor(statement.parent, ts.isFunctionLike);
+  const name = freeName(fn ?? ctx.sourceFile, ctx.sourceFile, ["result", "outcome", "response"]);
+  const stored = `const ${name} = await ${callText(call, ctx)};`;
+  const stop = stopStatement(where === "catch" ? "throw" : exitOf(statement, ctx), `${name}.error`);
+  const ways =
+    where === "catch"
+      ? [
+          "- add `.unwrap()` so a failure throws into the `catch` (quick fix)",
+          "- or check the result and throw its error into the `catch`",
+          example([stored, `if ("error" in ${name}) ${stop}`]),
+        ]
+      : [
+          "- add `.unwrap()` so a failure throws (quick fix), and put the call in a `try` with a `catch`: nothing else catches it",
+          "- or check the result, and stop there",
+          example([stored, `if ("error" in ${name}) ${stop}`]),
+        ];
+  return [
+    "one of",
+    ...ways,
+    "- or, if the lines after it should run either way, say so with an `else` for the success path",
+    example([`if ("error" in ${name}) { … } else { … }`]),
+  ].join("\n");
 }
 
 function unwrapFix(call: ts.CallExpression, title: string, ctx: FileContext): Fix {
@@ -552,10 +653,7 @@ function checkDropped(statement: ts.ExpressionStatement, ctx: FileContext): void
   ctx.report({
     node: statement,
     message: `code after the call runs even when \`${calleeText(call, ctx)}(…)\` failed`,
-    hint: [
-      'add `.unwrap()` so a failure throws (quick fix), or check `"error" in result` and return:',
-      example([`const result = await ${callText(call, ctx)};`, `if ("error" in result) return;`]),
-    ].join("\n"),
+    hint: triggerHint(statement, call, "outside", ctx),
     fixes: [unwrapFix(call, "Add `.unwrap()` so a failure stops the function", ctx)],
   });
 }
@@ -573,14 +671,25 @@ function trackedOf(
   }
   if (!ts.isObjectBindingPattern(declaration.name)) return undefined;
   const aliases = new Map<string, AliasKind>();
+  let errorName: string | undefined;
   for (const element of declaration.name.elements) {
     if (element.dotDotDotToken !== undefined || !ts.isIdentifier(element.name)) return undefined;
     const key = element.propertyName ?? element.name;
     if (!ts.isIdentifier(key)) return undefined;
     const alias = ALIAS_KINDS.get(key.text);
     if (alias !== undefined) aliases.set(element.name.text, alias);
+    if (key.text === "error") errorName = element.name.text;
   }
-  return aliases.size === 0 ? undefined : { whole: undefined, aliases, callee, kind };
+  return aliases.size === 0
+    ? undefined
+    : {
+        whole: undefined,
+        aliases,
+        ...(errorName === undefined ? {} : { errorName }),
+        pattern: declaration.name.getText(),
+        callee,
+        kind,
+      };
 }
 
 function goesOnHeadline(tracked: Tracked, after: "statement" | "if"): string {
@@ -668,6 +777,52 @@ function storedOutcome(rest: readonly ts.Statement[], tracked: Tracked): StoredO
   return { kind: "none" };
 }
 
+/** Whether `error` of the whole result can be read inside the branch of `test`: the test narrows the result. */
+function narrowsWhole(test: ts.Expression, tracked: Tracked): boolean {
+  const code = strip(test);
+  if (ts.isPrefixUnaryExpression(code) && code.operator === ts.SyntaxKind.ExclamationToken) {
+    return narrowsWhole(code.operand, tracked);
+  }
+  if (ts.isBinaryExpression(code)) {
+    const operator = code.operatorToken.kind;
+    if (operator === ts.SyntaxKind.InKeyword) return true;
+    if (operator === ts.SyntaxKind.AmpersandAmpersandToken) return narrowsWhole(code.left, tracked);
+    return false;
+  }
+  return ts.isPropertyAccessExpression(code) && isWhole(code.expression, tracked);
+}
+
+/** The two readings of an `if` that reads the failure and goes on: end the branch, or say the lines run either way. */
+function goesOnHint(test: ts.Expression, tracked: Tracked, ctx: FileContext): string {
+  const exit = exitOf(test, ctx);
+  const condition = shorten(test.getText(ctx.sourceFile), CONDITION_MAX);
+  const error =
+    tracked.whole === undefined
+      ? tracked.errorName
+      : narrowsWhole(test, tracked)
+        ? `${tracked.whole}.error`
+        : undefined;
+  const stop = stopStatement(exit, error);
+  const how =
+    exit === "return"
+      ? "with `return`"
+      : exit === "throw"
+        ? "by throwing its error, so the `catch` and its rollback run"
+        : "with a `return` of what the function returns, or a `throw`";
+  return [
+    "one of",
+    `- end the branch that handles the failure ${how}`,
+    example([
+      `if (${condition}) {`,
+      "  // … what it shows now",
+      ...(stop === "{ … }" ? [] : [`  ${stop}`]),
+      "}",
+    ]),
+    "- or, if the lines after the `if` should run either way, say so with an `else` for the success path",
+    example([`if (${condition}) { … } else { … }`]),
+  ].join("\n");
+}
+
 /** Case (b): reports what `storedOutcome` found. */
 function followStored(
   statement: ts.VariableStatement,
@@ -685,7 +840,7 @@ function followStored(
       ctx.unknown({
         node: outcome.test,
         message: `not checked: whether the \`if\` tests that \`${tracked.callee}(…)\` failed: it does not test the result itself`,
-        hint: `test the result itself, as in \`${checkLine(tracked)}\`, so the check can be followed`,
+        hint: `test the result itself, as in \`${checkLine(tracked, exitOf(outcome.test, ctx))}\`, so the check can be followed`,
       });
       return;
     case "goes-on": {
@@ -695,15 +850,7 @@ function followStored(
       ctx.report({
         node: outcome.test,
         message: goesOnHeadline(tracked, "if"),
-        hint: [
-          "end the branch that handles the failure with `return` (or `throw`):",
-          example([
-            `if (${shorten(outcome.test.getText(ctx.sourceFile), CONDITION_MAX)}) {`,
-            "  // … what it shows now",
-            "  return;",
-            "}",
-          ]),
-        ].join("\n"),
+        hint: goesOnHint(outcome.test, tracked, ctx),
       });
       return;
     }
@@ -713,12 +860,38 @@ function followStored(
         tracked.whole === undefined
           ? ([...tracked.aliases].find(([, kind]) => kind === "data")?.[0] ?? "data")
           : `${tracked.whole}.data`;
+      const exit = exitOf(statement, ctx);
+      const hasError =
+        tracked.whole !== undefined ||
+        [...tracked.aliases.values()].some((kind) => kind === "error");
+      if (hasError) {
+        ctx.report({
+          node: statement,
+          message: goesOnHeadline(tracked, "statement"),
+          hint: [
+            `check that it worked before reading \`${data}\`, and ${stopsWith(exit)}:`,
+            example([checkLine(tracked, exit)]),
+          ].join("\n"),
+        });
+        return;
+      }
+      // Only `data` was taken out: there is nothing to test, so the whole result is kept first.
+      const name = freeName(
+        ts.findAncestor(statement.parent, ts.isFunctionLike) ?? ctx.sourceFile,
+        ctx.sourceFile,
+        ["result", "outcome", "response"],
+      );
+      const pattern = tracked.pattern === undefined ? "{ data }" : oneLine(tracked.pattern);
       ctx.report({
         node: statement,
         message: goesOnHeadline(tracked, "statement"),
         hint: [
-          `check that it worked before reading \`${data}\`, and return when it failed:`,
-          example([checkLine(tracked)]),
+          `keep the whole result and check it before reading \`${data}\`, and ${stopsWith(exit)}:`,
+          example([
+            `const ${name} = await ${callText(call, ctx)};`,
+            checkLine({ ...tracked, whole: name }, exit),
+            `const ${pattern} = ${name};`,
+          ]),
         ].join("\n"),
       });
       return;

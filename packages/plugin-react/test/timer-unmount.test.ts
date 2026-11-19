@@ -8,8 +8,16 @@ const RULE = "react/timer-runs-after-unmount";
 const all = shown(TIMERS, check(TIMERS, {}, [react()]));
 const ofRule = (rule: string): Shown[] => all.filter((finding) => finding.rule === rule);
 
-const quickFix = (hook: string, clear: string, ref: string): string =>
-  `add an effect that clears it on unmount: \`${hook}(() => () => ${clear}(${ref}.current), [])\` (quick fix)`;
+const IGNORE =
+  "- or if it should still run after the component is gone, say so on the line above the timer with `// stateward-ignore react/timer-runs-after-unmount: <why>`";
+
+const quickFix = (effect: readonly string[]): string =>
+  [
+    "one of",
+    "- add an effect that clears it on unmount, after the ref's declaration (quick fix):",
+    ...effect.map((line) => `    ${line}`),
+    IGNORE,
+  ].join("\n");
 
 describe("react/timer-runs-after-unmount", () => {
   it("names the lasting action of a timer kept in a ref that no unmount cleanup clears", () => {
@@ -20,10 +28,14 @@ describe("react/timer-runs-after-unmount", () => {
         file: "Frame.tsx",
         at: "requestAnimationFrame(function step() {\n      setX(to);\n      last.current = to;\n    })",
         message: "`frame` can still write `last.current` after `Follower` unmounts",
-        hint: quickFix("useEffect", "cancelAnimationFrame", "frame"),
+        hint: quickFix([
+          "useEffect(() => () => {",
+          "  if (frame.current !== undefined) cancelAnimationFrame(frame.current);",
+          "}, []);",
+        ]),
         notes: [],
         fixes: [
-          "Frame.tsx@25: , useEffect | Frame.tsx@243: \n  useEffect(() => () => cancelAnimationFrame(frame.current), []);",
+          "Frame.tsx@25: , useEffect | Frame.tsx@243: \n  useEffect(() => () => {\n    if (frame.current !== undefined) cancelAnimationFrame(frame.current);\n  }, []);",
         ],
       },
       {
@@ -32,7 +44,7 @@ describe("react/timer-runs-after-unmount", () => {
         file: "HoverChip.tsx",
         at: "window.setTimeout(() => {\n      setOpen(false);\n      onClose();\n    }, 150)",
         message: "`closeTimer` can still run `onClose(…)` after `HoverChip` unmounts",
-        hint: quickFix("useEffect", "clearTimeout", "closeTimer"),
+        hint: quickFix(["useEffect(() => () => clearTimeout(closeTimer.current), []);"]),
         notes: [],
         fixes: [
           "HoverChip.tsx@25: , useEffect | HoverChip.tsx@328: \n  useEffect(() => () => clearTimeout(closeTimer.current), []);",
@@ -44,7 +56,7 @@ describe("react/timer-runs-after-unmount", () => {
         file: "Interval.tsx",
         at: 'window.setInterval(() => {\n      setTicks((current) => current + 1);\n      store.dispatch({ type: "tick" });\n    }, 1000)',
         message: "`ticker` can still run `store.dispatch(…)` after `Ticker` unmounts",
-        hint: quickFix("useEffect", "clearInterval", "ticker"),
+        hint: quickFix(["useEffect(() => () => clearInterval(ticker.current), []);"]),
         notes: [],
         fixes: ["Interval.tsx@299: \n  useEffect(() => () => clearInterval(ticker.current), []);"],
       },
@@ -54,7 +66,7 @@ describe("react/timer-runs-after-unmount", () => {
         file: "Popover.tsx",
         at: "setTimeout(hide, 300)",
         message: "`hideTimer` can still run `layer.release(…)` after `Popover` unmounts",
-        hint: quickFix("React.useEffect", "clearTimeout", "hideTimer"),
+        hint: quickFix(["React.useEffect(() => () => clearTimeout(hideTimer.current), []);"]),
         notes: [],
         fixes: [
           "Popover.tsx@427: \n  React.useEffect(() => () => clearTimeout(hideTimer.current), []);",
@@ -66,7 +78,7 @@ describe("react/timer-runs-after-unmount", () => {
         file: "RailMenu.tsx",
         at: "window.setTimeout(() => navigate(to), 200)",
         message: "`goTimer` can still run `navigate(…)` after `RailMenu` unmounts",
-        hint: quickFix("useEffect", "clearTimeout", "goTimer"),
+        hint: quickFix(["useEffect(() => () => clearTimeout(goTimer.current), []);"]),
         notes: [],
         fixes: [
           "RailMenu.tsx@25: , useEffect | RailMenu.tsx@295: \n  useEffect(() => () => clearTimeout(goTimer.current), []);",
@@ -83,8 +95,13 @@ describe("react/timer-runs-after-unmount", () => {
         file: "Cleared.tsx",
         at: "window.setTimeout(onClose, 150)",
         message:
-          "not checked: whether `closeTimer` is cleared on unmount: its cleanup is not in the component",
-        hint: "clear it in an effect cleanup written in the component (`clearTimeout(ref.current)`), so it can be checked",
+          "not checked: whether `closeTimer` is cleared on unmount: its cleanup hands it to `stopAll`",
+        hint: [
+          "one of",
+          "- clear it in a cleanup written in an effect itself, so it can be checked:",
+          "    useEffect(() => () => clearTimeout(closeTimer.current), []);",
+          IGNORE,
+        ].join("\n"),
         notes: [],
         fixes: [],
       },

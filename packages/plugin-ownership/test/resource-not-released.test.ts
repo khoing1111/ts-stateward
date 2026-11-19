@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -35,24 +35,24 @@ afterAll(() => {
 
 type Shown = { at: string; message: string; hint: string; notes: string[] };
 
-function shown(findings: readonly Finding[]): Shown[] {
+function shown(findings: readonly Finding[], root = dir): Shown[] {
   return findings
     .filter((finding) => finding.ruleId === RULE)
     .map((finding) => ({
-      at: path.relative(dir, finding.location.file),
+      at: path.relative(root, finding.location.file),
       message: finding.message,
       hint: finding.hint,
       notes: finding.kind === "problem" ? finding.related.map((note) => note.message) : [],
     }));
 }
 
-function check(facts: PackageFactsConfig = {}): readonly Finding[] {
+function check(facts: PackageFactsConfig = {}, root = dir): readonly Finding[] {
   const parsed = parseConfig(
     { plugins: [ownership()], preset: "recommended", rules: OFF, facts },
-    dir,
+    root,
   );
   if (!parsed.ok) throw new Error(parsed.errors.join("\n"));
-  const checker = createChecker({ config: parsed.value, cwd: dir, cache: false });
+  const checker = createChecker({ config: parsed.value, cwd: root, cache: false });
   const { findings } = checker.check();
   expectMessageStandard(findings);
   return findings;
@@ -61,7 +61,7 @@ function check(facts: PackageFactsConfig = {}): readonly Finding[] {
 const PRICES = "`watchPrices` returns a release function (its return type is stated `Release`)";
 const STATED = "`watchPrices` is stated `Release` here";
 const NEVER = (name: string) =>
-  `one of\n- call \`${name}()\` when it is no longer needed\n- or return it, so the caller releases it\n- or, if it lives as long as the app, say so on the line above: \`// stateward-ignore ownership/resource-not-released: lives as long as the app\``;
+  `one of\n- call \`${name}()\` when it is no longer needed\n- or return it, so the caller releases it\n- or, if it lives as long as the app, say so on the line above; the guarantee then reads not proven, ignored:\n    // stateward-ignore ownership/resource-not-released: lives as long as the app`;
 
 describe(RULE, { timeout: 60_000 }, () => {
   it("compiles", () => {
@@ -73,7 +73,7 @@ describe(RULE, { timeout: 60_000 }, () => {
       {
         at: "src/flagged.ts",
         message: "the result of `watchPrices(…)` is never released",
-        hint: "one of\n- keep it (`const release = watchPrices(…)`) and call `release()` when it is no longer needed\n- or return it, so the caller releases it\n- or, if it lives as long as the app, say so on the line above: `// stateward-ignore ownership/resource-not-released: lives as long as the app`",
+        hint: "one of\n- keep it (`const release = watchPrices(…)`) and call `release()` when it is no longer needed\n- or return it, so the caller releases it\n- or, if it lives as long as the app, say so on the line above; the guarantee then reads not proven, ignored:\n    // stateward-ignore ownership/resource-not-released: lives as long as the app",
         notes: [PRICES, STATED],
       },
       {
@@ -112,7 +112,7 @@ describe(RULE, { timeout: 60_000 }, () => {
         at: "src/flagged.ts",
         message:
           "the result of `watchPrices(…)` is stored in `this.stop`, which the file never releases",
-        hint: "one of\n- release it where it is stored: `this.stop()`\n- or state `this.stop` `Owned`, so its module releases it",
+        hint: "release it where it is stored: `this.stop?.()`",
         notes: [PRICES, STATED],
       },
       {
@@ -133,7 +133,7 @@ describe(RULE, { timeout: 60_000 }, () => {
         at: "src/flagged.ts",
         message:
           "the result of `createVanilla(() => ({ count: 0 })).subscribe(…)` is never released",
-        hint: "one of\n- keep it (`const release = createVanilla(() => ({ count: 0 })).subscribe(…)`) and call `release()` when it is no longer needed\n- or return it, so the caller releases it\n- or, if it lives as long as the app, say so on the line above: `// stateward-ignore ownership/resource-not-released: lives as long as the app`",
+        hint: "one of\n- keep it (`const release = createVanilla(() => ({ count: 0 })).subscribe(…)`) and call `release()` when it is no longer needed\n- or return it, so the caller releases it\n- or, if it lives as long as the app, say so on the line above; the guarantee then reads not proven, ignored:\n    // stateward-ignore ownership/resource-not-released: lives as long as the app",
         notes: ["`StoreApi.subscribe` returns a release function (stateward's facts for zustand)"],
       },
       {
@@ -155,12 +155,42 @@ describe(RULE, { timeout: 60_000 }, () => {
       {
         at: "src/flagged.ts",
         message: "`connection` from `open(…)` is never released",
-        hint: "one of\n- declare it with `using`, so it is released on every way out:\n    using connection = open(…);\n- or return it, so the caller releases it\n- or, if it lives as long as the app, say so on the line above: `// stateward-ignore ownership/resource-not-released: lives as long as the app`",
+        hint: "one of\n- declare it with `using`, so it is released on every way out:\n    using connection = open(…);\n- or return it, so the caller releases it\n- or, if it lives as long as the app, say so on the line above; the guarantee then reads not proven, ignored:\n    // stateward-ignore ownership/resource-not-released: lives as long as the app",
         notes: [
           "`open` returns a value released with `using` or `[Symbol.dispose]()` (its type, `Disposable`)",
         ],
       },
     ]);
+  });
+
+  it("shows the release of a field that can be empty with `?.`, and does not offer `Owned` as a release", () => {
+    const stored = shown(check()).find((finding) => finding.message.includes("`this.stop`"));
+    const release = /where it is stored: `([^`]+)`/.exec(stored?.hint ?? "")?.[1];
+    expect(release).toBe("this.stop?.()");
+    // `Owned` says who changes a place, not that anyone releases it: the hint no longer offers it.
+    expect(stored?.hint).not.toContain("Owned");
+    expect(stored?.hint).not.toContain("`this.stop()`");
+    const copy = `${dir}-copy`;
+    try {
+      // Released where it is stored, as shown.
+      cpSync(dir, copy, { recursive: true });
+      const file = path.join(copy, "src", "flagged.ts");
+      writeFileSync(
+        file,
+        readFileSync(file, "utf8").replace(
+          `start(): void {`,
+          `end(): void {\n    ${release ?? ""};\n  }\n\n  start(): void {`,
+        ),
+      );
+      expect(typeErrors(copy)).toBe("");
+      expect(
+        shown(check(undefined, copy), copy).filter((finding) =>
+          finding.message.includes("`this.stop`"),
+        ),
+      ).toEqual([]);
+    } finally {
+      rmSync(copy, { recursive: true, force: true });
+    }
   });
 
   it("is silent on values released, returned, handed to a `Release` parameter or started at the top of a module", () => {

@@ -63,7 +63,7 @@ export function post(text: string, remaining: number, show: (text: string) => vo
 }
 \`\`\`
 
-The message shows the branch in the shape of your \`catch\`, and links to the call that throws each class. There is no quick fix.
+The message shows the branch in the shape of your \`catch\`, and links to the call that throws each class. It keeps an \`else\` or \`default\` you already have: the branch goes before it, and the other readings are to make it rethrow, to use the error in it (then the rest is handled), or to list the class under \`ignoreClasses\`. There is no quick fix.
 
 ## Why it matters
 
@@ -77,14 +77,14 @@ What counts as handled: \`e instanceof X\` handles \`X\` and every class that ex
 - errors stateward cannot see: from a package it cannot read, a callback, or a dynamic call. The message notes each call it could not see into, with the reason, and \`errors/catch-hides-unexpected\` makes sure the rest is not dropped;
 - a class whose \`extends\` cannot be followed, or a branch whose test is not only \`instanceof\` (\`e instanceof A && e.code === 1\`, \`isAbort(e)\`, \`e.name === "AbortError"\`): it does not guess what that branch handles;
 - errors from the JavaScript engine itself, such as reading a property of \`undefined\`;
-- built-ins other than \`JSON.parse\`, \`JSON.stringify\`, \`new URL\`, \`decodeURIComponent\`, \`decodeURI\`, \`structuredClone\`, \`atob\`, \`fetch\`, \`toFixed\`, \`Array(n)\` and \`BigInt\`: they are taken not to throw;
+- built-ins other than \`JSON.parse\`, \`JSON.stringify\`, \`new URL\`, \`decodeURIComponent\`, \`decodeURI\`, \`structuredClone\`, \`atob\`, \`fetch\`, reading a \`Response\` body (\`json()\`, \`text()\`, …), \`toFixed\`, \`Array(n)\` and \`BigInt\`: they are taken not to throw;
 - promises kept in a \`let\`, a parameter or a property; getters, setters and generators.
 
 ## Getting the best from it
 
 What the \`try\` can throw is worked out from \`throw new X(…)\` in the functions it calls, in any file; their \`@throws {X}\` tags (also on a function with no body, such as \`declare function\` or a \`.d.ts\` of your own); the built-ins above; and the packages it calls (\`stateward deps\` shows how well each package's errors are known). So throw classes, not strings, and document what a function throws with \`@throws\`. Declare a package's errors under \`facts\` in the config: \`facts: { "config-lib": { load: { throws: ["ConfigError"] } } }\`.
 
-An error boundary's fallback is checked the same way: what the components below the boundary throw while rendering and in their effects, down to the next boundary, is its \`try\` (the hover on the boundary lists it). A fallback (react-error-boundary's \`FallbackComponent\`, \`fallbackRender\` or \`onError\`, or a boundary class's \`getDerivedStateFromError\`) that branches with \`if\` / \`else if\`, \`switch (true)\` or \`? :\` on \`error instanceof X\` needs a branch for each class the boundary can catch, or a branch for the rest that does more than return \`null\` or nothing. A fallback that does not branch on \`instanceof\`, whose tests are not only \`instanceof\`, or that is passed as anything other than a function written in place or the name of one of your functions, is left alone.
+An error boundary's fallback is checked the same way: what the components below the boundary throw while rendering and in their effects, down to the next boundary, is its \`try\` (the hover on the boundary lists it). A fallback (react-error-boundary's \`FallbackComponent\`, \`fallbackRender\` or \`onError\`, or a boundary class's \`getDerivedStateFromError\`) that branches with \`if\` / \`else if\`, \`switch (true)\` or \`? :\` on \`error instanceof X\` needs a branch for each class the boundary can catch, or a branch for the rest that does more than return \`null\` or nothing. The message shows both, written for the kind of fallback (for a boundary class's \`getDerivedStateFromError\` it describes the branch for the rest, since the state is yours), and the \`ignoreClasses\` option with the class named. A fallback that does not branch on \`instanceof\`, whose tests are not only \`instanceof\`, or that is passed as anything other than a function written in place or the name of one of your functions, is left alone.
 
 ## Turn it on or off
 
@@ -106,29 +106,79 @@ function headline(names: readonly string[], via: string | undefined): string {
   });
 }
 
-/** The fix, in the shape of the catch: a `case`, an `else if`, or an `if` for a chain without `else`. */
-function hint(count: number, variable: string, handler: string, shape: Shape): string {
+/**
+ * The ways to handle a class the `catch` does not test, in the shape of the catch (M22): a branch
+ * for it (placed so the existing `else` or `default` stays), a rethrow for what is not handled,
+ * the generic branch using the error, or the class listed under `ignoreClasses`.
+ */
+function hint(
+  names: readonly string[],
+  variable: string,
+  shape: Shape,
+  hasFallback: boolean,
+): string {
+  const count = names.length;
+  const [handler = ""] = names;
   const branch = count === 1 ? "it" : "each";
+  const ignore =
+    count === 1
+      ? `- or, if \`${handler}\` needs no branch, list it under the rule's \`ignoreClasses\` option`
+      : "- or, for the classes that need no branch, list them under the rule's `ignoreClasses` option";
+  const used = (where: string) =>
+    `- or, if the ${where} is right for ${count === 1 ? "it" : "them"}, use \`${variable}\` there: read it, log it or report it`;
   switch (shape) {
     case "switch":
-      return withExample(`add a branch for ${branch}, or rethrow what you do not handle:`, [
-        `case ${variable} instanceof ${handler}:`,
-        "  …",
-        "default:",
-        `  throw ${variable};`,
-      ]);
+      return [
+        "one of",
+        hasFallback
+          ? withExample(`- add a branch for ${branch}, before the \`default\` you have`, [
+              `case ${variable} instanceof ${handler}:`,
+              "  …",
+              "default: // yours, unchanged",
+            ])
+          : withExample(`- add a branch for ${branch}, and rethrow what you do not handle`, [
+              `case ${variable} instanceof ${handler}:`,
+              "  …",
+              "default:",
+              `  throw ${variable};`,
+            ]),
+        ...(hasFallback
+          ? [
+              withExample("- or rethrow what you do not handle, in the `default` you have", [
+                "default:",
+                `  throw ${variable};`,
+              ]),
+              used("`default`"),
+            ]
+          : []),
+        ignore,
+      ].join("\n");
     case "else":
-      return withExample(`add a branch for ${branch}, or rethrow what you do not handle:`, [
-        `} else if (${variable} instanceof ${handler}) {`,
-        "  …",
-        "} else {",
-        `  throw ${variable};`,
-      ]);
+      return [
+        "one of",
+        withExample(`- add a branch for ${branch}, before the \`else\` you have`, [
+          `} else if (${variable} instanceof ${handler}) {`,
+          "  …",
+          "} else { // yours, unchanged",
+        ]),
+        withExample("- or rethrow what you do not handle, in the `else` you have", [
+          "} else {",
+          `  throw ${variable};`,
+          "}",
+        ]),
+        used("`else`"),
+        ignore,
+      ].join("\n");
     case "if":
-      return withExample(
-        `add a branch for ${branch}, or rethrow what you do not handle after the chain:`,
-        [`if (${variable} instanceof ${handler}) {`, "  …", "}", `throw ${variable};`],
-      );
+      return [
+        "one of",
+        withExample(
+          `- add a branch for ${branch}, and rethrow what you do not handle after the chain`,
+          [`if (${variable} instanceof ${handler}) {`, "  …", "}", `throw ${variable};`],
+        ),
+        `- or, if what the chain does not handle is right for ${count === 1 ? "it" : "them"}, use \`${variable}\` after the chain: read it, log it or report it`,
+        ignore,
+      ].join("\n");
     default: {
       const unreachable: never = shape;
       return unreachable;
@@ -189,10 +239,10 @@ function report(
       via,
     ),
     hint: hint(
-      missing.length,
+      missing.map((one) => catchName(one.id, classes)),
       handler.variable,
-      catchName(first.id, classes),
       handler.dispatch === "switch" ? "switch" : handler.otherwise === null ? "if" : "else",
+      handler.otherwise !== null,
     ),
     location: { file: seen.file, start: handler.at[0], end: handler.at[1] },
     related,

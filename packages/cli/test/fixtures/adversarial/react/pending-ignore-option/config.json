@@ -1,0 +1,13 @@
+{
+  "rules": {
+    "async/pending-state-stuck-on-failure": [
+      "error",
+      {
+        "ignore": [
+          "saving",
+          "setSaving"
+        ]
+      }
+    ]
+  }
+}

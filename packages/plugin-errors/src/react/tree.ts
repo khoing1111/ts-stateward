@@ -28,6 +28,13 @@ export type TreeRender = {
   /** The tag as written. */
   readonly name: string;
   readonly at: Span;
+  /** The element as written when it is self-closing and short: what a hint wraps. */
+  readonly text?: string;
+  /**
+   * The nearest element around it, in the same component, that is named like an error boundary
+   * and comes from a package: an unlisted boundary, which the `boundaries` option would list.
+   */
+  readonly wrapper?: { readonly tag: string; readonly package: string };
   readonly around: readonly Around[];
   /**
    * The element goes where stateward cannot follow it (passed to a function, stored in an
@@ -188,6 +195,22 @@ function renderFunctionOf(node: ts.Node): RenderFunction | undefined {
 function tagName(tag: ts.JsxTagNameExpression): ts.Node | undefined {
   if (ts.isIdentifier(tag)) return /^[a-z]/.test(tag.text) ? undefined : tag;
   return ts.isPropertyAccessExpression(tag) ? tag.name : undefined;
+}
+
+/** What names a component that is likely an error boundary. */
+const BOUNDARY_NAME = /boundary|catch/i;
+
+/** The longest element a hint quotes whole. */
+const TEXT_MAX = 60;
+
+/** A self-closing element on one line as written, or undefined: what a hint can wrap as it is. */
+function selfClosingText(
+  element: ts.JsxElement | ts.JsxSelfClosingElement,
+  sourceFile: ts.SourceFile,
+): string | undefined {
+  if (!ts.isJsxSelfClosingElement(element)) return undefined;
+  const text = element.getText(sourceFile);
+  return text.length <= TEXT_MAX && !text.includes("\n") ? text : undefined;
 }
 
 function openingOf(element: ts.JsxElement | ts.JsxSelfClosingElement): ts.JsxOpeningLikeElement {
@@ -777,6 +800,23 @@ export function summarizeTree(
     walk(root);
   };
 
+  /** The nearest element around `element`, up to `stop`, named like a boundary and from a package. */
+  const wrapperOf = (
+    element: ts.JsxElement | ts.JsxSelfClosingElement,
+    stop: ts.Node,
+  ): TreeRender["wrapper"] => {
+    for (let node = element.parent; node !== stop && !ts.isSourceFile(node); node = node.parent) {
+      if (!ts.isJsxElement(node)) continue;
+      const name = tagName(node.openingElement.tagName);
+      const symbol = name === undefined ? undefined : types.symbolAt(name);
+      const declaration = symbol === undefined ? undefined : types.declarationOf(symbol);
+      if (symbol === undefined || declaration === undefined) continue;
+      if (types.isOwnFile(declaration.file) || !BOUNDARY_NAME.test(symbol.name)) continue;
+      return { tag: symbol.name, package: packageNameOf(types, declaration.file) };
+    }
+    return undefined;
+  };
+
   const rendersOf = (
     element: ts.JsxElement | ts.JsxSelfClosingElement,
     stop: ts.Node,
@@ -788,12 +828,15 @@ export function summarizeTree(
         key: keyOf(element),
         name: opening.tagName.getText(sourceFile),
         at: spanOf(opening.tagName),
+        ...(tag.boundary.own === null ? {} : { own: true }),
         fallbacks: fallbacksOf(types, opening, tag, sourceFile),
       });
     }
     const target = tag.target;
     if (target === undefined) return [];
     const seen = new Set<string>();
+    const text = selfClosingText(element, sourceFile);
+    const wrapper = wrapperOf(element, stop);
     return placementsOf(element, stop).flatMap((around): TreeRender[] => {
       const key = JSON.stringify(around);
       if (seen.has(key)) return [];
@@ -803,6 +846,8 @@ export function summarizeTree(
           target,
           name: opening.tagName.getText(sourceFile),
           at: spanOf(opening),
+          ...(text === undefined ? {} : { text }),
+          ...(wrapper === undefined ? {} : { wrapper }),
           around: around ?? [],
           unknown: around === null,
         },
@@ -944,9 +989,19 @@ function readRender(value: Json): TreeRender | undefined {
   const around = each(f?.around, readAround);
   if (f === undefined || at === undefined || around === undefined) return undefined;
   if (typeof f.unknown !== "boolean") return undefined;
-  return isString(f.target) && isString(f.name)
-    ? { target: f.target, name: f.name, at, around, unknown: f.unknown }
-    : undefined;
+  if (!isString(f.target) || !isString(f.name)) return undefined;
+  const wrapper = f.wrapper === undefined ? undefined : fieldsOf(f.wrapper);
+  return {
+    target: f.target,
+    name: f.name,
+    at,
+    ...(isString(f.text) ? { text: f.text } : {}),
+    ...(isString(wrapper?.tag) && isString(wrapper.package)
+      ? { wrapper: { tag: wrapper.tag, package: wrapper.package } }
+      : {}),
+    around,
+    unknown: f.unknown,
+  };
 }
 
 function readChain(value: Json | undefined): Chain | null | undefined {
@@ -988,7 +1043,7 @@ function readBoundary(value: Json): BoundaryElement | undefined {
   const fallbacks = each(f?.fallbacks, readFallback);
   if (f === undefined || at === undefined || fallbacks === undefined) return undefined;
   return isString(f.key) && isString(f.name)
-    ? { key: f.key, name: f.name, at, fallbacks }
+    ? { key: f.key, name: f.name, at, ...(f.own === true ? { own: true } : {}), fallbacks }
     : undefined;
 }
 

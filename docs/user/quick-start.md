@@ -45,7 +45,7 @@ For yarn, pnpm or bun, and the VS Code extension, see [install.md](install.md). 
 
 ```text
 $ npx stateward check
-error[unions/non-exhaustive-switch]: `switch` on `status` does not handle "failed", "loading" and "ready"
+error[unions/non-exhaustive-switch]: the `default` of the `switch` on `status` takes "failed", "loading" and "ready", which no `case` names
  --> src/status.ts:7:5
   |
 7 |     default:

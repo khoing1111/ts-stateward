@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { createChecker, parseConfig } from "@stateward/core";
 import type { Finding, Location, Plugin, ProjectRule, RuleConfig } from "@stateward/core";
 import { checkFixture, expectMessageStandard } from "@stateward/core/testing";
 import { reactContext } from "../src/index.js";
@@ -113,12 +114,11 @@ describe("react-context/provider-nested", () => {
     ).toBe(false);
   });
 
-  it("`ignore`: a context named there is not reported", () => {
+  it("`ignore` leaves nothing out: a context stated `SingleProvider` is always checked", () => {
     const rules = { [RULE]: ["error", { ignore: ["Cache*"] }] } as const;
-    expect(run("app", rules).shown.map((lines) => lines[0])).toEqual([
-      "error src/App.tsx:12: `<StoreProvider>` renders a second `StoreContext` Provider under the first",
-      "error src/App.tsx:31: `<StoreProvider>` renders a second `StoreContext` Provider under the first",
-    ]);
+    expect(run("app", rules).shown.map((lines) => lines[0])).toEqual(
+      run("app").shown.map((lines) => lines[0]),
+    );
   });
 
   it("gives the same findings in the same order on a second run", () => {
@@ -151,5 +151,20 @@ describe("react-context/provider-nested", () => {
       expect(rest).toEqual([]);
       expect(second).toBe(first);
     }
+  });
+});
+
+describe("react-context: how a combined context is labelled in `guarantees`", () => {
+  it("shows the type as written, not the name of one of its traits", () => {
+    const dir = fixture("app");
+    const parsed = parseConfig({ plugins: [reactContext()], preset: "recommended" }, dir);
+    if (!parsed.ok) throw new Error(parsed.errors.join("\n"));
+    const checker = createChecker({ config: parsed.value, cwd: dir, cache: false });
+    checker.check();
+    const markers = checker
+      .guarantees()
+      .filter((one) => one.name === "SessionContext")
+      .map((one) => one.marker);
+    expect(markers).toEqual(["RequiredContext<Session> & SingleProvider", "SingleProvider"]);
   });
 });

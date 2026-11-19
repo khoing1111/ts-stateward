@@ -1,0 +1,12 @@
+{
+  "overrides": [
+    {
+      "files": [
+        "src/a.ts"
+      ],
+      "rules": {
+        "ownership/state-written-outside-owner": "off"
+      }
+    }
+  ]
+}

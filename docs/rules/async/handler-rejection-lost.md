@@ -31,10 +31,11 @@ error[async/handler-rejection-lost]: unhandled rejection: nothing catches a fail
    |
 10 |         await save();
    |         ^^^^^
-   = fix: catch inside the handler, since nothing awaits it:
-         onClick={async () => {
-           try { await save(); } catch (e) { showError(e); }
-         }}
+   = fix: one of
+       - catch inside the handler, since nothing awaits it: wrap the call that fails, and keep the other statements
+             try { await save(); } catch (error) { … }
+       - or, if `save` shows or records its own failures, tag it with `@neverRejects` in its JSDoc: stateward then proves the tag and trusts it at its callers
+       - or, if the component given `onClick` awaits it itself, list the prop under the rule's `ignoreProps` option
    = docs: stateward explain async/handler-rejection-lost
 ```
 
@@ -85,7 +86,7 @@ It reads `async` functions written in place as a JSX prop named `on` plus a capi
 Tell stateward which calls never reject, and it stops asking about them:
 
 - a package function: `facts: { "my-client": { send: { rejects: [] } } }` in the config;
-- your own function that catches and reports its failures: a JSDoc `@neverRejects` on the function, on a function type alias, or on the prop in its props type (`/** Shows its own errors. @neverRejects */ handleSearch: (query: string) => Promise<void>;`). stateward checks the tag where it can be sure: a tagged function with a `throw`, or a call known to reject (`fetch`, a package that rejects, a project function that does), outside a `try` with a `catch` is reported at that call (kind `contradicted`). A call it cannot see into is taken at the tag's word.
+- your own function that catches and reports its failures: a JSDoc `@neverRejects` on the function, on a function type alias, or on the prop in its props type (`/** Shows its own errors. @neverRejects */ handleSearch: (query: string) => Promise<void>;`). stateward proves the tag (`stateward guarantees` lists it). It reads the tagged function's body, and every function given to a tagged prop or name (`onSearch={post}`, `{ onSearch: post }`, `api.save = post`): a `throw`, a `return Promise.reject(…)`, a `JSON.parse(…)` or a project function that throws, a call known to reject (`fetch`, a package that rejects, a project function that does, through `.call`, `.apply` or a `const` alias too), or a `new Promise` whose executor rejects or throws, outside a `try` with a `catch`, is reported at that place (kind `contradicted`); a `catch` that rethrows is reported with "the `catch` rethrows: handle the error there instead". What it cannot see into (a package with no facts, a dynamic `import()`, a `for await`, a promise held in a variable, an executor passed by name) is "not checked" at its place, never taken at the tag's word. A call, an alias, an argument or an import of a tagged function only uses what its body proves. A value of a tagged function type, a tagged function with no body, and a function given through a spread of props are not checked.
 
 ## Turn it on or off
 

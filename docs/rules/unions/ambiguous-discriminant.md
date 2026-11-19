@@ -21,8 +21,11 @@ info[unions/ambiguous-discriminant]: `kind` does not tell the members of `Messag
   = fix: one of
       - give the catch-all member its own tag, and keep the original value in another field:
             | { kind: "other"; rawKind: string; payload: unknown }
-      - or, when the union is open on purpose (data from a server you do not control), allow it:
-            ignore: ["Message"] in the rule's options
+      - or, if other kinds may come on purpose, state `Message` open: wrap its members in `OpenUnion`, and every `switch` on its `kind` then needs a `default`
+            import type { OpenUnion } from "./guarantees.js";
+            type Message = OpenUnion<…>
+            // src/guarantees.ts, added once: no quick fix writes it
+            export type OpenUnion<T = unknown> = T & { readonly "__guarantee:open-union"?: true };
   = docs: stateward explain unions/ambiguous-discriminant
 ```
 
@@ -61,12 +64,30 @@ export function parseOtherKind(kind: string): OtherKind | undefined {
 
 The tag makes TypeScript narrow: after `message.kind === "chat"`, `message.text` is known. The brand keeps the guarantee that `rawKind` is never `"chat"`; `ownership/brand-built-outside-owner` makes `parseOtherKind` the only way to build one, so a cast such as `"chat" as OtherKind` elsewhere is a finding. That rule is in the ownership pack: add `ownership()` to `plugins` if the config does not load it.
 
-When the union is open on purpose (data from a server you do not control, read only by its common fields), allow it by name, with the reason in a comment:
+When the union is open on purpose (data from a server you do not control, new kinds arrive before this app knows them), state it with `OpenUnion<…>` around its members. The rule is then silent on it, and `unions/non-exhaustive-switch` asks every `switch` on its tag for a `default` that handles the kinds the union does not list. `OpenUnion` is a type of your own: add it once to `src/guarantees.ts` (no quick fix writes it):
 
 ```ts
-// Message mirrors the server's events; new kinds arrive before this app knows them.
-rules: { "unions/ambiguous-discriminant": ["warning", { ignore: ["Message"] }] }
+export type OpenUnion<T = unknown> = T & { readonly "__guarantee:open-union"?: true };
 ```
+
+```ts
+import type { OpenUnion } from "./guarantees.js";
+
+export type ServerMessage = OpenUnion<
+  { kind: "chat"; text: string } | { kind: string; payload: unknown }
+>;
+
+export function describe(message: ServerMessage): string {
+  switch (message.kind) {
+    case "chat":
+      return "a chat message";
+    default:
+      return "a kind this version does not know";
+  }
+}
+```
+
+Allowing the union by name under `ignore` still works, but states nothing in the code.
 
 ## Why it matters
 

@@ -86,8 +86,12 @@ const indexKeys: Shown[] = [
     file: "TodoList.tsx",
     at: "index",
     message:
-      "list keyed by index, but `todos` is filtered: a row's state can move to the wrong item",
-    hint: "key each row by something the item owns, such as `key={todo.id}`, so its state stays with it",
+      "list keyed by index, but `todos` is filtered: a row that keeps state can move it to another item",
+    hint: [
+      "one of",
+      "- key each row by something the item owns, so its state stays with it: `key={todo.id}`",
+      "- or, if the position is the row's identity on purpose (a log, a fixed grid), list `todos` under the rule's `ignore` option",
+    ].join("\n"),
     notes: [],
     fixes: [],
   },
@@ -97,8 +101,12 @@ const indexKeys: Shown[] = [
     file: "TodoList.tsx",
     at: "`todo-${i}`",
     message:
-      "list keyed by index, but `todos` is filtered: a row's state can move to the wrong item",
-    hint: "key each row by something the item owns, such as `key={todo.id}`, so its state stays with it",
+      "list keyed by index, but `todos` is filtered: a row that keeps state can move it to another item",
+    hint: [
+      "one of",
+      "- key each row by something the item owns, so its state stays with it: `key={todo.id}`",
+      "- or, if the position is the row's identity on purpose (a log, a fixed grid), list `todos` under the rule's `ignore` option",
+    ].join("\n"),
     notes: [],
     fixes: [],
   },
@@ -107,8 +115,13 @@ const indexKeys: Shown[] = [
     severity: "warning",
     file: "TodoList.tsx",
     at: "i",
-    message: "list keyed by index, but `todos` is sorted: a row's state can move to the wrong item",
-    hint: "key each row by something the item owns, such as `key={todo.id}`, so its state stays with it",
+    message:
+      "list keyed by index, but `todos` is sorted: a row that keeps state can move it to another item",
+    hint: [
+      "one of",
+      "- key each row by something the item owns, so its state stays with it: `key={todo.id}`",
+      "- or, if the position is the row's identity on purpose (a log, a fixed grid), list `todos` under the rule's `ignore` option",
+    ].join("\n"),
     notes: [],
     fixes: [],
   },
@@ -118,8 +131,12 @@ const indexKeys: Shown[] = [
     file: "TodoList.tsx",
     at: "String(index)",
     message:
-      "list keyed by index, but `posts` is prepended to: a row's state can move to the wrong item",
-    hint: "key each row by something the item owns, such as `key={post.id}`, so its state stays with it",
+      "list keyed by index, but `posts` is prepended to: a row that keeps state can move it to another item",
+    hint: [
+      "one of",
+      "- key each row by something the item owns, so its state stays with it: `key={post.id}`",
+      "- or, if the position is the row's identity on purpose (a log, a fixed grid), list `posts` under the rule's `ignore` option",
+    ].join("\n"),
     notes: [],
     fixes: [],
   },
@@ -142,8 +159,12 @@ const compiled: Shown[] = [
     file: "TodoList.tsx",
     at: "index",
     message:
-      "list keyed by index, but `todos` is filtered: a row's state can move to the wrong item",
-    hint: "key each row by something the item owns, such as `key={todo.id}`, so its state stays with it",
+      "list keyed by index, but `todos` is filtered: a row that keeps state can move it to another item",
+    hint: [
+      "one of",
+      "- key each row by the item itself, if no two items are equal, so its state stays with it: `key={todo}`",
+      "- or, if the position is the row's identity on purpose (a log, a fixed grid), list `todos` under the rule's `ignore` option",
+    ].join("\n"),
     notes: [],
     fixes: [],
   },
@@ -194,6 +215,12 @@ describe("react/index-key-on-reordered-list: a todo list, a feed, a log", () => 
     expect(ofRule("index-key-on-reordered-list").map((finding) => finding.at)).not.toContain(
       "todo.id",
     );
+  });
+  it("writes `.id` only where the item has one: a list of strings is keyed by the item", () => {
+    // `todos` is a `string[]` in the compiled fixture: `todo.id` would not compile.
+    const [strings] = ofRule("index-key-on-reordered-list", COMPILED);
+    expect(strings?.hint).toContain("`key={todo}`");
+    expect(strings?.hint).not.toContain("todo.id");
   });
   it("stays on with the React Compiler", () => {
     expect(ofRule("index-key-on-reordered-list", COMPILED)).toEqual(

@@ -1,10 +1,12 @@
 import { defineRule, highestUncovered, option, shortestPath } from "@stateward/core";
-import type { RelatedLocation } from "@stateward/core";
+import type { RelatedLocation, StringListRecord } from "@stateward/core";
 import { className } from "./inference/format.js";
 import { modelOf, summarizeReact } from "./react/boundaries.js";
 import type { Model, Site } from "./react/boundaries.js";
+import type { TreeRender } from "./react/tree.js";
 import { LIBRARY_BOUNDARIES } from "./react/tree.js";
-import { codeList, fitted, withExample } from "./text.js";
+import { codeList, fitted, waysHint } from "./text.js";
+import type { Way } from "./text.js";
 
 /** The group the rule belongs to in the docs and in `stateward status`. */
 export const GROUP = "render";
@@ -64,6 +66,8 @@ createRoot(document.body).render(<App />);
 
 There is no quick fix: where the boundary goes, and what it shows, is your call.
 
+The message offers the ways it can be fixed, with your own element as it is written. When the finding is at the app's own render, it points to the render below it that throws (a boundary around the whole app is not counted, see below), and to \`rootBoundaryCounts\` for one fallback for the whole app. If a component around it from another package is an error boundary, it shows the \`boundaries\` option with that package added to the ones already there. Where the project already has an error boundary, it names that one; where it has none, react-error-boundary's \`ErrorBoundary\` (imported as a value) or a class of yours with \`getDerivedStateFromError\`.
+
 ## Why it matters
 
 When a component throws while React renders it, or in one of its effects, React unmounts everything up to the nearest error boundary. With no boundary above, the whole app goes blank: a \`<UserPage>\` that throws \`NotFoundError\` for a wrong id takes the menu and every other route down with it, where a boundary could have shown "this user does not exist".
@@ -114,32 +118,138 @@ function rootHeadline(component: string, names: readonly string[]): string {
   );
 }
 
-function rootHint(component: string): string {
-  return withExample(
-    "add a boundary around it, or set `rootBoundaryCounts` if replacing the whole app is intended:",
-    ["<ErrorBoundary FallbackComponent={ErrorPage}>", `  <${component} />`, "</ErrorBoundary>"],
-  );
-}
-
 /** The reason `plan` gives when a root boundary makes the rule silent. */
 export const ROOT_BOUNDARY_SILENT = "your app's root has an error boundary";
 
-function hint(component: string): string {
-  return withExample(
-    "wrap it in an error boundary, at this render or nearer to what throws; for example with react-error-boundary:",
-    ["<ErrorBoundary FallbackComponent={ErrorPage}>", `  <${component} />`, "</ErrorBoundary>"],
-  );
+/** The error boundaries the project already renders, by name (its own classes and packages'). */
+function boundaryNames(model: Model): string[] {
+  return [...new Set([...model.boundaries.values()].map((one) => one.element.name))].sort();
 }
 
-/** The renders down from the site to the component that throws `cls`, then the call that throws it. */
-function pathNotes(model: Model, site: Site, cls: string): RelatedLocation[] {
-  const classes = model.analysis.classes;
-  const path = shortestPath<Site>(
+/** The `fallback` a wrapped example shows: the boundary's own prop, with the text left to the project. */
+const FALLBACK = "fallback={<p>Something went wrong.</p>}";
+
+/** `render` inside react-error-boundary's `ErrorBoundary`, or undefined when the element is too long to quote. */
+function wrapped(render: TreeRender): string[] | undefined {
+  return render.text === undefined
+    ? undefined
+    : [`<ErrorBoundary ${FALLBACK}>`, `  ${render.text}`, "</ErrorBoundary>"];
+}
+
+/** Wrap `render` in an error boundary: the project's own when it has one, else react-error-boundary's. */
+function wrapWay(model: Model, render: TreeRender, where: string): Way {
+  const known = boundaryNames(model);
+  const [first] = known;
+  if (first !== undefined) {
+    return {
+      text: `wrap \`<${render.name}>\` in \`${first}\`, which the project already uses${where}`,
+    };
+  }
+  const lines = wrapped(render);
+  const from =
+    "react-error-boundary's `ErrorBoundary` (imported as a value), or a class of yours with `getDerivedStateFromError`";
+  return lines === undefined
+    ? { text: `wrap \`<${render.name}>\` and what it contains in ${from}${where}` }
+    : { text: `wrap it in ${from}${where}`, example: lines };
+}
+
+/** An element around the render that is named like an error boundary from a package: list it under `boundaries`. */
+function listedWay(render: TreeRender, listed: StringListRecord): Way | undefined {
+  const wrapper = render.wrapper;
+  if (wrapper === undefined || (listed[wrapper.package] ?? []).includes(wrapper.tag)) {
+    return undefined;
+  }
+  const merged: Record<string, string[]> = {};
+  for (const [name, tags] of Object.entries(listed)) merged[name] = [...tags];
+  merged[wrapper.package] = [...(merged[wrapper.package] ?? []), wrapper.tag];
+  const entries = Object.entries(merged).map(
+    ([name, tags]) =>
+      `  ${JSON.stringify(name)}: [${tags.map((one) => JSON.stringify(one)).join(", ")}],`,
+  );
+  const text = `if \`<${wrapper.tag}>\` from \`${wrapper.package}\` is an error boundary, add it to the \`boundaries\` option, next to the ones already there`;
+  // The example is at most four lines: a longer list is described instead.
+  return entries.length <= 2
+    ? { text, example: ["boundaries: {", ...entries, "}"] }
+    : { text: `${text}: ${JSON.stringify(wrapper.package)}: [${JSON.stringify(wrapper.tag)}]` };
+}
+
+type Placement = {
+  readonly model: Model;
+  readonly options: { readonly boundaries: StringListRecord };
+  /** The render the finding is at. */
+  readonly site: Site;
+  /** The first render below the finding's component on the way to the throw; undefined when it throws itself. */
+  readonly below: Site | undefined;
+  readonly isEntry: boolean;
+};
+
+/** Wrap an entry's own render: only a boundary the app-wide option counts. */
+function rootWay(model: Model, render: TreeRender): Way {
+  const lines = boundaryNames(model).length === 0 ? wrapped(render) : undefined;
+  const text =
+    "if one fallback for the whole app is what you want, wrap it and set the `rootBoundaryCounts` option to `true`";
+  return lines === undefined ? { text } : { text, example: lines };
+}
+
+/** The ways to put an error boundary where the render has none above it. */
+function ways(place: Placement, root: boolean): string {
+  const { model, site, below, isEntry } = place;
+  const listed = (render: TreeRender): Way[] => {
+    const way = listedWay(render, place.options.boundaries);
+    return way === undefined ? [] : [way];
+  };
+  if (isEntry && below !== undefined) {
+    // A boundary around the whole app is not counted: the way out is the render below it.
+    const render = below.render;
+    return waysHint([
+      wrapWay(model, render, ", not around the whole app"),
+      rootWay(model, site.render),
+      ...listed(render),
+    ]);
+  }
+  if (isEntry) {
+    return waysHint([
+      {
+        text:
+          "move what `<" +
+          site.render.name +
+          ">` throws into a component it renders, and wrap that render in an error boundary",
+      },
+      rootWay(model, site.render),
+    ]);
+  }
+  const own = wrapWay(model, site.render, ", at this render or nearer to what throws");
+  return waysHint([
+    own,
+    ...(root
+      ? [
+          {
+            text: "if replacing the whole app by its fallback is intended, set the `rootBoundaryCounts` option to `true`: the boundary around the app then counts",
+          },
+        ]
+      : []),
+    ...listed(site.render),
+  ]);
+}
+
+/** The renders down from the site to the component that throws `cls`; undefined when none is found. */
+function pathTo(model: Model, site: Site, cls: string): readonly Site[] | undefined {
+  return shortestPath<Site>(
     site.to,
     (id) => model.edges(id),
     (edge) => model.nearest(edge) === undefined && model.needs(edge.to).has(cls),
     (id) => model.own(id).classes.get(cls)?.certain === true && !model.own(id).guarded.has(cls),
   );
+}
+
+/** The renders down from the site to the component that throws `cls`, then the call that throws it. */
+function pathNotes(
+  model: Model,
+  site: Site,
+  cls: string,
+  path: readonly Site[] | undefined,
+): RelatedLocation[] {
+  const classes = model.analysis.classes;
   if (path === undefined) return [];
   const notes: RelatedLocation[] = path.map((edge) => ({
     location: { file: edge.file, start: edge.render.at[0], end: edge.render.at[1] },
@@ -270,11 +380,15 @@ export const renderThrowWithoutBoundary = defineRule({
       if (first === undefined) continue;
       const component = model.functions.get(edge.to)?.fn.name ?? edge.render.name;
       const names = named.map((one) => one.name);
+      const path = pathTo(model, edge, first.id);
+      const isEntry = model.entries.some(
+        (entry) => entry.file === edge.file && entry.render.at[0] === edge.render.at[0],
+      );
       ctx.report({
         message: root ? rootHeadline(component, names) : headline(component, names),
-        hint: root ? rootHint(edge.render.name) : hint(edge.render.name),
+        hint: ways({ model, options: ctx.options, site: edge, below: path?.[0], isEntry }, root),
         location: { file: edge.file, start: edge.render.at[0], end: edge.render.at[1] },
-        related: pathNotes(model, edge, first.id),
+        related: pathNotes(model, edge, first.id, path),
       });
     }
   },

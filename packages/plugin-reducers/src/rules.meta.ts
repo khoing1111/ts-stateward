@@ -13,6 +13,7 @@ export const RULES = {
       tier: "core",
       group: "graph",
       needsJsDoc: true,
+      proves: { tags: ["final"] },
       options: {
         finalStates: {
           kind: "strings",
@@ -44,6 +45,7 @@ export const RULES = {
       tier: "coverage",
       group: "graph",
       needsJsDoc: true,
+      proves: { tags: ["initial"] },
       options: {
         severities: {
           kind: "severities",
@@ -56,6 +58,8 @@ export const RULES = {
               "a reducer used outside `useReducer`, or exported from your package, with no `@initial`.",
             "unquoted-tag": "an `@initial` or `@final` tag that lists states without quotes.",
             "unknown-initial": "a name in `@initial` that is not a state.",
+            "start-not-listed":
+              "a `useReducer` start in a state the reducer's `@initial` does not list.",
           },
           description: "A severity per kind of place stateward cannot read.",
         },

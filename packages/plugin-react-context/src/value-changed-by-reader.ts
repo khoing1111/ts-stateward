@@ -76,6 +76,16 @@ const MUTATORS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["WeakSet", new Set(["add", "delete"])],
 ]);
 
+/** The reading that makes TypeScript reject a write to a property. */
+const PROPERTY = "mark the property `readonly`";
+
+/** The read-only type of a library type whose mutators it leaves out. */
+const READONLY_OF: ReadonlyMap<string, string> = new Map([
+  ["Array", "type it as a `ReadonlyArray` (`readonly T[]`)"],
+  ["Map", "type it as a `ReadonlyMap`"],
+  ["Set", "type it as a `ReadonlySet`"],
+]);
+
 const LIB_FILE = /(?:^|[\\/])lib\.[^\\/]*\.d\.ts$/;
 
 /** A local name that holds the context value or a part of it: where it was read, and from what. */
@@ -335,11 +345,25 @@ function checkFile(ctx: FileContext<{ readonly ignore: readonly string[] }>): vo
     return symbol === undefined ? undefined : tracked.get(symbol.id);
   }
 
-  const report = (node: ts.Node, what: string, entry: Tracked): void => {
+  const report = (
+    node: ts.Node,
+    what: string,
+    entry: Tracked,
+    readonlyType: string | undefined,
+  ): void => {
     if (readerOf(node) === undefined) return;
+    const context = code(entry.context);
     ctx.report({
-      message: `${code(what)} changes the ${code(entry.context)} value outside its Provider`,
-      hint: `call a function the ${code(entry.context)} Provider passes in the value to set its state: readers re-render only when the Provider passes a new value`,
+      message: `${code(what)} changes the ${context} value outside its Provider`,
+      hint: [
+        "one of",
+        "- add a function to the value that sets the Provider's state, and call it: readers re-render only when the Provider passes a new value",
+        ...(readonlyType === undefined
+          ? []
+          : [`- or ${readonlyType}, so TypeScript rejects the write`]),
+        `- or, if it is changed in place on purpose, list ${context} under the rule's \`ignore\` option:`,
+        `    { ignore: [${JSON.stringify(entry.context)}] }`,
+      ].join("\n"),
       node,
       related: [{ node: entry.source, message: `${code(entry.label)} reads the value` }],
     });
@@ -349,17 +373,17 @@ function checkFile(ctx: FileContext<{ readonly ignore: readonly string[] }>): vo
     if (ts.isBinaryExpression(node) && isAssignment(node.operatorToken.kind)) {
       const entry = written(node.left, true);
       if (entry !== undefined)
-        report(node, `${short(node.left)} ${node.operatorToken.getText()} …`, entry);
+        report(node, `${short(node.left)} ${node.operatorToken.getText()} …`, entry, PROPERTY);
     } else if (
       (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
       (node.operator === ts.SyntaxKind.PlusPlusToken ||
         node.operator === ts.SyntaxKind.MinusMinusToken)
     ) {
       const entry = written(node.operand, true);
-      if (entry !== undefined) report(node, short(node), entry);
+      if (entry !== undefined) report(node, short(node), entry, PROPERTY);
     } else if (ts.isDeleteExpression(node)) {
       const entry = written(node.expression, true);
-      if (entry !== undefined) report(node, short(node), entry);
+      if (entry !== undefined) report(node, short(node), entry, PROPERTY);
     } else if (ts.isCallExpression(node)) {
       const callee = unwrapped(node.expression);
       if (ts.isPropertyAccessExpression(callee)) {
@@ -379,6 +403,7 @@ function checkFile(ctx: FileContext<{ readonly ignore: readonly string[] }>): vo
               ? `Object.assign(${short(target)}, …)`
               : `${short(callee)}(…)`,
             entry,
+            assign || owner === undefined ? undefined : READONLY_OF.get(owner),
           );
         }
       }

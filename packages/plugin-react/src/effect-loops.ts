@@ -201,6 +201,61 @@ function dependsOn(types: TypeQueries, effect: Effect, binding: StateBinding): b
   });
 }
 
+/** The parameter names an updater can take, the first that the effect does not already use. */
+const UPDATER_NAMES = ["current", "previous", "latest"] as const;
+
+/**
+ * The setter called with an updater that gives the same value from the current state, so the
+ * effect no longer reads the state (`setLog((current) => [...current, entry])`); undefined when
+ * the value does not read the state, is an updater already, or does not fit on a line of a hint.
+ */
+function updaterText(
+  types: TypeQueries,
+  effect: Effect,
+  binding: StateBinding,
+  argument: ts.Expression,
+  sourceFile: ts.SourceFile,
+): string | undefined {
+  const value = unwrapped(argument);
+  if (ts.isArrowFunction(value) || ts.isFunctionExpression(value)) return undefined;
+  const used = new Set<string>();
+  const reads: ts.Identifier[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node)) {
+      used.add(node.text);
+      const found = bindingOf(types, node);
+      if (
+        node.text === binding.state &&
+        isRead(node) &&
+        found?.part === "state" &&
+        found.binding.call === binding.call &&
+        node.getStart(sourceFile) >= argument.getStart(sourceFile) &&
+        node.end <= argument.end
+      ) {
+        reads.push(node);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(effect.callback);
+  const name = UPDATER_NAMES.find((candidate) => !used.has(candidate));
+  if (reads.length === 0 || name === undefined) return undefined;
+  const start = argument.getStart(sourceFile);
+  const body = [...reads]
+    .sort((a, b) => b.getStart(sourceFile) - a.getStart(sourceFile))
+    .reduce((text, one) => {
+      const at = one.getStart(sourceFile) - start;
+      return text.slice(0, at) + name + text.slice(at + one.text.length);
+    }, argument.getText(sourceFile))
+    .replace(/\s+/g, " ");
+  const written = ts.isObjectLiteralExpression(value) ? `(${body})` : body;
+  const line = `${binding.setter}((${name}) => ${written})`;
+  return line.length <= MAX_EXAMPLE ? line : undefined;
+}
+
+/** An example line of a hint is at most this long. */
+const MAX_EXAMPLE = 96;
+
 export const effectLoops = defineRule({
   kind: "file",
   meta: {
@@ -224,15 +279,28 @@ export const effectLoops = defineRule({
         if (!dependsOn(types, effect, binding) || !setsNew(argument, binding)) return;
         if (!unconditional(set.call, effect)) return;
         const { state, setter } = binding;
+        const updater =
+          effect.deps === "none"
+            ? undefined
+            : updaterText(types, effect, binding, argument, sourceFile);
         ctx.report({
           message: fitted((cut) =>
             effect.deps === "none"
               ? `render loop: the effect runs after every render and sets \`${cut.name(state)}\` to a new value`
               : `render loop: the effect sets \`${cut.name(state)}\`, one of its own dependencies, to a new value each time`,
           ),
-          hint: fitted(
-            (cut) =>
-              `set it only when it must change (\`if (…) ${cut.name(setter)}(…)\`), or make the change in the event that causes it`,
+          hint: fitted((cut) =>
+            [
+              "one of",
+              ...(updater === undefined
+                ? []
+                : [
+                    `- read the state through an updater, so the effect no longer depends on \`${cut.name(state)}\` (remove it from the dependencies):`,
+                    `    ${updater}`,
+                  ]),
+              `- ${updater === undefined ? "set" : "or set"} it only when it must change: put an \`if\` that compares the old and the new value around \`${cut.name(setter)}\``,
+              "- or make the change in the event that causes it",
+            ].join("\n"),
           ),
           node: set.call,
         });

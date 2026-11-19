@@ -55,12 +55,82 @@ export function notFollowed(tag: string, context: string): Message {
   };
 }
 
+const READ_IN_JSX = (context: string): string =>
+  [
+    `a second ${code(context)} Provider may be rendered under the first here; one of`,
+    "- render it in JSX, so stateward can follow where it renders",
+    `- or remove \`SingleProvider\` from the type of ${code(context)}, if a second value for part of the tree is intended`,
+  ].join("\n");
+
+/** A place the proof cannot follow: not checked, with what it is (`reason`, after "not checked: "). */
+export type NotChecked = Message & { reason: string };
+
+function notChecked(reason: string, hint: string): NotChecked {
+  // The guarantee's line says what to write instead too: the first way of the hint.
+  const way = hint.split("\n").find((line) => line.startsWith("- "));
+  return {
+    message: `not checked: ${reason}`,
+    hint,
+    reason: way === undefined ? reason : `${reason}: ${way.slice(2)}`,
+  };
+}
+
+/** A slot handed on to something not followed (`wrap(children)`) in a component rendered under a Provider. */
+export function slotEscapes(text: string, owner: string, context: string): NotChecked {
+  return notChecked(
+    `${code(text)} in ${code(`<${owner}>`)} cannot be followed`,
+    READ_IN_JSX(context),
+  );
+}
+
+/** A Provider given to a slot its component hands on to something not followed. */
+export function providerInEscapingSlot(tag: string, context: string, text: string): NotChecked {
+  return notChecked(
+    `${code(`<${tag}>`)} is given to ${code(text)}, which cannot be followed`,
+    READ_IN_JSX(context),
+  );
+}
+
+/** A Provider written in a callback of its component (`useMemo(() => <P>…)`): where it renders is not followed. */
+export function providerInCallback(tag: string, context: string, callback: string): NotChecked {
+  return notChecked(
+    `${code(`<${tag}>`)} is written in a callback of ${code(callback)}, which cannot be followed`,
+    [
+      "one of",
+      `- write the Provider in the component's own JSX, so stateward can follow where it renders`,
+      `- or remove \`SingleProvider\` from the type of ${code(context)}, if a second value for part of the tree is intended`,
+    ].join("\n"),
+  );
+}
+
+/** A Provider kept in a variable (`const inner = <P>…</P>`): where it renders is not followed. */
+export function providerKept(tag: string, context: string, name: string): NotChecked {
+  return notChecked(
+    `${code(`<${tag}>`)} is kept in ${code(name)}, which cannot be followed`,
+    [
+      "one of",
+      `- write the Provider where it renders, in the component's own JSX, so stateward can follow it`,
+      `- or remove \`SingleProvider\` from the type of ${code(context)}, if a second value for part of the tree is intended`,
+    ].join("\n"),
+  );
+}
+
+/** A component that writes a Provider, passed to something that is not followed. */
+export function providerEscapes(component: string, context: string, sink: string): NotChecked {
+  return notChecked(
+    `${code(`<${component}>`)} is passed to ${code(sink)}, which cannot be followed`,
+    READ_IN_JSX(context),
+  );
+}
+
 export const notes = {
   outer: (context: string): string => `the outer ${code(context)} Provider`,
   outerIn: (context: string, owner: string): string =>
     `the outer ${code(context)} Provider, which ${code(`<${owner}>`)} renders around it`,
   inside: (tag: string, owner: string, context: string): string =>
     `${code(`<${tag}>`)} is inside ${code(`<${owner}>`)}, which provides ${code(context)}`,
+  itself: (context: string, owner: string): string =>
+    `this ${code(context)} Provider is the outer one too: ${code(`<${owner}>`)} renders itself inside it`,
   inner: (context: string): string => `the inner ${code(context)} Provider`,
   renderedUnder: (tag: string, context: string): string =>
     `${code(`<${tag}>`)} is rendered under a ${code(context)} Provider`,

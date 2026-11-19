@@ -25,14 +25,17 @@ error[errors/finally-can-throw]: a throw in `finally` replaces the original erro
   |
 8 |     restore(JSON.parse(saved));
   |             ^^^^^^^^^^^^^^^^^
-  = fix: catch it inside the `finally`, or move it out, so the original error is kept:
-        finally {
-          try { cleanup(); } catch (e) { report(e); }
-        }
+  = fix: one of
+      - catch it inside the `finally`, so the original error is kept
+            finally {
+              try { restore(JSON.parse(saved)); } catch (e) { … }
+            }
+      - or, if it should run only when the `try` succeeds, move it out of the `finally`, after the `try` statement
+      - or, if it cannot throw here, state it with `// stateward-ignore errors/finally-can-throw: <why>`
   = docs: stateward explain errors/finally-can-throw
 ```
 
-Give the cleanup its own `try` / `catch`, or move it out of the `finally`:
+Give the cleanup its own `try` / `catch` inside the `finally`, so it still runs when the `try` fails (move it out of the `finally` only if it should run when the `try` succeeds):
 
 ```ts
 declare function upload(file: string): Promise<void>;

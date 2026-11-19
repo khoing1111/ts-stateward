@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.2.2
+
+- **`stateward guarantees` says "proven" only when every use was read.** Ignore comments, severities,
+  overrides and `exclude` never prove a guarantee; an ignored finding reads "not proven". Every use
+  of a stated value (aliases, re-exports, destructuring, `.call`, factories, class fields, JSX) is
+  read or listed as "not checked" at its line with what to write. "Unused" means nothing uses the
+  value. `check` and `guarantees` agree on errors and exit codes. Guarantees are a preview; each
+  page lists what it reads.
+- **JSDoc tags and "latest wins" are listed** in `stateward guarantees` and checked through aliases,
+  `.call` and reducer calls; a contradicted `@initial` or `@final` is an error under every preset.
+- **Each guarantee reads more code:** releases in loops, conditional releases in `finally` and
+  cleanups, releases a caught throw skips; writes through the owner's methods, `arguments` and
+  destructured parameters; brands built by casts, generic helpers, overrides and `++`; `default`
+  branches that do not throw; a state left running when a call throws before the reset; renamed
+  Providers and `contextType`.
+- **Findings say what to write:** fixes name the exact change, messages list every meaning of
+  ambiguous code, and every "not checked" line ends with what to write.
+- **Fixed:** `async/handler-rejection-lost` reported a handler that awaits a promise whose executor
+  only resolves (`new Promise((resolve) => setTimeout(resolve, 0))`).
+- **Limit:** values are read as their declared types say; a getter behind a plain property type or
+  a `Proxy` is not seen.
+
 ## 1.2.1 (2026-11-10)
 
 - **`async/pending-state-stuck-on-failure` sees more failures** (it shares how `rejects.ts` reads

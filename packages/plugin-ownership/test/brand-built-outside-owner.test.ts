@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkOnly, fixture, says, shown, type Shown } from "./brand-helpers.js";
+import { checkOnly, fixture, says, shown, ways, type Shown } from "./brand-helpers.js";
 
 const RULE = "brand-built-outside-owner";
 
@@ -20,9 +20,40 @@ const MAKERS: Readonly<Record<string, string>> = {
   Email: "build it with `email()`",
 };
 
+/** The brands whose constructor returns `undefined` for a value that fails its check. */
+const FAILS: ReadonlySet<string> = new Set([
+  "Positive",
+  "NonEmptyString",
+  "NonEmptyArray",
+  "UserId",
+  "OrderId",
+  "Email",
+]);
+
+/** The way to fix a brand built in the owner's absence: its constructor, and what it returns. */
+function viaMaker(brand: string, owner: string, file: string): string {
+  const handled = FAILS.has(brand) ? ", and handle the `undefined` it returns" : "";
+  // The hint gives the path as the file imports it (`.js`), the headline the file (`.ts`).
+  const imported = owner.replace(/\.ts$/, ".js");
+  return ways(`${MAKERS[brand] ?? ""} from \`${imported}\`${handled}`, brand, file);
+}
+
 /** A project brand: the fix line names the constructor its owner file exports. */
 function owned(file: string, brand: string, owner: string): Shown {
-  return says(file, built(brand), `${MAKERS[brand] ?? ""} from \`${owner}\``);
+  return says(file, built(brand), viaMaker(brand, owner, file));
+}
+
+/** The brands whose constructor can fail: the hint never tells to build one without handling that. */
+function everyFailingMakerIsHandled(findings: readonly Shown[]): void {
+  for (const finding of findings) {
+    if (
+      /build it with `(?:positive|nonEmptyString|nonEmptyArray|userId|orderId|email)\(\)`/.test(
+        finding.hint,
+      )
+    ) {
+      expect(finding.hint).toContain("and handle the `undefined` it returns");
+    }
+  }
 }
 
 function flagged(): Shown[] {
@@ -44,6 +75,10 @@ describe(`ownership/${RULE}: flagged`, () => {
       owned("builtins.ts", "Positive", "./values.ts"), // (input as Positive) + 1
       owned("builtins.ts", "Int", "./values.ts"), // a parenthesized type
     ]);
+  });
+
+  it("never offers a constructor that returns `Positive | undefined` as if it returned `Positive`", () => {
+    everyFailingMakerIsHandled(flagged());
   });
 
   it("names a project brand and its owner file, relative to the file that casts", () => {
@@ -100,7 +135,7 @@ describe(`ownership/${RULE}: flagged`, () => {
       says(
         "predicates.ts",
         `${name} says a value is \`${brand}\` without its check`,
-        "build it with `positive()` from `./values.ts`",
+        viaMaker("Positive", "./values.ts", "predicates.ts"),
       );
     expect(flagged().filter((finding) => finding.file === "predicates.ts")).toEqual([
       declares("`isQty`", "Positive"),
@@ -108,7 +143,7 @@ describe(`ownership/${RULE}: flagged`, () => {
       says(
         "predicates.ts",
         "`isPrice` says a value is `Cents` without its check",
-        "build it with `cents()` from `./money.ts`",
+        viaMaker("Cents", "./money.ts", "predicates.ts"),
       ),
       declares("`isMaybeQty`", "Positive"),
       declares("`Check`", "Positive"),

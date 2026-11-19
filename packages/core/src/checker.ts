@@ -6,12 +6,15 @@ import type { ResultCache } from "./cache.js";
 import type { TimingRecorder } from "./timing.js";
 import { reviewFixes, verifyFixSet } from "./fixes.js";
 import { legacyMarkerRewrite } from "./guarantee-markers.js";
+import { ledgerGuarantees } from "./ledger.js";
+import { unlistedGuarantees } from "./stated.js";
 import {
   drain,
   filePhaseRun,
   needsJsDoc,
   projectPhaseSteps,
   projectRuleIds,
+  ruleOffAtFn,
   runFileRules,
   silentReasons,
 } from "./engine.js";
@@ -28,6 +31,8 @@ import type {
   Json,
   LibraryUse,
   Location,
+  LedgerRef,
+  StatedDeclaration,
   StatedGuarantee,
   RuleSelection,
   TokenType,
@@ -163,6 +168,11 @@ export type Checker = {
    * of that check has the file. `check --fix` edits this text, never a newer one on disk.
    */
   analysedText(file: string): string | undefined;
+  /**
+   * Whether the config turns `ruleId` off for `file`, by the rule's setting or an `overrides`
+   * entry: the rule never looked at the guarantee's places there (`proveGuarantees`).
+   */
+  ruleOffAt(ruleId: string, file: string): boolean;
 };
 
 type Known = { sourceFile: ts.SourceFile; types: TypeQueries };
@@ -224,9 +234,16 @@ export function createChecker({
     cache: cache === false ? undefined : cache,
     jsDoc: needsJsDoc(config),
   });
+  let offAt: ((ruleId: string, file: string) => boolean) | undefined;
   /** The units of the last run; indexed (and bound) on the first editor request. */
   let lastUnits: readonly ProjectUnit[] | undefined;
   let known: ReadonlyMap<string, Known> | undefined;
+  /** The declarations that state a guarantee, of the last full check's files. */
+  let stated: readonly StatedDeclaration[] = [];
+  /** The references of the last full check's ledger. */
+  let ledgerRefs: readonly LedgerRef[] = [];
+  /** The rule that proves each tag trait, in the last full check. */
+  let tagRules: Readonly<Record<string, string>> = {};
   /** The project rules' summaries of the last full check. */
   let summaries: ReadonlyMap<string, () => ReadonlyMap<string, Json>> = new Map();
   /** Where verdicts are kept when the checker keeps no cache. */
@@ -285,6 +302,9 @@ export function createChecker({
         timing,
       );
       summaries = kept;
+      stated = phase.stated;
+      ledgerRefs = result.ledger?.refs ?? [];
+      tagRules = result.ledger?.tagRules ?? {};
       return result;
     }
     return { steps: steps(), abandon: () => filePhase?.abandon() };
@@ -365,12 +385,16 @@ export function createChecker({
       );
     },
     guarantees() {
-      return config.plugins.flatMap(
+      const listed = config.plugins.flatMap(
         (plugin) =>
           plugin.editor?.guarantees?.({
             projectSummaries: (ruleId) => summaries.get(ruleId)?.(),
           }) ?? [],
       );
+      // A stated declaration no plugin lists still reads "not checked", never missing; so does a
+      // declaration the ledger has references to (a function stated by its return type).
+      const known = [...listed, ...unlistedGuarantees(stated, listed)];
+      return [...known, ...ledgerGuarantees(ledgerRefs, known, tagRules)];
     },
     reviewFixes(findings) {
       const units = (lastUnits ??= backend.open(new Map()));
@@ -378,6 +402,10 @@ export function createChecker({
     },
     verifyFixSet(forms) {
       return verifyFixSet(forms, (lastUnits ??= backend.open(new Map())));
+    },
+    ruleOffAt(ruleId, file) {
+      offAt ??= ruleOffAtFn(config);
+      return offAt(ruleId, toTypeScriptPath(file));
     },
     analysedText(file) {
       const name = toTypeScriptPath(file);

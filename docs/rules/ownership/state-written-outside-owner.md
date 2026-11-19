@@ -37,7 +37,7 @@ export function setTheme(theme: "light" | "dark"): void {
 }
 ```
 
-A value can also state its owner in its type, for code that is not restructured this way, for changes `readonly` does not see (a cast, a method of a `Map`), or to have each change proven: `Owned<T>`, from `guarantees.ts`, the file the quick fix writes once in your project. stateward then stops guessing for that value and proves it: every change from another module is an error, also through an alias, a re-export, a cast or a function it is handed to, and a place stateward cannot follow is an error too, with why:
+A value can also state its owner in its type, for code that is not restructured this way, for changes `readonly` does not see (a cast, a method of a `Map`), or to have each change proven: `Owned<T>`, from `guarantees.ts`, the file the quick fix writes once in your project. stateward then stops guessing for that value and proves it: every change from another module is an error, also through an alias, a re-export, a cast, an array or object that holds it or a function it is handed to, and a place stateward cannot follow is "not checked", with why:
 
 ```ts
 export type Owned<T = unknown> = T & { readonly "__guarantee:owned"?: true };
@@ -70,7 +70,10 @@ error[ownership/state-written-outside-owner]: `session` is changed outside its o
   |
 5 |   current.user = null;
   |   ^^^^^^^^^^^^
-  = fix: call `signOut` from `session.ts` instead: it owns the value
+  = fix: one of
+      - call `signOut` from `session.ts` instead: it owns the value
+      - or, if these files share it on purpose, list them under the rule's `owners` option:
+            { owners: { "session.ts": ["header.ts"] } }
   = note: header.ts:4: `current` is `session`
   = note: session.ts:3: `session` is declared owned: only `session.ts` may change it
   = docs: stateward explain ownership/state-written-outside-owner
@@ -83,6 +86,8 @@ error[ownership/state-written-outside-owner]: `settings` is changed outside its 
   = fix: one of
       - add a function in `settings.ts` that makes the change (e.g. `setTheme("dark")`), call it, and export the value read-only (`readonly` at every level)
       - or state it `Owned`, so stateward proves that only `settings.ts` changes it
+      - or, if these files share it on purpose, list them under the rule's `owners` option:
+            { owners: { "settings.ts": ["toolbar.ts"] } }
   = note: settings.ts:1: `settings` is declared in `settings.ts`, which owns it
   = docs: stateward explain ownership/state-written-outside-owner
 ```
@@ -126,11 +131,17 @@ It reports another file changing an exported object, array, `Map`, `Set`, class 
 - a collection typed through an alias (`type Items = string[]`): its methods are not recognised;
 - state passed to a function outside your code, which stateward cannot follow.
 
-For a value stated `Owned` it follows more, and what it cannot follow is reported as an error: a local alias (`const s = settings`), a destructured part, an element (`for (const job of jobs)`, `jobs.forEach((job) => …)`), a function that returns it, a static field of a class, a cast (`as`, also through `unknown`), `Object.assign`, `Object.freeze` and `Reflect`, a method of your own class that changes `this`, and the owner handing it to another module's function that changes it. It reports, with the reason, a method or function from a package that is given the value (unless its parameter is `Readonly`), a callee it cannot tell (`handlers.get(name)?.(settings)`), a value typed `any`, and a value typed `Owned` whose declaration it cannot tell (a parameter). It does not follow a value stored into another object or array whose type drops `Owned`, nor `new X(settings)`; copies (`{ ...settings }`, `structuredClone`) are new values. Test files are left out, as for other state.
+For a value stated `Owned` every use outside the owner is listed and read, and a place it cannot read is "not checked" (shown with `--verbose`; the guarantee reads "not checked", never "proven"). It reads a local alias (`const s = settings`), a destructured part, an element (`for (const job of jobs)`, `jobs.forEach((job) => …)`, `all[0]`), an array or object literal that holds it (`[settings]`, `{ current: settings }`, `new Map([[key, settings]])`), a static field of a class, a cast (`as`, also through `unknown`), `Object.assign`, `Object.freeze` and `Reflect`, a method of your own class that changes `this`, and the owner handing it to another module's function that changes it. A spread copy (`{ ...settings }`, `[...list]`) is new at its first level only: a change to a nested value of the copy (`copy.tags.push("x")`, `copy.meta.n = 3`) is a change to the owned value. `structuredClone` copies every level.
+
+Every reference to the value is read, or listed as "not checked" at its place: stateward lists each one as the editor's "find all references" does (through imports, re-exports and destructured names) and follows the value from it. A reference whose value goes where the rule does not follow is not checked, with what it is: a class field or a default value that keeps it, a getter or a function that returns it (its callers are not followed), a generator that yields it, a call through `call`, `apply` or `Reflect.apply`, a `Proxy`, another name for it that other files can import, or a change the rule cannot trace back to it (`(flag ? settings : other).theme = …`). The guarantee reads "unused" only when nothing refers to the value.
+
+Not checked, with the reason: the value assigned to a property or another variable, pushed into a collection, given to a class (`new X(settings)`) or a component, spread into an argument list, handed to a named callback (`items.forEach(touch)`), given to a parameter or value of function type, to a function of the project that returns or stores its argument, or to a package function (unless its parameter is `Readonly`); a value reached by a computed key; a callee it cannot tell (`handlers.get(name)?.(settings)`), a value typed `any`, and a value typed `Owned` whose declaration it cannot tell (a parameter). Test files are left out, as for other state.
+
+The message names an owner's function only when it makes the same change: the same property and the same kind of value (`null`, an equal literal, a parameter of the right type); otherwise it says to add one.
 
 ## Turn it on or off
 
-When a few files share one state on purpose (a store and its slices), list them under `owners` rather than turning the rule off (for a value stated `Owned` too: the files listed count as its owner): map the declaring file to the files allowed to write it (paths from the project folder; `*` matches within a folder, `**` across folders).
+When a few files share one state on purpose (a store and its slices), list them under `owners` rather than turning the rule off (for a value stated `Owned` too: the files listed count as its owner): map the declaring file to the files allowed to write it (paths from the project folder; `*` matches within a folder, `**` across folders). The message writes that entry for the change it reports, with the two real paths.
 
 ```ts
 rules: { "ownership/state-written-outside-owner": ["error", { owners: { "src/store.ts": ["src/slices/**"] } }] }

@@ -247,4 +247,10 @@ export function expectMessageStandard(findings: readonly Finding[]): void {
     );
   }
 }
-export { typeErrors, typeErrorsOfText, typeErrorsOfTexts } from "./testing-tsc.js";
+export {
+  serviceReferences,
+  typeErrors,
+  typeErrorsOfText,
+  typeErrorsOfTexts,
+} from "./testing-tsc.js";
+export type { ServiceReference } from "./testing-tsc.js";

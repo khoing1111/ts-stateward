@@ -37,7 +37,7 @@ const missing: Shown[] = [
     at: "fetchUser(userId)",
     message:
       "`fetchUser(…)` takes an AbortSignal the effect never passes: an answer for an old `userId` can overwrite a newer one",
-    hint: passHint("fetchUser(…)", "fetchUser(…, controller.signal)"),
+    hint: passHint("fetchUser(…)", "fetchUser(userId, controller.signal)"),
     notes: [`Missing.tsx: setUser: ${STALE}`],
     fixes: [
       "Missing.tsx@278: const controller = new AbortController();\n     | Missing.tsx@294: , controller.signal | Missing.tsx@310: \n    return () => controller.abort();",
@@ -50,7 +50,7 @@ const missing: Shown[] = [
     at: 'fetch(url, { cache: "no-store" })',
     message:
       "`fetch(…)` takes an AbortSignal the effect never passes: an answer for an old `url` can overwrite a newer one",
-    hint: passHint("fetch(…)", "fetch(…, { signal: controller.signal })"),
+    hint: passHint("fetch(…)", 'fetch(url, { cache: "no-store", signal: controller.signal })'),
     notes: [`Missing.tsx: setText(await response.text()): ${STALE}`],
     fixes: [
       "Missing.tsx@568: const controller = new AbortController();\n     | Missing.tsx@707: , signal: controller.signal | Missing.tsx@798: controller.abort();\n      ",
@@ -74,7 +74,7 @@ const missing: Shown[] = [
     at: "fetchUser(userId, controller.current.signal)",
     message:
       "`fetchUser(…)` gets a signal the effect does not abort: an answer for an old `userId` can overwrite a newer one",
-    hint: passHint("fetchUser(…)", "fetchUser(…, controller.signal)"),
+    hint: passHint("fetchUser(…)", "fetchUser(userId, controller.signal)"),
     notes: [`Missing.tsx: setUser: ${STALE}`],
     fixes: [],
   },
@@ -86,7 +86,7 @@ const missing: Shown[] = [
     at: "fetchUser(userId)",
     message:
       "`fetchUser(…)` takes an AbortSignal the effect never passes: an answer for an old `userId` can overwrite a newer one",
-    hint: passHint("fetchUser(…)", "fetchUser(…, controller.signal)"),
+    hint: passHint("fetchUser(…)", "fetchUser(userId, controller.signal)"),
     notes: [`Missing.tsx: setUser: ${STALE}`],
     fixes: [
       "Missing.tsx@1834: const controller = new AbortController();\n     | Missing.tsx@1874: , controller.signal | Missing.tsx@1916: controller.abort();\n      ",
@@ -124,7 +124,7 @@ const missing: Shown[] = [
     at: "fetchUser(userId)",
     message:
       "`fetchUser(…)` takes an AbortSignal the effect never passes: an answer for an old `userId` can overwrite a newer one",
-    hint: passHint("fetchUser(…)", "fetchUser(…, controller.signal)"),
+    hint: passHint("fetchUser(…)", "fetchUser(userId, controller.signal)"),
     notes: [`Missing.tsx: setUser(loaded): ${STALE}`],
     fixes: [
       "Missing.tsx@2961: const controller = new AbortController();\n     | Missing.tsx@3022: , controller.signal | Missing.tsx@3090: controller.abort();\n      ",
@@ -132,8 +132,16 @@ const missing: Shown[] = [
   },
 ];
 
-const guessHint = (setter: string): string =>
-  `ignore a response that arrives after the effect is cleaned up:\n    let ignore = false;\n    … if (!ignore) ${setter}(…);\n    return () => { ignore = true; };`;
+/** The flag: with the write behind the check when it is a statement of its own, else in words. */
+const guessHint = (setter: string, written?: string): string =>
+  [
+    written === undefined
+      ? `ignore a response that arrives after the effect is cleaned up (check \`ignore\` before \`${setter}\` once it answers):`
+      : "ignore a response that arrives after the effect is cleaned up:",
+    "    let ignore = false;",
+    ...(written === undefined ? [] : [`    if (!ignore) ${written};`]),
+    "    return () => { ignore = true; };",
+  ].join("\n");
 
 /** What the add-on guesses in Guessed.tsx, about calls that take no signal. */
 const guessed: Shown[] = [
@@ -143,6 +151,7 @@ const guessed: Shown[] = [
     file: "Guessed.tsx",
     at: "setUser(await loadUser(userId))",
     message: "response race: an answer for an old `userId` can overwrite a newer one",
+    // The answer is awaited inside the call: a check before it would run too early.
     hint: guessHint("setUser"),
     notes: ["Guessed.tsx: loadUser(userId): the request that can answer late"],
     fixes: [],
@@ -153,7 +162,7 @@ const guessed: Shown[] = [
     file: "Guessed.tsx",
     at: "setUser(loaded)",
     message: "response race: an answer for an old `id` can overwrite a newer one",
-    hint: guessHint("setUser"),
+    hint: guessHint("setUser", "setUser(loaded)"),
     notes: ["Guessed.tsx: loadUser(id): the request that can answer late"],
     fixes: [],
   },

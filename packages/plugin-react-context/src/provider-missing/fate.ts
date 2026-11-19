@@ -7,7 +7,15 @@ import { enclosingFunction, shortText, type FunctionLike } from "./syntax.js";
  * variable holding it is used), or it escapes to something stateward does not follow.
  */
 export type Fate =
-  { kind: "rendered"; sites: readonly ts.Node[] } | { kind: "escapes"; detail: string };
+  | { kind: "rendered"; sites: readonly ts.Node[] }
+  | {
+      kind: "escapes";
+      detail: string;
+      /** The function the value is given to, as written (`wrap` in `wrap(children)`). */
+      call?: string;
+      /** The value is only looked at (a condition, a comparison, `typeof`), not handed on. */
+      inspected?: true;
+    };
 
 /**
  * What fate needs to know: the type queries, and which nodes are places that render what they
@@ -19,6 +27,30 @@ const IN_PLACE_METHODS: ReadonlySet<string> = new Set(["map", "flatMap"]);
 
 function escapes(detail: string): Fate {
   return { kind: "escapes", detail };
+}
+
+const COMPARISONS: ReadonlySet<ts.SyntaxKind> = new Set([
+  ts.SyntaxKind.EqualsEqualsToken,
+  ts.SyntaxKind.EqualsEqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsEqualsToken,
+]);
+
+const ASSIGNMENTS: ReadonlySet<ts.SyntaxKind> = new Set([
+  ts.SyntaxKind.EqualsToken,
+  ts.SyntaxKind.BarBarEqualsToken,
+  ts.SyntaxKind.AmpersandAmpersandEqualsToken,
+  ts.SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
+/** A use that only looks at the value: `children ? … : …`, `children === null`, `!children`. */
+function inspects(node: ts.Node, child: ts.Node): boolean {
+  if (ts.isConditionalExpression(node)) return node.condition === child;
+  if (ts.isPrefixUnaryExpression(node)) return node.operator === ts.SyntaxKind.ExclamationToken;
+  if (ts.isTypeOfExpression(node) || ts.isVoidExpression(node)) return true;
+  if (ts.isIfStatement(node) || ts.isWhileStatement(node)) return node.expression === child;
+  if (ts.isBinaryExpression(node)) return COMPARISONS.has(node.operatorToken.kind);
+  return false;
 }
 
 /** Wrappers of a value that leave it the same value: `(x)`, `x as T`, `a && x`, `[x]`. */
@@ -96,11 +128,24 @@ export function fateOf(
       return fateOfVariable(parent, start, root, env, seen);
     }
     if (ts.isCallExpression(parent) || ts.isNewExpression(parent)) {
-      return escapes(`${shortText(parent.expression)}()`);
+      return {
+        kind: "escapes",
+        detail: `${shortText(parent.expression)}()`,
+        call: shortText(parent.expression),
+      };
     }
-    if (ts.isBinaryExpression(parent)) return escapes(shortText(parent.left));
+    if (inspects(parent, current)) {
+      return { kind: "escapes", detail: "this expression", inspected: true };
+    }
+    if (ts.isBinaryExpression(parent)) {
+      // `slot.current = children` hands it on; `children + ""` only reads it.
+      return ASSIGNMENTS.has(parent.operatorToken.kind)
+        ? escapes(shortText(parent.left))
+        : { kind: "escapes", detail: shortText(parent.left), inspected: true };
+    }
     if (ts.isPropertyAssignment(parent)) return escapes(shortText(parent.name));
-    return escapes("this expression");
+    // `children.length`, `children[0]`, `typeof children`: the value is read, not handed on.
+    return { kind: "escapes", detail: "this expression", inspected: true };
   }
 }
 
@@ -142,5 +187,13 @@ function fateOfVariable(
   visit(container);
   const sites = uses.flatMap((use) => (use.kind === "rendered" ? use.sites : []));
   const carried = uses.every((use) => use.kind === "rendered");
-  return carried ? { kind: "rendered", sites } : escapes(name.text);
+  if (carried) return { kind: "rendered", sites };
+  // Used in JSX and otherwise only looked at (`c ? <div>{c}</div> : null`): rendered where it is.
+  const looked = uses.every((use) => use.kind === "rendered" || use.inspected === true);
+  if (looked) {
+    return sites.length > 0
+      ? { kind: "rendered", sites }
+      : { kind: "escapes", detail: name.text, inspected: true };
+  }
+  return escapes(name.text);
 }

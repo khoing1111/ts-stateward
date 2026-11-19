@@ -20,6 +20,14 @@ const FLAGGED = fixture("pending-state-stuck-on-failure/flagged");
 const NOT_FLAGGED = fixture("pending-state-stuck-on-failure/not-flagged");
 const OFF = { "async/handler-rejection-lost": "off" } as const;
 
+/** The readings after the fix: a caller sets it again (`ignore`), or its type states it `Pending`. */
+function purposes(state: string, pending: string): string {
+  return [
+    `- or, if a caller sets \`${state}\` again where this rule cannot see, list it under the rule's \`ignore\` option`,
+    `- or state it \`${pending}\`, a type you add once in \`guarantees.ts\` (the rule's page shows it), and stateward proves it settles`,
+  ].join("\n");
+}
+
 /** `call` is what fails; `reset` is the code that goes in the `finally`. */
 function leak(name: string, call: string, flag: string, reset: string, fix?: string) {
   // `search` is shown `search()`; a call with arguments is passed as `api.fetchAll(…)`.
@@ -28,7 +36,11 @@ function leak(name: string, call: string, flag: string, reset: string, fix?: str
     file: "save.ts",
     name,
     message: `\`${flag}\` stays \`true\` when \`${call}\` fails`,
-    hint: `set \`${flag}\` again in a \`finally\`, so a failure resets it too: \`try { await ${call}; } finally { ${reset} }\``,
+    hint: [
+      "one of",
+      `- set \`${flag}\` again in a \`finally\`, so a failure resets it too: \`try { await ${call}; } finally { ${reset} }\``,
+      purposes(flag, "Pending<boolean>"),
+    ].join("\n"),
     notes: [],
     fix,
   };
@@ -41,7 +53,12 @@ function stuck(name: string, call: string, state: string, value: string, write: 
     file: "save.ts",
     name,
     message: `\`${state}\` stays \`${value}\` when \`${call}\` fails`,
-    hint: `set \`${state}\` in a \`catch\` too, so a failure resets it: \`try { await ${call}; … } catch (error) { ${write} throw error; }\``,
+    hint: [
+      "one of",
+      `- set \`${state}\` in a \`catch\` too, so a failure resets it: \`try { await ${call}; … } catch (error) { ${write} throw error; }\``,
+      // A value that is not a word in quotes cannot be named in the type: `…` stands for it.
+      purposes(state, value.startsWith('"') ? `Pending<…, ${value}>` : "Pending<…>"),
+    ].join("\n"),
     notes: [],
     fix: undefined,
   };

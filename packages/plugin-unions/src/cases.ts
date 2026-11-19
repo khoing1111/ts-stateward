@@ -102,17 +102,60 @@ export function isPlainReference(expression: ts.Expression): boolean {
 }
 
 /**
+ * The names the file uses (every identifier in it): an enum the code never writes a member of
+ * can still be named in a type when its own name is in the file, as `Color` is in `c: Color`.
+ */
+export function namesInFile(sourceFile: ts.SourceFile): ReadonlySet<string> {
+  const names = new Set<string>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node)) names.add(node.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return names;
+}
+
+/**
+ * The code for a member in a type position (`void (c satisfies Color.Blue)`): as the code spells
+ * it, else by the enum's own name when the file names that enum. A type-only import is enough
+ * there, unlike a `case`, which needs the enum as a value.
+ */
+export function typeCode(
+  label: string,
+  spellings: ReadonlyMap<string, string>,
+  inFile: ReadonlySet<string>,
+): string | undefined {
+  const spelled = valueCode(label, spellings);
+  if (spelled !== undefined) return spelled;
+  const parts = enumParts(label);
+  return parts !== undefined && inFile.has(parts.owner.split(".")[0] ?? "") ? label : undefined;
+}
+
+/** The enums a list of members names that the code never spells: their cases need the enum as a value. */
+export function unspelledEnums(
+  labels: readonly string[],
+  spellings: ReadonlyMap<string, string>,
+): string[] {
+  const owners = labels.flatMap((label) => {
+    const parts = enumParts(label);
+    return parts !== undefined && !spellings.has(parts.owner) ? [parts.owner] : [];
+  });
+  return [...new Set(owners)];
+}
+
+/**
  * The type that names exactly the cases a `default` or `else` takes today, for the example that
  * says "these fall through on purpose": the cases themselves (`"a" | "b"`). Never
  * `Exclude<Status, …>`: it grows when `Status` gains a case, so the new case would fall through
- * unnoticed again. Undefined when a case cannot be written as a type (an enum the code never
+ * unnoticed again. Undefined when a case cannot be written as a type (an enum the file never
  * names): the hint then offers the ignore comment.
  */
 export function restType(input: {
   hidden: readonly string[];
   spellings: ReadonlyMap<string, string>;
+  inFile: ReadonlySet<string>;
 }): string | undefined {
-  const codes = input.hidden.map((label) => valueCode(label, input.spellings));
+  const codes = input.hidden.map((label) => typeCode(label, input.spellings, input.inFile));
   return codes.every((code) => code !== undefined) ? codes.join(" | ") : undefined;
 }
 

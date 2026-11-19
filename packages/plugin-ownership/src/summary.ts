@@ -2,9 +2,12 @@ import ts from "@stateward/core/typescript";
 import type { FileContext, TypeQueries } from "@stateward/core";
 import { capitalized } from "./text.js";
 import { declareOwnedFix, type DeclareFix } from "./declare-owned.js";
+import { markOwnedReferences, type Handed } from "./owned-reads.js";
 import {
   OWNED,
+  isDefaultLibrary,
   scanOwned,
+  storesArguments,
   type OwnedChange,
   type OwnedDeclaration,
   type OwnerFunction,
@@ -15,6 +18,7 @@ import {
   baseName,
   call,
   isWrapper,
+  isObjectAssign,
   isWriteTarget,
   methodExample,
   unwrapped,
@@ -57,6 +61,12 @@ export type ParamSummary = {
   index: number;
   write: { start: number; end: number } | null;
   forwards: { id: string; index: number }[];
+  /**
+   * Whether the body keeps the parameter, or a part of it, where the rule cannot follow it:
+   * returned, put in an array or object, stored in another value, given to a class, a component,
+   * or a function it cannot see into.
+   */
+  escapes: boolean;
 };
 
 export type FileSummary = {
@@ -71,6 +81,11 @@ export type FileSummary = {
   ownedDeclared: OwnedDeclaration[];
   /** Where this file changes the values it states owned: the writers a guarantee lists. */
   ownerWrites: OwnerWrite[];
+  /**
+   * The references to values stated owned that this file hands to a function of the project
+   * (owned-reads.ts): the project side settles each, as it knows what that function does.
+   */
+  handed?: Handed[];
 };
 
 /** Whether a file sets state up for a test: `*.test.*`, `*.spec.*` or a file under `__tests__`. */
@@ -181,16 +196,6 @@ function calleeName(callee: ts.Expression): string | undefined {
   const current = unwrapped(callee);
   if (ts.isIdentifier(current)) return current.text;
   return ts.isPropertyAccessExpression(current) ? current.name.text : undefined;
-}
-
-function isObjectAssign(callee: ts.Expression, types: TypeQueries): boolean {
-  const current = unwrapped(callee);
-  if (!ts.isPropertyAccessExpression(current) || current.name.text !== "assign") return false;
-  const target = current.expression;
-  if (!ts.isIdentifier(target) || target.text !== "Object") return false;
-  const symbol = types.symbolAt(target);
-  const declaration = symbol && types.declarationOf(symbol);
-  return declaration !== undefined && !types.isOwnFile(declaration.file);
 }
 
 /** The qualified id of the function a call goes to; undefined when it cannot be found. */
@@ -382,6 +387,123 @@ function referencesTo(
   return found;
 }
 
+/**
+ * Whether a use of a parameter (with the members read from it) keeps it where the rule cannot
+ * follow it: returned, stored in an array, an object or another value, given to a class, a
+ * component, a spread, or a function from a package or one the rule cannot read.
+ */
+function keepsOutOfReach(reference: ts.Identifier, types: TypeQueries): boolean {
+  let top: ts.Expression = reference;
+  for (;;) {
+    const parent: ts.Node = top.parent;
+    if (
+      isWrapper(parent) ||
+      (ts.isPropertyAccessExpression(parent) && parent.expression === top) ||
+      (ts.isElementAccessExpression(parent) && parent.expression === top)
+    ) {
+      if (!ts.isExpression(parent)) return false;
+      top = parent;
+      continue;
+    }
+    break;
+  }
+  const parent = top.parent;
+  if (
+    ts.isReturnStatement(parent) ||
+    ts.isArrayLiteralExpression(parent) ||
+    ts.isSpreadElement(parent) ||
+    ts.isSpreadAssignment(parent) ||
+    ts.isPropertyAssignment(parent) ||
+    ts.isShorthandPropertyAssignment(parent) ||
+    ts.isJsxExpression(parent) ||
+    ts.isYieldExpression(parent) ||
+    (ts.isArrowFunction(parent) && parent.body === top)
+  ) {
+    return !types.isPrimitive(top);
+  }
+  if (ts.isBinaryExpression(parent) && parent.right === top) {
+    return parent.operatorToken.kind === ts.SyntaxKind.EqualsToken && !types.isPrimitive(top);
+  }
+  if (ts.isNewExpression(parent)) {
+    return parent.arguments?.includes(top) === true && !types.isPrimitive(top);
+  }
+  if (ts.isCallExpression(parent)) {
+    const index = parent.arguments.indexOf(top);
+    if (index < 0 || types.isPrimitive(top)) return false;
+    const callee = unwrapped(parent.expression);
+    const named = ts.isPropertyAccessExpression(callee) ? callee.name : callee;
+    const symbol = types.symbolAt(named);
+    const declared = symbol && types.declarationOf(symbol);
+    if (declared === undefined) return true;
+    if (isDefaultLibrary(declared.file, types)) {
+      return (
+        ts.isPropertyAccessExpression(callee) && storesArguments(declared.node, callee.name.text)
+      );
+    }
+    return (
+      !types.isOwnFile(declared.file) ||
+      parent.arguments.slice(0, index + 1).some(ts.isSpreadElement)
+    );
+  }
+  return false;
+}
+
+/** The names a parameter binds: itself, or each name of its pattern (`{ meta, tags: [first] }`). */
+function bindingNames(name: ts.BindingName): ts.Identifier[] {
+  if (ts.isIdentifier(name)) return [name];
+  return name.elements.flatMap((element) =>
+    ts.isBindingElement(element) ? bindingNames(element.name) : [],
+  );
+}
+
+/** Whether a body reads `arguments` (not in a function of its own, which has its own). */
+function readsArguments(body: ts.Node): boolean {
+  let found = false;
+  const walk = (node: ts.Node): void => {
+    if (found) return;
+    if (
+      ts.isFunctionDeclaration(node) ||
+      ts.isFunctionExpression(node) ||
+      ts.isMethodDeclaration(node) ||
+      ts.isAccessor(node) ||
+      ts.isConstructorDeclaration(node)
+    ) {
+      return;
+    }
+    if (ts.isIdentifier(node) && node.text === "arguments") {
+      const parent = node.parent;
+      if (!(ts.isPropertyAccessExpression(parent) && parent.name === node)) found = true;
+      return;
+    }
+    ts.forEachChild(node, walk);
+  };
+  walk(body);
+  return found;
+}
+
+/** The references to the loop variable of a `for…of` over `reference`, in the loop's body. */
+function loopElements(reference: ts.Identifier, types: TypeQueries): ts.Identifier[] {
+  let at: ts.Node = reference;
+  while (isWrapper(at.parent)) at = at.parent;
+  const loop = at.parent;
+  if (!ts.isForOfStatement(loop) || loop.expression !== at) return [];
+  const list = loop.initializer;
+  if (!ts.isVariableDeclarationList(list)) return [];
+  const [declaration] = list.declarations;
+  if (declaration === undefined || !ts.isIdentifier(declaration.name)) return [];
+  const id = types.symbolAt(declaration.name)?.id;
+  return id === undefined ? [] : referencesTo(loop.statement, declaration.name.text, id, types);
+}
+
+/** Whether a call's callee is a parameter of a function: a callback this rule cannot see into. */
+function callsParameter(callee: ts.Expression, types: TypeQueries): boolean {
+  const current = unwrapped(callee);
+  if (!ts.isIdentifier(current)) return false;
+  const symbol = types.symbolAt(current);
+  const declared = symbol === undefined ? undefined : types.declarationOf(symbol);
+  return declared !== undefined && ts.isParameter(declared.node);
+}
+
 /** What the body of a function does to each of its parameters, kept for the ones it changes. */
 function summarizeParams(
   fn: ts.SignatureDeclaration,
@@ -394,14 +516,31 @@ function summarizeParams(
   const { types, sourceFile } = ctx;
   const fnId = types.symbolAt(name)?.id;
   if (fnId === undefined) return;
+  // `arguments[0].theme = …` reaches every parameter by its position, which is not followed.
+  const usesArguments = readsArguments(body);
   fn.parameters.forEach((parameter, index) => {
-    if (!ts.isIdentifier(parameter.name) || parameter.dotDotDotToken !== undefined) return;
-    const paramId = types.symbolAt(parameter.name)?.id;
-    if (paramId === undefined) return;
+    if (parameter.dotDotDotToken !== undefined) return;
+    // A destructured parameter (`{ meta }`): each name it binds is a part of the argument.
+    const names = bindingNames(parameter.name);
     let write: ParamSummary["write"] = null;
+    let escapes = usesArguments;
     const forwards: ParamSummary["forwards"] = [];
-    for (const reference of referencesTo(body, parameter.name.text, paramId, types)) {
-      const change = followChain(reference, parameter.name.text, ctx);
+    const references = names.flatMap((bound) => {
+      const id = types.symbolAt(bound)?.id;
+      if (id === undefined) return [];
+      return referencesTo(body, bound.text, id, types)
+        .filter((reference) => bound === parameter.name || !isWriteTarget(reference))
+        .map((reference) => ({ reference, name: bound.text }));
+    });
+    // `for (const x of xs)`: each element is the loop's variable, read as the parameter is.
+    const elements = references.flatMap(({ reference, name: shown }) =>
+      loopElements(reference, types).map((element) => ({ reference: element, name: shown })),
+    );
+    for (const { reference, name: shown } of [...references, ...elements]) {
+      if (keepsOutOfReach(reference, types)) escapes = true;
+      const change = followChain(reference, shown, ctx);
+      // `f(x)` where `f` is a parameter (a callback): what it does to the value is not followed.
+      if (change?.kind === "pass" && callsParameter(change.callee, types)) escapes = true;
       if (change?.kind === "write") {
         const place = { start: change.node.getStart(sourceFile), end: change.node.end };
         if (write === null || place.start < write.start) write = place;
@@ -412,9 +551,9 @@ function summarizeParams(
         }
       }
     }
-    if (write === null && forwards.length === 0) return;
+    if (write === null && forwards.length === 0 && !escapes) return;
     forwards.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : a.index - b.index));
-    params.push({ id: fnId, fn: name.text, index, write, forwards });
+    params.push({ id: fnId, fn: name.text, index, write, forwards, escapes });
   });
 }
 
@@ -493,6 +632,8 @@ export function summarizeFile(ctx: FileContext): FileSummary | undefined {
   const found: Found = { writes: [], passes: [], params: [], declares: new Map() };
   visit(ctx.sourceFile, imports, found, ctx);
   const { owned, ownerFns, declared, ownerWrites } = scanOwned(ctx);
+  const handed: Handed[] = [];
+  markOwnedReferences(ctx, handed);
   found.writes.sort(byPlace);
   found.passes.sort(byPlace);
   found.params.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : a.index - b.index));
@@ -503,7 +644,17 @@ export function summarizeFile(ctx: FileContext): FileSummary | undefined {
     owned.length === 0 &&
     ownerFns.length === 0 &&
     declared.length === 0 &&
-    ownerWrites.length === 0
+    ownerWrites.length === 0 &&
+    handed.length === 0
     ? undefined
-    : { writes, passes, params, owned, ownerFns, ownedDeclared: declared, ownerWrites };
+    : {
+        writes,
+        passes,
+        params,
+        owned,
+        ownerFns,
+        ownedDeclared: declared,
+        ownerWrites,
+        ...(handed.length === 0 ? {} : { handed }),
+      };
 }

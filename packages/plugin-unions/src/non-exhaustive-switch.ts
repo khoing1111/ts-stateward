@@ -1,11 +1,14 @@
 import ts from "@stateward/core/typescript";
 import {
   defineRule,
+  isSafePlatformCall,
   option,
   type FileContext,
   type Fix,
   type Json,
+  type LedgerRef,
   type Literal,
+  type ReadOutcome,
   type TextEdit,
 } from "@stateward/core";
 import {
@@ -18,6 +21,9 @@ import {
   leadingSpace,
   proofTarget,
   restType,
+  namesInFile,
+  typeCode,
+  unspelledEnums,
   stripParentheses,
   valueCode,
   enumParts,
@@ -329,16 +335,22 @@ function fixLines(input: {
   many: boolean;
   /** The `switch` has no `default`: the allowance adds one. */
   noDefault: boolean;
+  /** Enums the code never writes a member of: a `case` for one needs it imported as a value. */
+  imports: readonly string[];
 }): string {
-  const { values, subject, allow, many, noDefault } = input;
+  const { values, subject, allow, many, noDefault, imports } = input;
+  const needs =
+    imports.length === 0
+      ? ""
+      : ` (with ${named(imports.map((owner) => `\`${owner}\``))} imported as a value)`;
   const one = values.length === 1;
   const it = one ? "it" : "them";
   // "allow it in `default`", or, without one, "add `default:` that allows it".
   const allowIt = noDefault ? `add \`default:\` that allows ${it}` : `allow ${it} in \`default\``;
   const add =
     values.length > 3
-      ? "add a `case` for each, with its own code"
-      : `add ${named(values.map((value) => `\`case ${value}:\``))} with ${one ? "its" : "their"} own code`;
+      ? `add a \`case\` for each, with its own code${needs}`
+      : `add ${named(values.map((value) => `\`case ${value}:\``))} with ${one ? "its" : "their"} own code${needs}`;
   const allowLines = ((): string[] => {
     switch (allow.kind) {
       case "statement": {
@@ -380,6 +392,17 @@ function headline(labels: readonly string[], subject: string, maxHidden: number)
     labels,
     maxHidden,
     (cut, listed) => `\`switch\` on \`${cut(subject)}\` does not handle ${listed}`,
+  );
+}
+
+/** For a `default` that takes cases no `case` names: it does handle them, so the headline says what it takes. */
+function takenHeadline(labels: readonly string[], subject: string, maxHidden: number): string {
+  return fittedCases(
+    HEADLINE_MAX,
+    labels,
+    maxHidden,
+    (cut, listed) =>
+      `the \`default\` of the \`switch\` on \`${cut(subject)}\` takes ${listed}, which no \`case\` names`,
   );
 }
 
@@ -445,6 +468,8 @@ export function openAliasOf(
   subject: ts.Expression,
   ctx: FileContext,
 ): ts.TypeAliasDeclaration | undefined {
+  const tagged = openObjectOf(subject, ctx);
+  if (tagged !== undefined) return openAliasOf(tagged, ctx);
   const declared = statingAlias(declaredTypeNode(subject, ctx), ctx);
   if (declared !== undefined) return declared;
   const declaration = ctx.types.typeAliasOf(subject)?.declaration;
@@ -456,6 +481,30 @@ export function openAliasOf(
     return undefined;
   }
   return statingAlias(declaration.type, ctx) ?? declaration;
+}
+
+/**
+ * The object whose tag a subject reads (`part` in `part.kind`, `part["kind"]`) when that object's
+ * type is a union stated open: `type Part = OpenUnion<A | B | Generic>`. The checker keeps the
+ * statement in the type, so it is read from the type, wherever the object got it.
+ */
+export function openObjectOf(subject: ts.Expression, ctx: FileContext): ts.Expression | undefined {
+  const inner = stripParentheses(subject);
+  const object = ts.isPropertyAccessExpression(inner)
+    ? inner.expression
+    : ts.isElementAccessExpression(inner) && ts.isStringLiteral(inner.argumentExpression)
+      ? inner.expression
+      : undefined;
+  return object !== undefined && ctx.types.guaranteesOf(object).includes(OPEN_UNION)
+    ? object
+    : undefined;
+}
+
+/** Whether a switch subject is a union stated open, or the tag of an object that is. */
+function isOpenSubject(subject: ts.Expression, ctx: FileContext): boolean {
+  return (
+    ctx.types.guaranteesOf(subject).includes(OPEN_UNION) || openObjectOf(subject, ctx) !== undefined
+  );
 }
 
 /** `status` for `order.status`: what "an unknown …" names. */
@@ -483,6 +532,7 @@ export const nonExhaustiveSwitch = defineRule({
     tier: "core",
     group: "cases",
     fixNeedsStrictNulls: true,
+    proves: { flows: { decided: [OPEN_UNION] } },
     options: {
       maxHidden: option.number({
         default: 5,
@@ -494,7 +544,7 @@ export const nonExhaustiveSwitch = defineRule({
       ignore: option.strings({
         default: [],
         description:
-          "Union type names (globs like *Event) whose switches are not checked: matched against the type of the value tested, or of the object whose tag is tested.",
+          "Union type names (globs like *Event) whose switches are not checked: matched against the type of the value tested, or of the object whose tag is tested. A union stated open (`OpenUnion<T>`) is always checked: no setting silences a stated guarantee.",
       }),
       severities: option.severities({
         kinds: {
@@ -506,6 +556,8 @@ export const nonExhaustiveSwitch = defineRule({
           "many-missing":
             "a switch without a default does not list more than maxHidden cases (info unless set here)",
           open: "a switch over an open union (`OpenUnion<T>`) has no default",
+          "open-throws":
+            "the default of a switch over an open union only throws (or calls a function that returns `never` or always throws, or rejects), or only checks the value against `never`, so it handles no value outside the union",
           "enum-value":
             'a case names an enum member by its value (`case "person":`), which TypeScript does not check (info unless set here)',
         },
@@ -520,6 +572,13 @@ export const nonExhaustiveSwitch = defineRule({
     explain: EXPLAIN,
   },
   check(ctx) {
+    for (const chain of uncheckedChains(ctx)) {
+      ctx.unknown({
+        node: chain.node,
+        message: `not checked: ${chain.reason}`,
+        hint: "use a `switch` with a `default` that handles a value outside the union: a chain is not read as a switch, even with an `else`",
+      });
+    }
     const settings: Settings = {
       maxHidden: ctx.options.maxHidden,
       projectTypesOnly: ctx.options.projectTypesOnly,
@@ -530,11 +589,205 @@ export const nonExhaustiveSwitch = defineRule({
       ts.forEachChild(node, visit);
     };
     visit(ctx.sourceFile);
+    markDecidedFlows(ctx);
   },
   summarize(ctx): Json | undefined {
     return openSummary(ctx);
   },
 });
+
+/** The expression that starts and ends where a flow of the ledger does. */
+function expressionAt(sourceFile: ts.SourceFile, start: number, end: number): ts.Node | undefined {
+  let found: ts.Node | undefined;
+  const visit = (node: ts.Node): void => {
+    if (found !== undefined || node.end < end || node.pos > start) return;
+    if (node.getStart(sourceFile) === start && node.end === end && ts.isExpression(node)) {
+      found = node;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return found;
+}
+
+/** Up from a comparison through `(…)`, `!`, `&&` and `||`: the node whose condition it is part of. */
+function conditionOwner(comparison: ts.Node): { owner: ts.Node; condition: ts.Node } {
+  let condition = comparison;
+  for (;;) {
+    const parent = condition.parent;
+    if (
+      ts.isParenthesizedExpression(parent) ||
+      (ts.isPrefixUnaryExpression(parent) && parent.operator === ts.SyntaxKind.ExclamationToken) ||
+      (ts.isBinaryExpression(parent) &&
+        (parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+          parent.operatorToken.kind === ts.SyntaxKind.BarBarToken))
+    ) {
+      condition = parent;
+      continue;
+    }
+    return { owner: parent, condition };
+  }
+}
+
+/**
+ * What the proof says of a value of a union stated open that the code decides by (a `decided`
+ * flow of the reference ledger): the subject of a `switch` is read (the checks above judge the
+ * switch); any other way to decide by it is not read as a switch, so it is not checked: a
+ * `switch (true)`, a `?:` chain, an `if` or an `if` chain, a comparison kept in a value, a lookup
+ * by the value, an `in` test.
+ */
+function decidedOutcome(ref: LedgerRef, node: ts.Node, ctx: FileContext): ReadOutcome {
+  let at = node;
+  while (ts.isParenthesizedExpression(at.parent) || ts.isNonNullExpression(at.parent)) {
+    at = at.parent;
+  }
+  const parent = at.parent;
+  const value = oneLineText(node, ctx.sourceFile);
+  const notRead = (what: string, hint = "use a `switch` with a `default`"): ReadOutcome => ({
+    kind: "unchecked",
+    reason: `${what} is not read as a switch: ${hint}`,
+  });
+  if (ref.via === "derived") {
+    return notRead(
+      `\`${value}\`, a value made from the union,`,
+      "switch on the value itself, with a `default`",
+    );
+  }
+  if (ref.via === "call") {
+    return notRead(`\`${ref.text}\`, a call that decides by \`${value}\`,`);
+  }
+  if (ts.isSwitchStatement(parent) && parent.expression === at) return { kind: "decided" };
+  if (ts.isElementAccessExpression(parent) && parent.argumentExpression === at) {
+    // `labels[s] ?? s`: a key the table does not have gets the fallback.
+    let lookup: ts.Node = parent;
+    while (ts.isParenthesizedExpression(lookup.parent)) lookup = lookup.parent;
+    const outer = lookup.parent;
+    if (
+      ts.isBinaryExpression(outer) &&
+      outer.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken &&
+      outer.left === lookup
+    ) {
+      // The fallback must hand a value back: `labels[s] ?? fail(s)` throws instead.
+      const throwing = throwingPart([outer.right], ctx);
+      if (throwing === undefined) return { kind: "decided" };
+      return notRead(
+        `the lookup \`${oneLineText(parent, ctx.sourceFile)}\` by \`${value}\`, whose fallback \`${oneLineText(throwing, ctx.sourceFile)}\` can throw,`,
+        "give it a fallback value for a value the table does not have, or use a `switch`",
+      );
+    }
+    return notRead(
+      `the lookup \`${oneLineText(parent, ctx.sourceFile)}\` by \`${value}\``,
+      "give it a fallback (`?? …`) for a value the table does not have, or use a `switch`",
+    );
+  }
+  if (ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.InKeyword) {
+    return notRead(`the \`in\` test \`${oneLineText(parent, ctx.sourceFile)}\``);
+  }
+  if (ts.isBinaryExpression(parent)) {
+    const { owner, condition } = conditionOwner(parent);
+    if (ts.isCaseClause(owner) && owner.expression === condition) {
+      const subject = oneLineText(owner.parent.parent.expression, ctx.sourceFile);
+      return notRead(`the \`switch (${subject})\` on \`${value}\``);
+    }
+    if (ts.isConditionalExpression(owner) && owner.condition === condition) {
+      return notRead(`the \`?:\` on \`${value}\``);
+    }
+    if (ts.isIfStatement(owner) && owner.expression === condition) {
+      const chain =
+        owner.elseStatement !== undefined ||
+        (ts.isIfStatement(owner.parent) && owner.parent.elseStatement === owner);
+      return notRead(`the \`if\`${chain ? " chain" : ""} on \`${value}\``);
+    }
+    return notRead(`the comparison \`${oneLineText(parent, ctx.sourceFile)}\``);
+  }
+  return notRead(`\`${ref.text}\``);
+}
+
+/** Marks every reference to a union stated open: its names, and the values the code decides by. */
+function markDecidedFlows(ctx: FileContext): void {
+  for (const ref of ctx.ledger) {
+    if (ref.trait !== OPEN_UNION) continue;
+    if (ref.form === "import" || ref.form === "export" || ref.form === "type") {
+      ctx.read(ref, { kind: "irrelevant" });
+      continue;
+    }
+    const node =
+      ref.form === "decided"
+        ? expressionAt(ctx.sourceFile, ref.location.start, ref.location.end)
+        : undefined;
+    ctx.read(
+      ref,
+      node === undefined
+        ? {
+            kind: "unchecked",
+            reason: `\`${ref.text}\` is a use of \`${ref.name}\` that stateward does not read: decide by the value in a \`switch\` with a \`default\``,
+          }
+        : decidedOutcome(ref, node, ctx),
+    );
+  }
+}
+
+/** The comparisons in a condition whose operand is an open value, through `&&`, `||`, `!` and `(…)`. */
+function openOperand(condition: ts.Expression, ctx: FileContext): ts.Expression | undefined {
+  const inner = stripParentheses(condition);
+  if (ts.isPrefixUnaryExpression(inner) && inner.operator === ts.SyntaxKind.ExclamationToken) {
+    return openOperand(inner.operand, ctx);
+  }
+  if (!ts.isBinaryExpression(inner)) return undefined;
+  const operator = inner.operatorToken.kind;
+  if (
+    operator === ts.SyntaxKind.AmpersandAmpersandToken ||
+    operator === ts.SyntaxKind.BarBarToken
+  ) {
+    return openOperand(inner.left, ctx) ?? openOperand(inner.right, ctx);
+  }
+  const compares =
+    operator === ts.SyntaxKind.EqualsEqualsEqualsToken ||
+    operator === ts.SyntaxKind.EqualsEqualsToken ||
+    operator === ts.SyntaxKind.ExclamationEqualsEqualsToken ||
+    operator === ts.SyntaxKind.ExclamationEqualsToken;
+  if (!compares) return undefined;
+  return [inner.left, inner.right].map(stripParentheses).find((side) => isOpenSubject(side, ctx));
+}
+
+/**
+ * The `if` chains over an open value that are not proven: an `if … else if …` (or `if … else`)
+ * whose conditions compare an open value, and that does not end in an `else` that handles one (an
+ * `else` that only throws handles nothing). A lone `if` is a condition, not a chain. A chain is
+ * not read as a switch, so the union is "not checked" there.
+ */
+function uncheckedChains(ctx: FileContext): { node: ts.IfStatement; id: string; reason: string }[] {
+  const found: { node: ts.IfStatement; id: string; reason: string }[] = [];
+  const visit = (node: ts.Node): void => {
+    const isFirst =
+      ts.isIfStatement(node) &&
+      !(ts.isIfStatement(node.parent) && node.parent.elseStatement === node);
+    if (ts.isIfStatement(node) && isFirst && node.elseStatement !== undefined) {
+      let last: ts.IfStatement = node;
+      let subject = openOperand(node.expression, ctx);
+      while (last.elseStatement !== undefined && ts.isIfStatement(last.elseStatement)) {
+        last = last.elseStatement;
+        subject ??= openOperand(last.expression, ctx);
+      }
+      const ending = last.elseStatement;
+      const handled =
+        ending !== undefined && !onlyThrows(ts.isBlock(ending) ? ending.statements : [ending], ctx);
+      const alias = subject === undefined ? undefined : openAliasOf(subject, ctx);
+      if (subject !== undefined && alias !== undefined && !handled) {
+        const at = placeOf(alias);
+        found.push({
+          node,
+          id: `${at.file}#${String(at.start)}`,
+          reason: `the \`if\` chain on \`${oneLineText(subject, ctx.sourceFile)}\` is not read as a switch, and it has no \`else\` that handles a value outside \`${alias.name.text}\`: use a \`switch\` with a \`default\``,
+        });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(ctx.sourceFile);
+  return found;
+}
 
 /**
  * The open unions this file states, and its switches over one: what `stateward guarantees`, hover
@@ -554,7 +807,7 @@ function openSummary(ctx: FileContext): OpenSummary | undefined {
     }
     if (ts.isSwitchStatement(node)) {
       const subject = stripParentheses(node.expression);
-      if (ctx.types.guaranteesOf(subject).includes(OPEN_UNION)) {
+      if (isOpenSubject(subject, ctx)) {
         const alias = openAliasOf(subject, ctx);
         if (alias !== undefined) {
           const at = placeOf(alias);
@@ -563,10 +816,33 @@ function openSummary(ctx: FileContext): OpenSummary | undefined {
         }
       }
     }
+    // `labels[s] ?? fallback`: a value the table does not have gets the fallback.
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+    ) {
+      const lookup = stripParentheses(node.left);
+      const key = ts.isElementAccessExpression(lookup)
+        ? stripParentheses(lookup.argumentExpression)
+        : undefined;
+      const alias =
+        key !== undefined && isOpenSubject(key, ctx) ? openAliasOf(key, ctx) : undefined;
+      if (alias !== undefined) {
+        const at = placeOf(alias);
+        switches.push({ ...placeOf(node), id: `${at.file}#${String(at.start)}` });
+      }
+    }
     ts.forEachChild(node, visit);
   };
   visit(ctx.sourceFile);
-  return declared.length === 0 && switches.length === 0 ? undefined : { declared, switches };
+  const chains = uncheckedChains(ctx).map(({ node, id, reason }) => ({
+    ...placeOf(node),
+    id,
+    reason,
+  }));
+  return declared.length === 0 && switches.length === 0 && chains.length === 0
+    ? undefined
+    : { declared, switches, ...(chains.length === 0 ? {} : { chains }) };
 }
 
 /** A `switch` over an open union without a `default`: a value the union does not list goes nowhere. */
@@ -583,10 +859,448 @@ function checkOpen(
     node: node.getFirstToken(ctx.sourceFile) ?? node,
     message: fitted(
       (cut) =>
-        `\`switch\` on \`${cut(shown)}\` does not handle a value outside \`${cut(union)}\`, which is open`,
+        `\`switch\` on \`${cut(shown)}\` has no \`default\` for a value outside \`${cut(union)}\`, which is open`,
     ),
     hint: `add \`default:\` that handles an unknown ${lastName(subject)}`,
     findingKind: "open",
+    against: true,
+    related: stated,
+  });
+}
+
+/** Whether a call is typed `never`: it never returns (`assertNever(s)`). */
+function callsNever(expression: ts.Expression, ctx: FileContext): boolean {
+  let inner = stripParentheses(expression);
+  while (ts.isAwaitExpression(inner)) inner = stripParentheses(inner.expression);
+  return ts.isCallExpression(inner) && ctx.types.typeTextOf(inner) === "never";
+}
+
+/** A `return` in the statements that gives a value back (not a `never` call), not in a nested function. */
+function returnsValue(statements: readonly ts.Statement[], ctx: FileContext): boolean {
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found || ts.isFunctionLike(node)) return;
+    if (
+      ts.isReturnStatement(node) &&
+      node.expression !== undefined &&
+      !neverReturns(node.expression, ctx)
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  for (const statement of statements) visit(statement);
+  return found;
+}
+
+/**
+ * Whether a clause handles no value: it ends in a `throw` or a call that returns `never`
+ * (`assertNever(s)`), and gives nothing back on the way. A value the union does not list then
+ * stops the program instead of being handled.
+ */
+export function onlyThrows(statements: readonly ts.Statement[], ctx: FileContext): boolean {
+  const { kind } = endingOf(statements, ctx);
+  return kind === "throws" || kind === "never";
+}
+
+/** The statements of a clause without `break`s and empty ones, a lone block opened. */
+function keptStatements(statements: readonly ts.Statement[]): readonly ts.Statement[] {
+  const kept = statements.filter((one) => !ts.isBreakStatement(one) && !ts.isEmptyStatement(one));
+  const [only] = kept;
+  return kept.length === 1 && only !== undefined && ts.isBlock(only)
+    ? keptStatements(only.statements)
+    : kept;
+}
+
+/**
+ * Whether a clause only checks the value against `never` (`const unreachable: never = s;`, then
+ * perhaps `return unreachable;`): TypeScript checks the cases with it, but at run time a value the
+ * union does not list goes through it unhandled.
+ */
+function onlyChecksNever(statements: readonly ts.Statement[], ctx: FileContext): boolean {
+  const kept = keptStatements(statements);
+  const declares = (one: ts.Statement): boolean =>
+    ts.isVariableStatement(one) &&
+    one.declarationList.declarations.every(
+      (declaration) => declaration.type?.kind === ts.SyntaxKind.NeverKeyword,
+    );
+  const givesNever = (one: ts.Statement): boolean =>
+    (ts.isReturnStatement(one) || ts.isExpressionStatement(one)) &&
+    one.expression !== undefined &&
+    ts.isIdentifier(stripParentheses(one.expression)) &&
+    ctx.types.typeTextOf(one.expression) === "never";
+  return kept.some(declares) && kept.every((one) => declares(one) || givesNever(one));
+}
+
+/** The function a call reaches, when the project declares it with a body: a function, an arrow, an object's or a class's method. */
+function calledFunction(
+  call: ts.CallExpression,
+  ctx: FileContext,
+): ts.FunctionLikeDeclaration | undefined {
+  const callee = stripParentheses(call.expression);
+  // A function written and called in place: `(() => { … })()`.
+  if (ts.isArrowFunction(callee) || ts.isFunctionExpression(callee)) return callee;
+  const name = ts.isPropertyAccessExpression(callee) ? callee.name : callee;
+  if (!ts.isIdentifier(name)) return undefined;
+  const symbol = ctx.types.symbolAt(name);
+  const declared = symbol === undefined ? undefined : ctx.types.declarationOf(symbol);
+  if (declared === undefined || !ctx.types.isOwnFile(declared.file)) return undefined;
+  const node = declared.node;
+  const fn =
+    (ts.isVariableDeclaration(node) ||
+      ts.isPropertyAssignment(node) ||
+      ts.isPropertyDeclaration(node)) &&
+    node.initializer !== undefined
+      ? stripParentheses(node.initializer)
+      : node;
+  return ts.isFunctionDeclaration(fn) ||
+    ts.isFunctionExpression(fn) ||
+    ts.isArrowFunction(fn) ||
+    ts.isMethodDeclaration(fn)
+    ? fn
+    : undefined;
+}
+
+/**
+ * Whether a call always throws: a function of the project (a function, an arrow, an object's or a
+ * class's method, one written and called in place) whose body ends in a `throw` and has no
+ * `return` (`function fail(m: string): void { throw new Error(m); }`), whatever its return type
+ * says.
+ */
+function alwaysThrows(expression: ts.Expression, ctx: FileContext): boolean {
+  let inner = stripParentheses(expression);
+  while (ts.isAwaitExpression(inner)) inner = stripParentheses(inner.expression);
+  if (!ts.isCallExpression(inner)) return false;
+  const fn = calledFunction(inner, ctx);
+  const body = fn?.body;
+  if (body === undefined || !ts.isBlock(body)) return false;
+  const last = body.statements.at(-1);
+  if (last === undefined || !ts.isThrowStatement(last)) return false;
+  let returns = false;
+  const visit = (child: ts.Node): void => {
+    if (returns || ts.isFunctionLike(child)) return;
+    if (ts.isReturnStatement(child)) {
+      returns = true;
+      return;
+    }
+    ts.forEachChild(child, visit);
+  };
+  for (const statement of body.statements) visit(statement);
+  return !returns;
+}
+
+/** Whether a call never gives a value back: typed `never`, or a function of the project that always throws. */
+function neverReturns(expression: ts.Expression, ctx: FileContext): boolean {
+  return callsNever(expression, ctx) || alwaysThrows(expression, ctx);
+}
+
+/** The name a call is made by: `f` of `f()`, `parse` of `JSON.parse()`. */
+function calleeName(node: ts.CallExpression | ts.NewExpression): ts.Node {
+  const callee = stripParentheses(node.expression);
+  return ts.isPropertyAccessExpression(callee) ? callee.name : callee;
+}
+
+/** Whether `new X(…)` makes a class of the project whose constructor ends in a `throw`. */
+function constructorThrows(created: ts.NewExpression, ctx: FileContext): boolean {
+  const callee = stripParentheses(created.expression);
+  if (!ts.isIdentifier(callee)) return false;
+  const symbol = ctx.types.symbolAt(callee);
+  const declared = symbol === undefined ? undefined : ctx.types.declarationOf(symbol);
+  if (declared === undefined || !ts.isClassLike(declared.node)) return false;
+  const constructor = declared.node.members.find(ts.isConstructorDeclaration);
+  const last = constructor?.body?.statements.at(-1);
+  return last !== undefined && ts.isThrowStatement(last);
+}
+
+/**
+ * The first part of the given code that throws or may, when it is read as handling a value: a call
+ * that never returns (`return up(fail(s))`, `[fail(s)]`, `fail(s) ?? "?"`), a `new` of a class whose
+ * constructor throws, a getter or setter that runs, or a call of the platform that is not on its
+ * closed list of calls that cannot throw (`JSON.parse("")`). A value built from one throws instead
+ * of handling the value. Not in nested functions.
+ */
+function throwingPart(nodes: readonly ts.Node[], ctx: FileContext): ts.Node | undefined {
+  let found: ts.Node | undefined;
+  const visit = (node: ts.Node): void => {
+    if (found !== undefined || ts.isFunctionLike(node)) return;
+    if (ts.isCallExpression(node) && neverReturns(node, ctx)) found = node;
+    else if (ts.isNewExpression(node) && constructorThrows(node, ctx)) found = node;
+    else if (ts.isPropertyAccessExpression(node) && ctx.types.readMayRunAccessor(node)) {
+      found = node;
+    } else if (
+      (ts.isCallExpression(node) || ts.isNewExpression(node)) &&
+      ctx.types.isPlatformName(calleeName(node)) &&
+      !isSafePlatformCall(node, ctx.types)
+    ) {
+      found = node;
+    }
+    if (found === undefined) ts.forEachChild(node, visit);
+  };
+  for (const node of nodes) visit(node);
+  return found;
+}
+
+/**
+ * Whether a statement stops the clause there: a call that never returns, as a statement, kept in
+ * a variable (`const r = assertNever(s)`) or awaited, and an awaited `Promise.reject(…)`.
+ */
+function stopsHere(statement: ts.Statement, ctx: FileContext): boolean {
+  if (ts.isExpressionStatement(statement)) {
+    const inner = stripParentheses(statement.expression);
+    return (
+      neverReturns(statement.expression, ctx) ||
+      (ts.isAwaitExpression(inner) && isPromiseReject(inner, ctx))
+    );
+  }
+  if (ts.isVariableStatement(statement)) {
+    return statement.declarationList.declarations.some(
+      (declaration) =>
+        declaration.initializer !== undefined && neverReturns(declaration.initializer, ctx),
+    );
+  }
+  return false;
+}
+
+/**
+ * How a clause ends: it `throws` (a closed list: a `throw`; a call that never returns: typed
+ * `never`, or a function of the project that always throws, also one written and called in place,
+ * also kept in a variable; an assertion of a literal `false`; a `Promise.reject(…)` awaited, or
+ * returned by a function that returns a promise), it `handles` a value (a closed list: it returns
+ * a value, ends in a statement or an `if`, or falls out of the `switch` into code that handles
+ * it), or the proof cannot tell (`unknown`). `after` is the code after the `switch`, which a clause
+ * that falls out of it runs.
+ */
+export function endingOf(
+  statements: readonly ts.Statement[],
+  ctx: FileContext,
+  after: readonly ts.Statement[] = [],
+): Ending {
+  const ending = clauseEnding(statements, ctx, after);
+  if (ending.kind !== "handles") return ending;
+  // A clause handles a value only when nothing in it throws on the way: a value built from a
+  // call that never returns throws instead.
+  const throwing = throwingPart(keptStatements(statements), ctx);
+  return throwing === undefined
+    ? ending
+    : {
+        kind: "unknown",
+        reason: `\`${oneLineText(throwing, ctx.sourceFile)}\` can throw, so the \`default\` may never hand a value back`,
+      };
+}
+
+type Ending = { kind: "handles" | "throws" | "never" } | { kind: "unknown"; reason: string };
+
+function clauseEnding(
+  statements: readonly ts.Statement[],
+  ctx: FileContext,
+  after: readonly ts.Statement[] = [],
+): Ending {
+  const kept = keptStatements(statements);
+  const last = kept.at(-1);
+  // Nothing left, or a `break`: the value goes on after the `switch`.
+  if (last === undefined) return after.length === 0 ? { kind: "handles" } : endingOf(after, ctx);
+  if (onlyChecksNever(kept, ctx)) return { kind: "never" };
+  // A call that never returns ends the clause there: what follows it does not run.
+  const stops = kept.findIndex((one) => stopsHere(one, ctx));
+  if (stops >= 0 && !returnsValue(kept.slice(0, stops), ctx)) return { kind: "throws" };
+  if (
+    ts.isReturnStatement(last) &&
+    last.expression !== undefined &&
+    isPromiseReject(last.expression, ctx) &&
+    !returnsValue(kept.slice(0, -1), ctx)
+  ) {
+    // A rejection is a throw to the code that awaits the promise; elsewhere it is a value.
+    const fn = ts.findAncestor(last, ts.isFunctionLike);
+    const promised =
+      fn !== undefined &&
+      ((ts.getCombinedModifierFlags(fn) & ts.ModifierFlags.Async) !== 0 ||
+        ctx.types.returnsPromiseLike(fn));
+    return promised
+      ? { kind: "throws" }
+      : {
+          kind: "unknown",
+          reason: `\`${oneLineText(last.expression, ctx.sourceFile)}\` is returned by a function that does not return a promise`,
+        };
+  }
+  if (returnsValue(statements, ctx)) return { kind: "handles" };
+  if (ts.isThrowStatement(last)) return { kind: "throws" };
+  if (ts.isBlock(last)) return endingOf(last.statements, ctx, after);
+  if (ts.isReturnStatement(last) || ts.isExpressionStatement(last)) {
+    if (last.expression === undefined) return { kind: "handles" };
+    if (neverReturns(last.expression, ctx)) return { kind: "throws" };
+    const assertion = assertionCall(last.expression, ctx);
+    if (assertion === "false") return { kind: "throws" };
+    if (assertion !== undefined) {
+      return {
+        kind: "unknown",
+        reason: `the assertion \`${oneLineText(assertion.expression, ctx.sourceFile)}(…)\` may let the value through`,
+      };
+    }
+    // A statement that goes on falls out of the `switch` into the code after it.
+    if (ts.isExpressionStatement(last) && after.length > 0) return endingOf(after, ctx);
+    return { kind: "handles" };
+  }
+  if (ts.isVariableStatement(last) || ts.isIfStatement(last)) {
+    return after.length > 0 && !ts.isIfStatement(last) ? endingOf(after, ctx) : { kind: "handles" };
+  }
+  return {
+    kind: "unknown",
+    reason: `it ends in \`${oneLineText(last, ctx.sourceFile).split(" ")[0] ?? ""}\`, which stateward does not read`,
+  };
+}
+
+/** The statements after a `switch` in the block that holds it: what a clause that falls out runs. */
+function statementsAfter(node: ts.SwitchStatement): readonly ts.Statement[] {
+  const holder = node.parent;
+  if (
+    !ts.isBlock(holder) &&
+    !ts.isSourceFile(holder) &&
+    !ts.isCaseClause(holder) &&
+    !ts.isDefaultClause(holder)
+  ) {
+    return [];
+  }
+  const index = holder.statements.indexOf(node);
+  return index < 0 ? [] : holder.statements.slice(index + 1);
+}
+
+/** `Promise.reject(…)`, `await Promise.reject(…)`: the platform's `Promise`, not a name of the project. */
+function isPromiseReject(expression: ts.Expression, ctx: FileContext): boolean {
+  let inner = stripParentheses(expression);
+  while (ts.isAwaitExpression(inner)) inner = stripParentheses(inner.expression);
+  if (ts.isNewExpression(inner)) return rejectsOnly(inner, ctx);
+  if (!ts.isCallExpression(inner)) return false;
+  const callee = stripParentheses(inner.expression);
+  if (
+    !ts.isPropertyAccessExpression(callee) ||
+    callee.name.text !== "reject" ||
+    !ts.isIdentifier(callee.expression) ||
+    callee.expression.text !== "Promise"
+  ) {
+    return false;
+  }
+  const symbol = ctx.types.symbolAt(callee.expression);
+  const declared = symbol === undefined ? undefined : ctx.types.declarationOf(symbol);
+  return declared !== undefined && !ctx.types.isOwnFile(declared.file);
+}
+
+/**
+ * `new Promise((_, reject) => reject(…))`: the platform's `Promise`, whose executor calls its
+ * `reject` and never names its `resolve`.
+ */
+function rejectsOnly(created: ts.NewExpression, ctx: FileContext): boolean {
+  const callee = stripParentheses(created.expression);
+  if (!ts.isIdentifier(callee) || callee.text !== "Promise") return false;
+  const symbol = ctx.types.symbolAt(callee);
+  const declared = symbol === undefined ? undefined : ctx.types.declarationOf(symbol);
+  if (declared === undefined || ctx.types.isOwnFile(declared.file)) return false;
+  const executor = created.arguments?.[0];
+  const fn = executor === undefined ? undefined : stripParentheses(executor);
+  if (fn === undefined || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))) return false;
+  const [resolve, reject] = fn.parameters;
+  if (reject === undefined || !ts.isIdentifier(reject.name)) return false;
+  const resolveName =
+    resolve !== undefined && ts.isIdentifier(resolve.name) ? resolve.name.text : "";
+  const rejectName = reject.name.text;
+  const namesResolve = anyNode(
+    fn.body,
+    (child) => ts.isIdentifier(child) && child.text === resolveName,
+  );
+  const callsReject = anyNode(
+    fn.body,
+    (child) =>
+      ts.isCallExpression(child) &&
+      ts.isIdentifier(child.expression) &&
+      child.expression.text === rejectName,
+  );
+  return callsReject && !namesResolve;
+}
+
+/** Whether `test` holds for the node or any node inside it. */
+function anyNode(node: ts.Node, test: (child: ts.Node) => boolean): boolean {
+  return (
+    test(node) || (ts.forEachChild(node, (child) => anyNode(child, test) || undefined) ?? false)
+  );
+}
+
+/**
+ * A call to an assertion function (`function invariant(c: unknown, m: string): asserts c`):
+ * "false" when its first argument is the literal `false` (it always throws), else the call.
+ */
+function assertionCall(
+  expression: ts.Expression,
+  ctx: FileContext,
+): ts.CallExpression | "false" | undefined {
+  const inner = stripParentheses(expression);
+  if (!ts.isCallExpression(inner)) return undefined;
+  const callee = stripParentheses(inner.expression);
+  const name = ts.isPropertyAccessExpression(callee) ? callee.name : callee;
+  const symbol = ctx.types.symbolAt(name);
+  const declared = symbol === undefined ? undefined : ctx.types.declarationOf(symbol);
+  const node = declared?.node;
+  const fn =
+    node !== undefined && ts.isVariableDeclaration(node) && node.initializer !== undefined
+      ? stripParentheses(node.initializer)
+      : node;
+  const type = fn !== undefined && ts.isFunctionLike(fn) ? fn.type : undefined;
+  if (type === undefined || !ts.isTypePredicateNode(type) || type.assertsModifier === undefined) {
+    return undefined;
+  }
+  const [first] = inner.arguments;
+  return first !== undefined && stripParentheses(first).kind === ts.SyntaxKind.FalseKeyword
+    ? "false"
+    : inner;
+}
+
+/**
+ * The `default` of a switch over an open union: one that only throws is a finding; one whose end
+ * the proof cannot read is not checked, against the union.
+ */
+function checkOpenDefault(
+  fallback: ts.DefaultClause,
+  subject: ts.Expression,
+  stated: readonly RelatedNote[],
+  ctx: FileContext,
+): void {
+  const ending = endingOf(fallback.statements, ctx, statementsAfter(fallback.parent.parent));
+  if (ending.kind === "throws" || ending.kind === "never") {
+    checkOpenThrows(fallback, subject, stated, ctx, ending.kind);
+  } else if (ending.kind === "unknown") {
+    const alias = openAliasOf(subject, ctx);
+    ctx.unknown({
+      node: fallback.getFirstToken(ctx.sourceFile) ?? fallback,
+      message: `not checked: whether the \`default\` handles a value outside \`${alias?.name.text ?? ctx.types.typeTextOf(subject)}\`: ${ending.reason}`,
+      hint: "return or set a fallback value in `default`, or throw there plainly",
+      ...(alias === undefined ? {} : { against: alias }),
+    });
+  }
+}
+
+/** A `default` of a switch over an open union that only throws: it does not handle a value outside the union. */
+function checkOpenThrows(
+  fallback: ts.DefaultClause,
+  subject: ts.Expression,
+  stated: readonly RelatedNote[],
+  ctx: FileContext,
+  how: "throws" | "never",
+): void {
+  const alias = openAliasOf(subject, ctx);
+  const union = alias?.name.text ?? ctx.types.typeTextOf(subject);
+  ctx.report({
+    node: fallback.getFirstToken(ctx.sourceFile) ?? fallback,
+    message: fitted((cut) =>
+      how === "throws"
+        ? `the \`default\` throws on a value outside \`${cut(union)}\``
+        : `the \`default\` only checks against \`never\`, so a value outside \`${cut(union)}\` goes through unhandled`,
+    ),
+    hint: [
+      "one of",
+      `- handle a value outside \`${union}\` in \`default\`: return or set a fallback value`,
+      `- or remove \`OpenUnion\` from \`${union}\`, if its values are all listed`,
+    ].join("\n"),
+    findingKind: "open-throws",
+    against: true,
     related: stated,
   });
 }
@@ -810,8 +1524,10 @@ function checkMissing(input: {
   );
   const codes = labels.map((label) => valueCode(label, spellings));
   const values = codes.every((code) => code !== undefined) ? codes : undefined;
-  const type = restType({ hidden: labels, spellings });
-  const every = literals.map((literal) => valueCode(literal.label, spellings));
+  const inFile = namesInFile(ctx.sourceFile);
+  const imports = unspelledEnums(labels, spellings);
+  const type = restType({ hidden: labels, spellings, inFile });
+  const every = literals.map((literal) => typeCode(literal.label, spellings, inFile));
   const allCodes = every.every((code) => code !== undefined) ? every : undefined;
   const allow = allowanceOf(subject, shown, type);
   const fixes: Fix[] = [];
@@ -838,10 +1554,17 @@ function checkMissing(input: {
   ctx.report({
     node: node.getFirstToken(ctx.sourceFile) ?? node,
     message: headline(labels, shown, settings.maxHidden),
-    hint: fixLines({ values: values ?? labels, subject: shown, allow, many, noDefault: true }),
+    hint: fixLines({
+      values: values ?? labels,
+      subject: shown,
+      allow,
+      many,
+      noDefault: true,
+      imports,
+    }),
     ...(many
       ? { findingKind: "many-missing", severity: "info" as const }
-      : { findingKind: "missing" }),
+      : { findingKind: "missing", ...(stated.length > 0 ? { against: true as const } : {}) }),
     related: stated,
     ...(fixes.length === 0 ? {} : { fixes }),
   });
@@ -856,12 +1579,23 @@ function checkSwitch(node: ts.SwitchStatement, settings: Settings, ctx: FileCont
   if (subject.kind === ts.SyntaxKind.TrueKeyword || subject.kind === ts.SyntaxKind.FalseKeyword)
     return;
   const literals = ctx.types.literalsOf(subject);
-  if (literals === "not-finite") return;
-  if (ignoredType(subject, settings.ignore, ctx)) return;
-  const open = ctx.types.guaranteesOf(subject).includes(OPEN_UNION);
+  if (literals === "not-finite") {
+    // The tag of a union stated open can hold any string: its cases are not a finite list, yet a
+    // `switch` over it still needs a `default` for the kinds it does not list.
+    if (openObjectOf(subject, ctx) !== undefined) {
+      // `ignore` leaves a stated open union alone no more than any other setting.
+      const given = clauses.find(ts.isDefaultClause);
+      if (given === undefined) checkOpen(node, subject, statedNote(subject, ctx), ctx);
+      else checkOpenDefault(given, subject, statedNote(subject, ctx), ctx);
+    }
+    return;
+  }
+  const open = isOpenSubject(subject, ctx);
+  if (!open && ignoredType(subject, settings.ignore, ctx)) return;
   const stated = open ? statedNote(subject, ctx) : [];
   const fallback = clauses.find(ts.isDefaultClause);
   if (fallback === undefined && open) checkOpen(node, subject, stated, ctx);
+  if (fallback !== undefined && open) checkOpenDefault(fallback, subject, stated, ctx);
   // A member a package adds in a later version is not a state the app designed; an open union is
   // stated by the project, wherever its members come from.
   if (!open && settings.projectTypesOnly && ctx.types.isLibraryType(subject)) return;
@@ -933,13 +1667,15 @@ function checkSwitch(node: ts.SwitchStatement, settings: Settings, ctx: FileCont
   );
   const codes = labels.map((label) => valueCode(label, spellings));
   const values = codes.every((code) => code !== undefined) ? codes : undefined;
-  const type = restType({ hidden: labels, spellings });
-  const every = literals.map((literal) => valueCode(literal.label, spellings));
+  const inFile = namesInFile(ctx.sourceFile);
+  const imports = unspelledEnums(labels, spellings);
+  const type = restType({ hidden: labels, spellings, inFile });
+  const every = literals.map((literal) => typeCode(literal.label, spellings, inFile));
   const allCodes = every.every((code) => code !== undefined) ? every : undefined;
   const where = fallback.getFirstToken(ctx.sourceFile) ?? fallback;
   const kind = many
     ? { findingKind: "many-hidden", severity: "info" as const }
-    : { findingKind: "hidden" };
+    : { findingKind: "hidden", ...(stated.length > 0 ? { against: true as const } : {}) };
   const allow = allowanceOf(subject, shown, type);
   const hint = fixLines({
     values: values ?? labels,
@@ -947,6 +1683,7 @@ function checkSwitch(node: ts.SwitchStatement, settings: Settings, ctx: FileCont
     allow,
     many,
     noDefault: false,
+    imports,
   });
   const fixes: Fix[] = [];
   if (values !== undefined) fixes.push(addCasesFix(fallback, values, ctx));
@@ -975,7 +1712,7 @@ function checkSwitch(node: ts.SwitchStatement, settings: Settings, ctx: FileCont
   }
   ctx.report({
     node: where,
-    message: headline(labels, shown, settings.maxHidden),
+    message: takenHeadline(labels, shown, settings.maxHidden),
     hint,
     ...kind,
     related: stated,

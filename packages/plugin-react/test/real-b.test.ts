@@ -73,7 +73,7 @@ describe("react/effect-response-race", () => {
         at: 'reload("open")',
         message:
           "`reload(…)` takes an AbortSignal the effect never passes: an answer for an old `reload` can overwrite a newer one",
-        hint: raceHint("reload(…)", "reload(…, controller.signal)"),
+        hint: raceHint("reload(…)", 'reload("open", controller.signal)'),
         notes: [`Orders.tsx: setOrders: ${STALE}`],
         fixes: [
           "Orders.tsx@1423: const controller = new AbortController();\n     | Orders.tsx@1436: , controller.signal | Orders.tsx@1454: \n    return () => controller.abort();",
@@ -87,7 +87,7 @@ describe("react/effect-response-race", () => {
         at: 'store.reload("all")',
         message:
           "`store.reload(…)` takes an AbortSignal the effect never passes: an answer for an old `store` can overwrite a newer one",
-        hint: raceHint("store.reload(…)", "store.reload(…, controller.signal)"),
+        hint: raceHint("store.reload(…)", 'store.reload("all", controller.signal)'),
         notes: [`Orders.tsx: setOrders: ${STALE}`],
         fixes: [
           "Orders.tsx@1748: const controller = new AbortController();\n     | Orders.tsx@1766: , controller.signal | Orders.tsx@1784: \n    return () => controller.abort();",
@@ -112,7 +112,7 @@ describe("react/state-copies-prop", () => {
         at: "setDraft(title)",
         message:
           "effect overwrites the draft `draft` with `title` whenever it changes: edits are lost",
-        hint: "drop the effect and render `<TitleEditor key={…}>` so the draft starts over when `title` changes",
+        hint: 'one of\n- drop the effect and render `<TitleEditor key={…}>` so the draft starts over when `title` changes\n- or if the prop is meant to reset `draft` this way, list it under the rule\'s `ignore` option:\n    { ignore: ["draft"] }',
         notes: ["Copies.tsx: useState(title): `draft` starts as `title`"],
         fixes: [],
       },
@@ -123,7 +123,7 @@ describe("react/state-copies-prop", () => {
         at: "setText(initial)",
         message:
           "effect overwrites the draft `text` with `initial` whenever it changes: edits are lost",
-        hint: "drop the effect and reset the component with a `key` that changes with `initial`, so the draft starts over",
+        hint: 'one of\n- drop the effect and reset the component with a `key` that changes with `initial`, so the draft starts over\n- or if the prop is meant to reset `text` this way, list it under the rule\'s `ignore` option:\n    { ignore: ["text"] }',
         notes: ["Copies.tsx: useState(initial): `text` starts as `initial`"],
         fixes: [],
       },
@@ -133,7 +133,7 @@ describe("react/state-copies-prop", () => {
         file: "Copies.tsx",
         at: "setShown(label)",
         message: "`shown` copies the prop `label` and an effect keeps them in sync",
-        hint: "use `label` directly, or drop the effect and render `<Badge key={…}>` so it starts over when `label` changes",
+        hint: 'one of\n- use `label` directly, with no state\n- or drop the effect and render `<Badge key={…}>` so it starts over when `label` changes\n- or if the prop is meant to reset `shown` this way, list it under the rule\'s `ignore` option:\n    { ignore: ["shown"] }',
         notes: ["Copies.tsx: useState(label): `shown` starts as `label`"],
         fixes: [],
       },

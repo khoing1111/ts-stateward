@@ -2,6 +2,7 @@ import path from "node:path";
 import type {
   Config,
   LibraryTypes,
+  RuleProves,
   ConfigOverride,
   EditorContributions,
   ExtendedConfig,
@@ -284,6 +285,45 @@ function parseNeedsTypes(value: unknown): LibraryTypes | "invalid" | undefined {
   return { library, modules: [...modules] };
 }
 
+/** `RuleProves.flows` as given: undefined when left out, "invalid" when not one. */
+function parseFlows(value: unknown): RuleProves["flows"] | "invalid" | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return "invalid";
+  const { produced, decided, escaped } = value;
+  const lists = { produced, decided, escaped };
+  if (Object.values(lists).some((list) => list !== undefined && !isStringArray(list))) {
+    return "invalid";
+  }
+  if (Object.keys(value).some((key) => !(key in lists))) return "invalid";
+  return {
+    ...(isStringArray(produced) ? { produced: [...produced] } : {}),
+    ...(isStringArray(decided) ? { decided: [...decided] } : {}),
+    ...(isStringArray(escaped) ? { escaped: [...escaped] } : {}),
+  };
+}
+
+/** `RuleInfo.proves` as given: undefined when left out, "invalid" when not a `RuleProves`. */
+function parseProves(value: unknown): RuleProves | "invalid" | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return "invalid";
+  const { traits, returns, made, holders, tags } = value;
+  const lists = { traits, returns, made, holders, tags };
+  if (Object.values(lists).some((list) => list !== undefined && !isStringArray(list))) {
+    return "invalid";
+  }
+  if (Object.keys(value).some((key) => !(key in lists) && key !== "flows")) return "invalid";
+  const flows = parseFlows(value.flows);
+  if (flows === "invalid") return "invalid";
+  return {
+    ...(isStringArray(traits) ? { traits: [...traits] } : {}),
+    ...(isStringArray(returns) ? { returns: [...returns] } : {}),
+    ...(isStringArray(made) ? { made: [...made] } : {}),
+    ...(isStringArray(holders) ? { holders: [...holders] } : {}),
+    ...(flows === undefined ? {} : { flows }),
+    ...(isStringArray(tags) ? { tags: [...tags] } : {}),
+  };
+}
+
 /** The metadata a pack declares up front (`RuleInfo`): everything but the `explain` text. */
 function parseInfo(value: unknown, where: string, errors: string[]): RuleInfo | undefined {
   const found = parseInfoFields(value, where, errors);
@@ -324,8 +364,16 @@ function parseInfo(value: unknown, where: string, errors: string[]): RuleInfo | 
           ...sharing,
           needsTypes,
         };
-  const info =
+  const proves = parseProves(value.proves);
+  if (proves === "invalid") {
+    errors.push(
+      `${where}.meta.proves must be { traits?, returns?, made?, holders?, flows?: { produced?, decided?, escaped? }, tags? } (each a list of traits or tag names) when present`,
+    );
+    return undefined;
+  }
+  const strict =
     fixNeedsStrictNulls === true ? { ...typed, fixNeedsStrictNulls: true as const } : typed;
+  const info = proves === undefined ? strict : { ...strict, proves };
   if (value.options === undefined) return info;
   const options = parseOptionSpecs(value.options, where, errors);
   return options === undefined ? undefined : { ...info, options };

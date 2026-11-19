@@ -84,7 +84,14 @@ function declareAndProve(): void {
   expect(after.map((finding) => finding.message)).toEqual([
     "`settings` is changed outside its owner, `src/settings.ts`",
   ]);
-  expect(after[0]?.hint).toBe("call `setTheme` from `src/settings.ts` instead: it owns the value");
+  expect(after[0]?.hint).toBe(
+    [
+      "one of",
+      "- call `setTheme` from `src/settings.ts` instead: it owns the value",
+      "- or, if these files share it on purpose, list them under the rule's `owners` option:",
+      '    { owners: { "src/settings.ts": ["src/toolbar.ts"] } }',
+    ].join("\n"),
+  );
 }
 
 describe("ownership/state-written-outside-owner: declaring a value owned", () => {

@@ -60,7 +60,8 @@ export {
 export type { CheckProgress } from "./engine.js";
 export { SLICE_MS } from "./checker.js";
 export { counted, describeStatus, guaranteeAt, proveGuarantees } from "./guarantees.js";
-export type { GuaranteeProof, GuaranteeStatus } from "./guarantees.js";
+export { STATED_RULE_ID } from "./stated.js";
+export type { GuaranteeProof, GuaranteeStatus, IgnoredProblem, ProofInputs } from "./guarantees.js";
 export type { LongestStep, SliceOptions, SlicedCheck } from "./checker.js";
 export { IGNORE_FIX_TITLE, IGNORE_RULE_ID, ignoreFix } from "./ignores.js";
 export { CACHE_FORMAT, emptyCache, parseSnapshot, toSnapshot } from "./cache.js";

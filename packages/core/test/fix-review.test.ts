@@ -36,6 +36,7 @@ writeFileSync(
     "export const left = 6;",
     "export const right = 7;",
     "export const pre: string = 8;",
+    "export const neither = 9;",
     "",
   ].join("\n"),
 );
@@ -49,6 +50,8 @@ const FORMS: Readonly<Record<string, readonly string[]>> = {
   // Each compiles alone; together they declare `shared` twice.
   left: ["\nexport const shared = left;"],
   right: ["\nexport const shared = right;"],
+  // No form compiles: the hint gives the error of the last one, which goes furthest.
+  neither: ["\nexport const first: string = neither;", "\nexport const second: boolean = neither;"],
   // On a line that already has an error: the fix does not add it.
   pre: [" // checked"],
 };
@@ -151,6 +154,19 @@ describe("reviewFixes", () => {
     expect(titles(reviewOf("right").finding)).toEqual(["copy right (1)"]);
   });
 
+  it("says the error of the last form when none compiles, not the first", () => {
+    const review = reviewOf("neither");
+    expect(titles(review.finding)).toEqual([]);
+    expect(review.rejected.map((entry) => entry.reason)).toEqual([
+      "Type 'number' is not assignable to type 'string'.",
+      "Type 'number' is not assignable to type 'boolean'.",
+    ]);
+    expect(review.finding.hint).toBe(
+      "copy neither\nno automatic fix: Type 'number' is not assignable to type 'boolean'.",
+    );
+    expect(review.finding.hint).not.toContain("type 'string'");
+  });
+
   it("does not blame a fix for an error its line already had", () => {
     expect(titles(reviewOf("pre").finding)).toEqual(["copy pre (1)"]);
   });
@@ -161,8 +177,8 @@ describe("reviewFixes", () => {
   });
 
   it("keeps verdicts in the cache and answers from it", () => {
-    // good, bad, broken, left, right, pre, and both forms of twice.
-    expect(cache.verdicts.size).toBe(8);
+    // good, bad, broken, left, right, pre, and both forms of twice and of neither.
+    expect(cache.verdicts.size).toBe(10);
     // A verdict in the cache is taken as it is: no program is built to try the fix again.
     for (const key of cache.verdicts.keys())
       cache.verdicts.set(key, { kind: "breaks", error: "kept" });

@@ -1,7 +1,18 @@
 import { defineRule, option } from "@stateward/core";
 import { machinesOf, quoted } from "./machines.js";
 import { at } from "./notes.js";
-import { summarizeFile } from "./summary.js";
+import { summarizeFile, type Reducer } from "./summary.js";
+import { markInitialReferences } from "./tag-reads.js";
+
+/**
+ * A finding about `@initial` is against the reducer it is on (the reference ledger's id): a stated
+ * guarantee, so an error while the rule is on, as `guarantees` reads it.
+ */
+function againstInitial(file: string, reducer: Reducer) {
+  return { against: [{ file, start: reducer.declared, end: reducer.declared }], ...STATED };
+}
+
+const STATED: { readonly stated: true } = { stated: true };
 import { fitted, MAX_HINT, shorten } from "./text.js";
 
 const EXPLAIN = `# reducers/reducer-not-readable
@@ -28,7 +39,7 @@ export function useJob() {
 }
 \`\`\`
 
-Write the steps in the reducer itself, or give the helper a return type that names its states (\`Extract<JobState, { status: "running" | "done" }>\`):
+Write the steps in the reducer itself. A helper that gives back the state it is passed, as \`advance\` does, cannot say so in its return type; one that only builds new states can name them (\`Extract<JobState, { status: "running" | "done" }>\`). A start or a constant that is one state gets the same kind of type, and the rule's \`severities\` option turns the kind off where any state is meant:
 
 \`\`\`ts example-good
 import { useReducer } from "react";
@@ -57,9 +68,10 @@ There is no quick fix: only you know which states the helper gives.
 It reports:
 
 - a \`return\` typed as the whole state union, like \`return advance(state, event)\` above. A returned constant is read from its value (\`const initialState: State = { status: "idle" }\`), and reported only when that value cannot be read either (\`const restored: State = restore()\`);
-- a \`useReducer\` start that is not a known state: a parameter, a call, data from storage;
+- a \`useReducer\` start that is not a known state: a parameter, a call, data from storage, unless the reducer lists where it starts with \`/** @initial "queued" | "running" */\`;
 - a reducer-like function passed around as a value (\`reducers = [queueReducer]\`), without \`useReducer\` or \`@initial\`;
 - a reducer also called or passed around elsewhere (outside tests), or exported from your package, without \`@initial\`: it may start in any state;
+- a \`useReducer\` start in a state the reducer's \`@initial\` does not list (\`useReducer(light, { color: "yellow" })\` with \`@initial "red"\`, or an \`init\` function that returns it): the tag says where it starts, so a start it leaves out is reported. \`stateward guarantees\` lists \`@initial\` as "not checked" at a start it cannot read, a reducer given to another function or another name, and a direct call of the reducer in a state the tag does not list;
 - a name in \`@initial\` that is not a state, and a \`@final\` or \`@initial\` that does not start with a quoted state (\`@final the order is done\` is read as a comment; write \`@final "delivered" | "refunded"\`).
 
 It leaves alone a start of \`null\` or \`undefined\` when the state type includes it (\`useReducer(selectionReducer, null)\`): it is a known start, which the other two rules read as any state coming first. It skips a setter, a reducer whose every \`return\` gives a property of the action typed as the whole state (\`return action.payload\` with \`payload: Selection\`), \`null\`, \`undefined\` or the state unchanged: its states are what the caller sends, so none of the reducers rules reads it; one \`return\` that builds a state (\`return { status: "loading" }\`) makes it a state machine again. It also leaves alone a function with a reducer's signature that is never used or only called as a helper, a \`return\` typed \`any\` (\`reducers/state-unreachable\` reports that one), and state in \`useState\` or class fields, which do not have to become reducers.
@@ -89,6 +101,7 @@ export const reducerNotReadable = defineRule({
     tier: "coverage",
     group: "graph",
     needsJsDoc: true,
+    proves: { tags: ["initial"] },
     options: {
       severities: option.severities({
         kinds: {
@@ -99,13 +112,18 @@ export const reducerNotReadable = defineRule({
             "a reducer used outside `useReducer`, or exported from your package, with no `@initial`.",
           "unquoted-tag": "an `@initial` or `@final` tag that lists states without quotes.",
           "unknown-initial": "a name in `@initial` that is not a state.",
+          "start-not-listed":
+            "a `useReducer` start in a state the reducer's `@initial` does not list.",
         },
         description: "A severity per kind of place stateward cannot read.",
       }),
     },
     explain: EXPLAIN,
   },
-  summarize: summarizeFile,
+  summarize: (ctx) => {
+    markInitialReferences(ctx);
+    return summarizeFile(ctx);
+  },
   check(summaries, ctx) {
     const proseSeen = new Set<string>();
     for (const machine of machinesOf(summaries)) {
@@ -115,22 +133,39 @@ export const reducerNotReadable = defineRule({
       if (!machine.active && !unstarted) continue;
       const name = (cut: { name: (text: string) => string }): string =>
         `\`${cut.name(reducer.name)}\``;
-      const example = `Extract<${reducer.stateName}, { ${reducer.tag}: ${quoted(reducer.tags[0] ?? "")} }>`;
+      // The first state, as the one the `@initial` example lists; the developer lists their own.
+      const example = quoted(reducer.tags[0] ?? "");
+      // The state type with its tag named and the states left for you to list: `…` is yours to fill.
+      const subset = `Extract<${reducer.stateName}, { ${reducer.tag}: … }>`;
+      const off =
+        '- or, if it may be any state on purpose, turn this kind off: `severities: { "whole-return": "off" }` in the rule\'s options';
       for (const unreadable of reducer.unreadable) {
         // A return with no readable tag at all is an `unknown` finding of `reducers/state-unreachable`.
         if (unreadable.kind !== "whole") continue;
+        const callee = /^([\w$.]+)\(/.exec(unreadable.text)?.[1];
         ctx.report({
           message: fitted((cut) =>
             unreadable.constant
               ? `constant \`${cut.name(unreadable.text)}\` can be any state of \`${cut.name(reducer.stateName)}\``
               : `\`${cut.name(unreadable.text)}\` can return any state of \`${cut.name(reducer.stateName)}\``,
           ),
-          hint: shorten(
-            unreadable.constant
-              ? `type it with the state it starts in, e.g. \`const ${unreadable.text}: ${example} = …\``
-              : `declare its return type as the states it returns, e.g. \`${example}\``,
-            MAX_HINT,
-          ),
+          hint: unreadable.constant
+            ? [
+                "one of",
+                `- type it with the state it holds, \`${subset}\`, and make whatever builds it give that type`,
+                off,
+              ].join("\n")
+            : [
+                "one of",
+                callee === undefined
+                  ? "- write its steps in the reducer, so each state it gives is read"
+                  : fitted(
+                      (cut) =>
+                        `- write the steps of \`${cut.name(callee)}\` in the reducer, so each state it gives is read`,
+                    ),
+                `- or declare its return type as the states it gives, \`${subset}\`: only if it never gives back the state it is passed, which a return type cannot say`,
+                off,
+              ].join("\n"),
           location: at(machine.file, unreadable),
           related: [
             { location: at(machine.file, reducer.at), message: `in \`${shorten(reducer.name)}\`` },
@@ -143,7 +178,12 @@ export const reducerNotReadable = defineRule({
           message: fitted(
             (cut) => `${name(cut)} can start in any state: the state it starts from is not known`,
           ),
-          hint: "start from a constant state, or list where it starts with `@initial` on the reducer",
+          hint: [
+            "one of",
+            "- start from a constant state",
+            `- or list, quoted, the states it can start in, above \`${reducer.name}\` (for example one state):`,
+            `    /** @initial ${example} */`,
+          ].join("\n"),
           location: at(file, use.at),
           related: [
             {
@@ -179,6 +219,27 @@ export const reducerNotReadable = defineRule({
           findingKind: "unquoted-tag",
         });
       }
+      for (const { file, use, tags } of machine.unlistedStarts) {
+        const initial = reducer.initial;
+        if (initial === null) continue;
+        const states = tags.map(quoted).join(", ");
+        ctx.report({
+          message: fitted(
+            (cut) =>
+              `\`useReducer\` starts \`${cut.name(reducer.name)}\` in ${states}, which \`@initial\` does not list`,
+          ),
+          hint: shorten(
+            `list it, quoted: \`@initial ${[...initial.names, ...tags].map(quoted).join(" | ")}\`, or start the reducer in a state \`@initial\` lists`,
+            MAX_HINT,
+          ),
+          location: at(file, use.at),
+          related: [
+            { location: at(machine.file, initial.at), message: "`@initial` is stated here" },
+          ],
+          findingKind: "start-not-listed",
+          ...againstInitial(machine.file, reducer),
+        });
+      }
       for (const bad of machine.badInitial) {
         const initial = reducer.initial;
         if (initial === null) continue;
@@ -191,15 +252,16 @@ export const reducerNotReadable = defineRule({
           location: at(machine.file, initial.at),
           related: [],
           findingKind: "unknown-initial",
+          ...againstInitial(machine.file, reducer),
         });
       }
       if (unstarted) {
         ctx.report({
           message: fitted((cut) => `${name(cut)} can start in any state: no start is known`),
-          hint: shorten(
-            `add \`/** @initial ${reducer.tags[0] ?? "start"} */\` to \`${reducer.name}\``,
-            MAX_HINT,
-          ),
+          hint: [
+            `list, quoted, the states it can start in, above \`${reducer.name}\` (for example one state):`,
+            `    /** @initial ${example} */`,
+          ].join("\n"),
           location: at(machine.file, reducer.at),
           related: machine.references.map(({ file, reference }) => ({
             location: at(file, reference.at),
@@ -214,7 +276,12 @@ export const reducerNotReadable = defineRule({
             : "exported from the package";
         ctx.report({
           message: fitted((cut) => `${name(cut)} can start in any state: it is ${outside}`),
-          hint: "list its starts with `@initial`, or call it only through `useReducer`",
+          hint: [
+            "one of",
+            `- list, quoted, the states it can start in, above \`${reducer.name}\` (for example one state):`,
+            `    /** @initial ${example} */`,
+            "- or call it only through `useReducer`",
+          ].join("\n"),
           location: at(machine.file, reducer.at),
           related: machine.references.map(({ file, reference }) => ({
             location: at(file, reference.at),

@@ -54,6 +54,11 @@ export type RunTiming = {
   readonly typeMs: number;
   /** Dependency fingerprints for the results cache. */
   readonly fingerprintMs: number;
+  /**
+   * The reference ledger: every reference to each stated declaration, in the files whose ledger is
+   * not in the cache (its type questions included).
+   */
+  readonly ledgerMs: number;
   /** Everything else: syntax and import findings, ignore comments, sorting, the cache. */
   readonly otherMs: number;
   /** The second pass's time (not part of the check's result), when there was one. */
@@ -79,6 +84,8 @@ export type TimingRecorder = {
   /** The time of building programs, added to `programMs`. */
   program(ms: number): void;
   fingerprint(ms: number): void;
+  /** The time of the reference ledger on one file, added to `ledgerMs`. */
+  ledger(ms: number): void;
   /** Runs `run` as `ruleId`'s file side on one file and records its cost. */
   fileSide<T>(ruleId: string, kind: "file" | "project", run: () => T): T;
   /** Counts one result of `ruleId` reused from the cache. */
@@ -109,6 +116,7 @@ export function createTimingRecorder({
   let started = performance.now();
   let programMs = 0;
   let fingerprintMs = 0;
+  let ledgerMs = 0;
   /** The type time of the rule that is running; undefined between rules. */
   let current: Mutable | undefined;
   const wrapped = new WeakMap<TypeQueries, TypeQueries>();
@@ -160,6 +168,9 @@ export function createTimingRecorder({
     },
     fingerprint(ms) {
       fingerprintMs += ms;
+    },
+    ledger(ms) {
+      ledgerMs += ms;
     },
     fileSide(ruleId, kind, run) {
       const cost = costOf(ruleId, kind);
@@ -234,7 +245,8 @@ export function createTimingRecorder({
         programMs,
         typeMs,
         fingerprintMs,
-        otherMs: Math.max(0, totalMs - programMs - fingerprintMs - ruleMs),
+        ledgerMs,
+        otherMs: Math.max(0, totalMs - programMs - fingerprintMs - ledgerMs - ruleMs),
         secondPassMs: secondPass ? warmMs : undefined,
         rules: costs,
       };

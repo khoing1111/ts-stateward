@@ -55,3 +55,16 @@ export function matchesGlob(glob: string, file: string): boolean {
   }
   return new RegExp(`^${pattern}$`).test(file);
 }
+
+/** What to write instead of passing an owned value to a function that keeps it. */
+export const KEPT_FIX = "pass a copy, or make the change in its owner";
+
+/**
+ * A place not checked as a guarantee lists it: what it is, then what to write instead, from its
+ * hint (the first way, when it lists several).
+ */
+export function withFix(what: string, hint: string): string {
+  const lines = hint.split("\n");
+  const way = lines.find((line) => line.startsWith("- "))?.slice(2) ?? lines[0] ?? "";
+  return way === "" ? what : `${what}: ${way}`;
+}

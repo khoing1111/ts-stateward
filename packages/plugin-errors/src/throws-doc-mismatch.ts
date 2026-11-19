@@ -2,9 +2,11 @@ import { defineRule, matchesName, option } from "@stateward/core";
 import type { Location, OptionsOf, ProjectContext, RelatedLocation } from "@stateward/core";
 import { catchName, className } from "./inference/format.js";
 import { analyse, collected, evaluated, relation } from "./inference/solve.js";
+import { REASON } from "./inference/summarize.js";
 import type { Analysis, Collected, FunctionEntry } from "./inference/solve.js";
 import { summarizeOnce } from "./inference/project.js";
 import { codeList, fitted } from "./text.js";
+import { markThrowsReferences } from "./throws-reads.js";
 
 /** The group the rule belongs to in the docs and in `stateward status`. */
 export const GROUP = "callers";
@@ -45,10 +47,11 @@ The message links to the call that throws each missing class. There is no quick 
 
 - A listed class that comes from a call stateward cannot see into (a package, a callback, a dynamic call): it names the call. Remove the class from the tag if the function cannot throw it, or declare the package's errors under \`facts\` in the config (\`facts: { "config-lib": { load: { throws: ["ConfigError"] } } }\`).
 - A name in the tag that is not a class in scope: import the class, or use a name in scope.
+- A place it cannot follow in a function with a typed tag: a call through an alias (\`const f = auth; f(text)\`), a callback, a function with no body, an error made by a call (\`throw makeError()\`), a getter or setter that runs. It may throw a class the tag does not list, so it is listed as "not checked: the call \`f(…)\` cannot be followed" (the tag is never taken at its word). A tagged generator, and a \`@throws\` without a class, are "not checked" in \`stateward guarantees\`.
 
 ## What it does not catch
 
-It compares the tag with what the function can throw (its own \`throw new X(…)\`, the functions it calls, and the built-ins stateward knows) and reports a class in the tag that the function cannot throw (neither it nor a subclass), and a class it can throw that the tag does not cover. On a function that returns a promise, \`@throws\` means what the promise rejects with. It is silent on:
+It compares the tag with what the function can throw (its own \`throw new X(…)\`, an error kept in a \`const\` or built with \`Object.assign(new X(), …)\`, the functions it calls, also through \`.call\` and \`.apply\`, and the built-ins stateward knows) and reports a class in the tag that the function cannot throw (neither it nor a subclass), and a class it can throw that the tag does not cover. On a function that returns a promise, \`@throws\` means what the promise rejects with. It is silent on:
 
 - a function without \`@throws\`, or a tag without a type (\`@throws when the id is empty\`): that only says the function throws;
 - a class that a surrounding \`try\` may catch: only classes that surely escape are reported as missing;
@@ -83,10 +86,23 @@ const OPTIONS = {
   }),
 };
 
+/** Whether a source that cannot be followed is a call: a name with no body to read, a callback, an alias. */
+function isCall(source: { reason: string }): boolean {
+  return (
+    source.reason === REASON.noDeclaration ||
+    source.reason === REASON.noBody ||
+    source.reason === REASON.callback ||
+    source.reason === REASON.dynamic ||
+    source.reason.startsWith("package ") ||
+    source.reason.startsWith("callback passed to")
+  );
+}
+
 function check(
   entry: FunctionEntry,
   analysis: Analysis,
   ctx: ProjectContext<OptionsOf<typeof OPTIONS>>,
+  reported: Set<string>,
 ): void {
   const doc = entry.fact.doc;
   if (doc === null) return;
@@ -102,7 +118,13 @@ function check(
     for (const [key, source] of part.unknowns) all.unknowns.set(key, source);
   }
   const name = entry.fact.name;
+  // Every finding about the tag is against the declaration it is on (the reference ledger's id).
+  const against: readonly Location[] = [
+    { file: entry.file, start: doc.declared, end: doc.declared },
+  ];
   const firstUnknown = [...all.unknowns.values()][0];
+  // The listed classes that cannot be checked because of an unknown already say what it is.
+  let saidUnknown = false;
 
   for (const item of doc.entries) {
     const location = locationOf(entry.file, item.at);
@@ -114,6 +136,7 @@ function check(
         ),
         hint: "name an error class that is in scope in this file, or import it",
         location,
+        against,
       });
       continue;
     }
@@ -124,6 +147,7 @@ function check(
     if (possible) continue;
     const listed = className(id, classes);
     if (firstUnknown !== undefined) {
+      saidUnknown = true;
       ctx.unknown({
         message: fitted(
           (cut) =>
@@ -131,6 +155,7 @@ function check(
         ),
         hint: `remove \`${listed}\` from the tag if \`${name}\` cannot throw it; otherwise add \`@throws\` where it comes from`,
         location,
+        against,
       });
       continue;
     }
@@ -141,10 +166,31 @@ function check(
       hint: `remove \`${listed}\` from the tag, or throw it where it can happen`,
       location,
       findingKind: "extra",
+      against,
     });
   }
 
   if (doc.untyped.length > 0 || doc.entries.some((item) => item.id === null)) return;
+  // A place the proof cannot follow may throw a class the tag does not list: not checked, never
+  // silent, and never taken at the tag's word (a call, a thrown value of unknown class, a getter).
+  for (const source of all.unknowns.values()) {
+    const key = `${entry.fact.id}\u0000${source.file}\u0000${String(source.start)}`;
+    if (saidUnknown || reported.has(key)) continue;
+    reported.add(key);
+    ctx.unknown({
+      message: fitted((cut) =>
+        isCall(source)
+          ? `not checked: the call \`${cut(source.text)}(…)\` cannot be followed (${source.reason})`
+          : `not checked: what \`${cut(source.text)}\` throws is not known (${source.reason}), so \`@throws\` of \`${cut(name)}\` cannot be checked`,
+      ),
+      hint: fitted(
+        (cut) =>
+          `call the function itself, or state what it throws with \`@throws\` on it or \`facts\`, so \`${cut(name)}\`'s tag can be checked`,
+      ),
+      location: locationOf(source.file, [source.start, source.end]),
+      against,
+    });
+  }
   const missing: { id: string; related: RelatedLocation | undefined }[] = [];
   for (const [id, info] of all.classes) {
     if (!info.certain || matchesName(catchName(id, classes), ctx.options.ignoreClasses)) continue;
@@ -171,10 +217,18 @@ function check(
     message: fitted(
       (cut) => `\`@throws\` of \`${cut(name)}\` does not list ${codeList(names, cut)}`,
     ),
-    hint: `add ${missing.length === 1 ? "it" : "them"} to the tag: \`@throws {${tagNames.join(" | ")}}\``,
+    hint: [
+      "one of",
+      fitted(
+        (cut) =>
+          `- catch ${missing.length === 1 ? "it" : "them"} inside \`${cut(name)}\`, if ${missing.length === 1 ? "it escapes" : "they escape"} by mistake`,
+      ),
+      `- or add ${missing.length === 1 ? "it" : "them"} to the tag, if callers are to handle ${missing.length === 1 ? "it" : "them"}: \`@throws {${tagNames.join(" | ")}}\``,
+    ].join("\n"),
     location: locationOf(entry.file, entry.fact.at),
     related: missing.flatMap((one) => (one.related === undefined ? [] : [one.related])).slice(0, 3),
     findingKind: "missing",
+    against,
   });
 }
 
@@ -190,10 +244,15 @@ export const throwsDocMismatch = defineRule({
     needsJsDoc: true,
     options: OPTIONS,
     explain: EXPLAIN,
+    proves: { tags: ["throws"] },
   },
-  summarize: (ctx) => summarizeOnce(ctx),
+  summarize: (ctx) => {
+    markThrowsReferences(ctx);
+    return summarizeOnce(ctx);
+  },
   check(summaries, ctx) {
     const analysis = analyse(summaries);
-    for (const entry of analysis.functions.values()) check(entry, analysis, ctx);
+    const reported = new Set<string>();
+    for (const entry of analysis.functions.values()) check(entry, analysis, ctx, reported);
   },
 });

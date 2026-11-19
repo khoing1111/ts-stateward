@@ -4,13 +4,22 @@ import {
   computeNeeds,
   placementSets,
   provides,
+  providersOf,
   type ContextInfo,
   type ContextSet,
   type Graph,
 } from "./graph.js";
 import * as message from "./messages.js";
 import type { EntryPoint } from "./options.js";
-import type { DeclareFix, Edit, Loc, Render, Summary, UnknownRender } from "./summary.js";
+import type {
+  DeclareFix,
+  Edit,
+  Loc,
+  Render,
+  SlotEscape,
+  Summary,
+  UnknownRender,
+} from "./summary.js";
 import { limitNotes, originNote, slotNote, trailNotes, type Note } from "./trail.js";
 import { walkFromEntries, type Arrival, type Site, type WalkResult } from "./walk.js";
 
@@ -133,7 +142,10 @@ function reportMissingProviders(
     const info = graph.contexts.get(context);
     if (target === undefined || info === undefined) continue;
     if (matchesName(info.name, strict.ignored)) continue;
-    const text = message.missingProvider(site.name, info.name);
+    const text = message.missingProvider(site.name, info.name, {
+      providers: providersOf(graph, context).filter((name) => name !== site.name),
+      declare: info.stated ? null : (info.declare?.call ?? null),
+    });
     const trail = limitNotes([
       ...slotNote(graph, site.via, context),
       ...originNote(site.origin, target),
@@ -183,6 +195,21 @@ function coveredByUnknown(graph: Graph, walk: WalkResult, strict: Strict): Reado
   return covered;
 }
 
+/**
+ * The first escaping slot a component is rendered through: some render of it gives it to a slot
+ * (`<Wrap><Reader/></Wrap>`) that its component hands to something that is not followed.
+ */
+function escapeOf(graph: Graph, componentId: string): SlotEscape | undefined {
+  for (const render of allRenders(graph)) {
+    if (render.kind !== "component" || graph.resolve(render.id)?.id !== componentId) continue;
+    for (const slot of render.via) {
+      const [found] = graph.escapesOf(slot);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
+}
+
 function reportUnreachable(
   graph: Graph,
   needs: ReadonlyMap<string, ContextSet>,
@@ -197,21 +224,25 @@ function reportUnreachable(
     const ids = [...(needs.get(component.id) ?? [])];
     const stated = ids.filter((id) => strict.stated.has(id) && !covered.has(id));
     const guessed = ids.filter((id) => !strict.stated.has(id));
+    // Rendered, but through a slot its component hands on to something that is not followed.
+    const through = escapeOf(graph, component.id);
     if (stated.length > 0) {
       for (const id of stated) strict.unproven.add(id);
       const names = stated.map((id) => contextName(graph, id)).sort();
       ctx.report({
-        ...message.unreachableStated(component.name, names),
+        ...(through === undefined
+          ? message.unreachableStated(component.name, names)
+          : message.unreachableStatedThroughEscape(component.name, names, through.sink)),
         location: component.loc,
         related: toRelated(statedNotes(graph, stated)),
       });
     }
     if (guessed.length > 0) {
+      const names = guessed.map((id) => contextName(graph, id)).sort();
       ctx.unknown({
-        ...message.unreachableComponent(
-          component.name,
-          guessed.map((id) => contextName(graph, id)).sort(),
-        ),
+        ...(through === undefined
+          ? message.unreachableComponent(component.name, names)
+          : message.unreachableThroughEscape(component.name, names, through.sink)),
         location: component.loc,
       });
     }

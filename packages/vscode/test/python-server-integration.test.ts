@@ -44,7 +44,7 @@ const server = locatePythonServer({
 const venvPyrefly = path.join(repository, "python", ".venv", "bin", "pyrefly");
 const pyrefly = process.env.PY_STATEWARD_PYREFLY ?? (existsSync(venvPyrefly) ? venvPyrefly : "");
 
-const RULE = "unions/default-hides-cases";
+const RULE = "unions/non-exhaustive-switch";
 
 type Diagnostic = {
   code?: string;
@@ -157,7 +157,7 @@ describe.skipIf(server === undefined)(
         diagnostics.get(uri)?.find((diagnostic) => diagnostic.code === RULE),
       );
       expect(finding.source).toBe("stateward");
-      expect(finding.message).toContain("Status.LOADING and Status.DONE");
+      expect(finding.message).toContain("`Status.LOADING` and `Status.DONE`");
       expect(finding.range.start).toEqual({ line: 13, character: 8 });
 
       // The hover's link runs the extension's explain command with the rule id.

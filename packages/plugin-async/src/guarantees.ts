@@ -1,3 +1,4 @@
+import { declarationId } from "@stateward/core";
 import type { CoveredPlace, EditorContributions, Json, StatedGuarantee } from "@stateward/core";
 // Types only: the rule's module (and TypeScript) loads when the rule runs, not with the plugin.
 import type { PendingSummary } from "./pending-state-stuck-on-failure.js";
@@ -31,10 +32,14 @@ export const guarantees: Guarantees = (input) => {
   if (summaries === undefined) return [];
   const declared = new Map<string, PendingSummary["pending"][number]>();
   const starts = new Map<string, Place[]>();
+  const unchecked = new Map<string, (Place & { reason: string })[]>();
   for (const summary of summaries.values()) {
     if (!isSummary(summary)) continue;
     for (const one of summary.pending) declared.set(`${one.file}#${String(one.start)}`, one);
     for (const one of summary.starts) starts.set(one.id, [...(starts.get(one.id) ?? []), one]);
+    for (const one of summary.unchecked ?? []) {
+      unchecked.set(one.id, [...(unchecked.get(one.id) ?? []), one]);
+    }
   }
   return [...declared.entries()]
     .sort(([, a], [, b]) => comparePlace(a, b))
@@ -49,6 +54,7 @@ export const guarantees: Guarantees = (input) => {
         source: { kind: "marker" },
         marker: "Pending",
         name: state.name,
+        declaration: declarationId(state),
         location: { file: state.file, start: state.start, end: state.end },
         ruleId: PENDING_ID,
         promise:
@@ -57,6 +63,10 @@ export const guarantees: Guarantees = (input) => {
             : `\`${state.name}\` is running while ${running}; every way out of a function that sets it leaves another value, and that function does not start while it is ${running}`,
         covers: { one: "function that sets it", many: "functions that set it" },
         covered,
+        unchecked: (unchecked.get(id) ?? []).sort(comparePlace).map((place) => ({
+          location: { file: place.file, start: place.start, end: place.end },
+          reason: place.reason,
+        })),
       };
     });
 };

@@ -1,5 +1,14 @@
-import type { CoveredPlace, EditorContributions, StatedGuarantee } from "@stateward/core";
+import { declarationId } from "@stateward/core";
+import type {
+  CoveredPlace,
+  EditorContributions,
+  StatedGuarantee,
+  UncheckedPlace,
+} from "@stateward/core";
+import type { ProjectContext } from "@stateward/core";
 import { analysisOf, type Analysis } from "./hover.js";
+import { checkNested } from "./provider-nested/check.js";
+import type { EntryPoint } from "./provider-missing/options.js";
 import { hookReadsOf } from "./provider-missing/graph.js";
 import { REQUIRED_CONTEXT, SINGLE_PROVIDER, STABLE_CONTEXT } from "./provider-missing/resolve.js";
 import { PROVIDER_MISSING_ID } from "./provider-missing/rule.js";
@@ -54,6 +63,36 @@ function readersOf(analysis: Analysis, context: string): CoveredPlace[] {
     .map(({ name, loc }) => ({ name, location: place(loc) }));
 }
 
+/** What the proof cannot read in the value of a `Stable` context's Providers, as places. */
+function uncheckedOf(analysis: Analysis, context: string): UncheckedPlace[] {
+  return [...analysis.summaries.values()]
+    .flatMap((summary) => summary.statedProviders.filter((one) => one.context === context))
+    .flatMap((one) => one.unchecked)
+    .sort((a, b) => compareLoc(a.loc, b.loc))
+    .map(({ loc, reason }) => ({ location: place(loc), reason }));
+}
+
+/**
+ * What the proof of `SingleProvider` cannot follow, per context: the places `provider-nested`
+ * reports as not checked, found by the same walk (its findings are dropped here).
+ */
+function singleUncheckedOf(
+  analysis: Analysis,
+  entries: readonly EntryPoint[],
+): Map<string, UncheckedPlace[]> {
+  const found = new Map<string, UncheckedPlace[]>();
+  const record: ProjectContext = {
+    options: {},
+    report: () => undefined,
+    unknown: () => undefined,
+    read: () => undefined,
+  };
+  checkNested(analysis.summaries, entries, record, (context, loc, reason) => {
+    found.set(context, [...(found.get(context) ?? []), { location: place(loc), reason }]);
+  });
+  return found;
+}
+
 /** The Providers of `context` in the project, as their tags are written. */
 function providersOf(analysis: Analysis, context: string): CoveredPlace[] {
   return [...analysis.summaries.values()]
@@ -69,55 +108,65 @@ function providersOf(analysis: Analysis, context: string): CoveredPlace[] {
  * per trait. From the last full check's summaries of `provider-missing`, which every rule of the
  * pack shares; nothing when it did not run.
  */
-export const guarantees: Guarantees = (input) => {
-  const summaries = input.projectSummaries(PROVIDER_MISSING_ID);
-  if (summaries === undefined) return [];
-  const analysis = analysisOf(summaries);
-  const stated = new Map<string, StatedDeclaration>();
-  for (const summary of analysis.summaries.values()) {
-    for (const declared of summary.declared) {
-      if (!stated.has(declared.id)) stated.set(declared.id, declared);
+export function createGuarantees(entries: readonly EntryPoint[]): Guarantees {
+  return (input) => {
+    const summaries = input.projectSummaries(PROVIDER_MISSING_ID);
+    if (summaries === undefined) return [];
+    const analysis = analysisOf(summaries);
+    const stated = new Map<string, StatedDeclaration>();
+    for (const summary of analysis.summaries.values()) {
+      for (const declared of summary.declared) {
+        if (!stated.has(declared.id)) stated.set(declared.id, declared);
+      }
     }
-  }
-  for (const context of analysis.graph.contextList) {
-    if (!context.stated || stated.has(context.id)) continue;
-    stated.set(context.id, {
-      id: context.id,
-      name: context.name,
-      loc: context.loc,
-      marker: REQUIRED_CONTEXT,
-      traits: [REQUIRED_CONTEXT],
-    });
-  }
-  return [...stated.values()]
-    .sort((a, b) => compareLoc(a.loc, b.loc))
-    .flatMap((declared) =>
-      declared.traits.flatMap((trait): StatedGuarantee[] => {
-        const base = { name: declared.name, location: place(declared.loc) };
-        if (trait === REQUIRED_CONTEXT) {
-          return [
-            {
-              ...base,
-              ...TRAITS[REQUIRED_CONTEXT],
-              guarantee: trait,
-              marker: declared.marker,
-              covers: READERS,
-              covered: readersOf(analysis, declared.id),
-            },
-          ];
-        }
-        if (trait === SINGLE_PROVIDER || trait === STABLE_CONTEXT) {
-          return [
-            {
-              ...base,
-              ...TRAITS[trait],
-              guarantee: trait,
-              covers: PROVIDERS,
-              covered: providersOf(analysis, declared.id),
-            },
-          ];
-        }
-        return [];
-      }),
-    );
-};
+    for (const context of analysis.graph.contextList) {
+      if (!context.stated || stated.has(context.id)) continue;
+      stated.set(context.id, {
+        id: context.id,
+        name: context.name,
+        loc: context.loc,
+        marker: REQUIRED_CONTEXT,
+        traits: [REQUIRED_CONTEXT],
+      });
+    }
+    const single = [...stated.values()].some((one) => one.traits.includes(SINGLE_PROVIDER))
+      ? singleUncheckedOf(analysis, entries)
+      : new Map<string, UncheckedPlace[]>();
+    return [...stated.values()]
+      .sort((a, b) => compareLoc(a.loc, b.loc))
+      .flatMap((declared) =>
+        declared.traits.flatMap((trait): StatedGuarantee[] => {
+          const location = place(declared.loc);
+          const base = { name: declared.name, declaration: declarationId(location), location };
+          if (trait === REQUIRED_CONTEXT) {
+            return [
+              {
+                ...base,
+                ...TRAITS[REQUIRED_CONTEXT],
+                guarantee: trait,
+                marker: declared.marker,
+                covers: READERS,
+                covered: readersOf(analysis, declared.id),
+              },
+            ];
+          }
+          if (trait === SINGLE_PROVIDER || trait === STABLE_CONTEXT) {
+            return [
+              {
+                ...base,
+                ...TRAITS[trait],
+                guarantee: trait,
+                covers: PROVIDERS,
+                covered: providersOf(analysis, declared.id),
+                unchecked:
+                  trait === STABLE_CONTEXT
+                    ? uncheckedOf(analysis, declared.id)
+                    : (single.get(declared.id) ?? []),
+              },
+            ];
+          }
+          return [];
+        }),
+      );
+  };
+}

@@ -1,0 +1,10 @@
+{
+  "reactContext": {
+    "entries": [
+      {
+        "file": "src/main.tsx",
+        "export": "App"
+      }
+    ]
+  }
+}

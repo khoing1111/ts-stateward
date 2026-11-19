@@ -65,7 +65,7 @@ describe("check --format github", () => {
       "::warning file=src/events.ts,line=2,col=13,endLine=2,endColumn=21,title=team/max-union-members::`AppEvent` has 13 members; above 12, switches over it get hard to keep complete — split it into nested unions by kind",
     );
     expect(lines[1]).toMatch(
-      /^::error file=src\/status\.ts,line=9,col=5,endLine=9,endColumn=12,title=unions\/non-exhaustive-switch::`switch` on `status` does not handle "failed" — one of%0A- add `case "failed":` with its own code%0A- or allow it in `default`: `default: void \(status satisfies "failed"\);`$/,
+      /^::error file=src\/status\.ts,line=9,col=5,endLine=9,endColumn=12,title=unions\/non-exhaustive-switch::the `default` of the `switch` on `status` takes "failed", which no `case` names — one of%0A- add `case "failed":` with its own code%0A- or allow it in `default`: `default: void \(status satisfies "failed"\);`$/,
     );
     expect(lines.slice(0, -1).every((line) => line.startsWith("::"))).toBe(true);
     expect(lines.at(-1)).toMatch(/^3 errors, 1 warning in 5 files/);

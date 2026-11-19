@@ -170,3 +170,99 @@ function typeErrorsOfNamed(
 export function typeErrorsOfText(text: string): string {
   return typeErrorsOfNamed([text], () => "a.ts").get(text) ?? "";
 }
+
+/** A reference the language service finds: the file and the offset its name starts at. */
+export type ServiceReference = { readonly file: string; readonly start: number };
+
+/**
+ * What the language service's find-references gives for the declaration that starts at `start`
+ * in `file` (its name: a function, a variable, a property, a parameter or a type alias; each name
+ * of an array destructuring), in the project of `tsconfig`: every reference that is not the declaration's own
+ * name. A test oracle for the
+ * reference ledger, which is built without a language service.
+ */
+export function serviceReferences(
+  tsconfig: string,
+  declarations: readonly { readonly file: string; readonly start: number }[],
+): ReadonlyMap<string, readonly ServiceReference[]> {
+  const read = ts.readConfigFile(tsconfig, (file) => ts.sys.readFile(file));
+  const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, path.dirname(tsconfig));
+  const versions = new Map(parsed.fileNames.map((file) => [file, "0"]));
+  const host: ts.LanguageServiceHost = {
+    getScriptFileNames: () => parsed.fileNames,
+    getScriptVersion: (file) => versions.get(file) ?? "0",
+    getScriptSnapshot: (file) => {
+      const text = ts.sys.readFile(file);
+      return text === undefined ? undefined : ts.ScriptSnapshot.fromString(text);
+    },
+    getCurrentDirectory: () => path.dirname(tsconfig),
+    getCompilationSettings: () => parsed.options,
+    getDefaultLibFileName: (options) => ts.getDefaultLibFilePath(options),
+    fileExists: (file) => ts.sys.fileExists(file),
+    readFile: (file) => ts.sys.readFile(file),
+    readDirectory: (...args) => ts.sys.readDirectory(...args),
+    directoryExists: (dir) => ts.sys.directoryExists(dir),
+    getDirectories: (dir) => ts.sys.getDirectories(dir),
+  };
+  const service = ts.createLanguageService(host);
+  const program = service.getProgram();
+  const found = new Map<string, ServiceReference[]>();
+  for (const declaration of declarations) {
+    const sourceFile = program?.getSourceFile(declaration.file);
+    const name = sourceFile === undefined ? undefined : nameAt(sourceFile, declaration.start);
+    if (sourceFile === undefined || name === undefined) {
+      throw new Error(`no declaration at ${declaration.file}#${String(declaration.start)}`);
+    }
+    // `const [saving, setSaving] = …`: each name of the pattern is the declaration's.
+    const names = ts.isArrayBindingPattern(name)
+      ? name.elements.flatMap((element) =>
+          ts.isBindingElement(element) && ts.isIdentifier(element.name) ? [element.name] : [],
+        )
+      : [name];
+    const own = new Set(names.map((one) => one.getStart(sourceFile)));
+    const references: ServiceReference[] = [];
+    for (const one of names) {
+      for (const symbol of service.findReferences(declaration.file, one.getStart(sourceFile)) ??
+        []) {
+        for (const reference of symbol.references) {
+          const start = reference.textSpan.start;
+          if (reference.fileName === declaration.file && own.has(start)) continue;
+          // A string key (`store["saving"]`) is found inside its quotes; the ledger has the literal.
+          const text = program?.getSourceFile(reference.fileName)?.text ?? "";
+          const quoted = start > 0 && (text[start - 1] === '"' || text[start - 1] === "'");
+          const at = quoted && text[start + reference.textSpan.length] === text[start - 1];
+          references.push({ file: reference.fileName, start: at ? start - 1 : start });
+        }
+      }
+    }
+    found.set(`${declaration.file}#${String(declaration.start)}`, references);
+  }
+  service.dispose();
+  return found;
+}
+
+/** The name of the declaration that starts at `start`, or that is named there. */
+function nameAt(sourceFile: ts.SourceFile, start: number): ts.Node | undefined {
+  let found: ts.Node | undefined;
+  const visit = (node: ts.Node): void => {
+    if (found !== undefined) return;
+    if (
+      (ts.isFunctionDeclaration(node) ||
+        ts.isMethodDeclaration(node) ||
+        ts.isMethodSignature(node) ||
+        ts.isVariableDeclaration(node) ||
+        ts.isPropertyDeclaration(node) ||
+        ts.isPropertySignature(node) ||
+        ts.isParameter(node) ||
+        ts.isTypeAliasDeclaration(node)) &&
+      node.name !== undefined &&
+      (node.getStart(sourceFile) === start || node.name.getStart(sourceFile) === start)
+    ) {
+      found = node.name;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return found;
+}

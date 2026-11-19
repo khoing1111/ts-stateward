@@ -28,13 +28,38 @@ export function codeList(names: readonly string[]): string {
   return quoted.length < 2 ? last : `${quoted.slice(0, -1).join(", ")} and ${last}`;
 }
 
-export function missingProvider(component: string, context: string): Message {
+/** What the hint of a missing Provider can say about the context, beyond the usual ways. */
+export type MissingProviderFacts = {
+  /** Components of the project that give the context to their children. */
+  providers: readonly string[];
+  /** The call that states the context required, when the quick fix can write it (`requiredContext<User>()`). */
+  declare: string | null;
+};
+
+export function missingProvider(
+  component: string,
+  context: string,
+  facts: MissingProviderFacts = { providers: [], declare: null },
+): Message {
+  const used = facts.providers.map((name) => code(`<${name}>`));
   return {
     message: `${code(`<${component}>`)} is rendered without ${code(`${context}.Provider`)}`,
-    hint: oneOf(
-      `wrap it in ${code(`<${context}.Provider value={…}>`)}`,
-      `render it inside a component that provides ${code(context)}`,
-    ),
+    hint: [
+      "one of",
+      ...(used.length === 0
+        ? []
+        : [
+            `- wrap it in ${codeList(facts.providers.map((name) => `<${name}>`))}, which gives ${code(context)} to its children`,
+          ]),
+      `- ${used.length === 0 ? "wrap" : "or wrap"} it in ${code(`<${context}.Provider>`)}, giving its \`value\` prop what the readers get`,
+      `- or render it inside a component that provides ${code(context)}`,
+      ...(facts.declare === null
+        ? []
+        : [
+            `- or state it required where it is created, to prove every reader (the helper \`requiredContext\` is in \`guarantees.ts\`; the quick fix adds it):`,
+            `    ${facts.declare}`,
+          ]),
+    ].join("\n"),
   };
 }
 
@@ -100,6 +125,24 @@ export function unreachableComponent(component: string, contexts: readonly strin
   };
 }
 
+/**
+ * A guessed context's reader that is given to a slot its component hands to something that is not
+ * followed (`wrap(children)`): where it renders is not known.
+ */
+export function unreachableThroughEscape(
+  component: string,
+  contexts: readonly string[],
+  sink: string,
+): Message {
+  return {
+    message: `not checked: whether ${code(component)} is under the ${contexts.length === 1 ? "Provider" : "Providers"} of ${codeList(contexts)}: it is rendered through ${code(sink)}, which cannot be followed`,
+    hint: oneOf(
+      `render it in JSX, not through ${code(sink)}, under the Provider it needs`,
+      `list it in ${code("entries")} in the react-context options`,
+    ),
+  };
+}
+
 export function noEntryPoint(contexts: readonly string[]): Message {
   return {
     message: `not checked: the Providers of ${codeList(contexts)}: no entry point is found`,
@@ -151,6 +194,18 @@ export function unreachableStated(component: string, contexts: readonly string[]
       "render it from the app, under the Provider",
       `list it in ${code("entries")} in the react-context options`,
     ),
+  };
+}
+
+/** A stated context's reader that is rendered through something that is not followed. */
+export function unreachableStatedThroughEscape(
+  component: string,
+  contexts: readonly string[],
+  sink: string,
+): Message {
+  return {
+    message: `${code(component)} is rendered through ${code(sink)}, which cannot be followed, so ${statedList(contexts)} ${contexts.length === 1 ? "is" : "are"} not proven for it`,
+    hint: oneOf(`render it in JSX, not through ${code(sink)}, under the Provider`, PROP),
   };
 }
 

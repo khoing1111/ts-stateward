@@ -24,7 +24,11 @@ error[react/effect-loops]: render loop: the effect sets `filters`, one of its ow
   |
 6 |     setFilters({ ...filters, page: 1 });
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  = fix: set it only when it must change (`if (…) setFilters(…)`), or make the change in the event that causes it
+  = fix: one of
+      - read the state through an updater, so the effect no longer depends on `filters` (remove it from the dependencies):
+            setFilters((current) => ({ ...current, page: 1 }))
+      - or set it only when it must change: put an `if` that compares the old and the new value around `setFilters`
+      - or make the change in the event that causes it
   = docs: stateward explain react/effect-loops
 ```
 

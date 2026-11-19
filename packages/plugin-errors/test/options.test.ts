@@ -40,6 +40,20 @@ describe("errors/catch-hides-unexpected option `restUsesError`", () => {
     ).toEqual([
       "error handled.ts: `catch` handles errors other than `NotFoundError` without looking at `e`",
     ]);
+    // The branch is generic: rethrow, use the error there, or turn the option off.
+    const [finding] = checkWith(fixture(dir), "catch-hides-unexpected", [
+      "error",
+      { restUsesError: true },
+    ]);
+    expect(finding?.hint).toBe(
+      [
+        "one of",
+        "- rethrow the rest, so they reach the caller",
+        "    throw e;",
+        "- or use `e` in the branch that handles the rest: report it, record it or wrap it",
+        "- or, if that branch is right for every other error, set the rule's `restUsesError` option to `false`",
+      ].join("\n"),
+    );
   });
 });
 

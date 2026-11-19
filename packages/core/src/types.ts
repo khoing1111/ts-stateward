@@ -71,7 +71,7 @@ export type FixReview = {
   /**
    * The finding with only the fixes that compile, each as its first form that does (without
    * `alternatives`). When it had fixes and none compiles, its hint ends with the line
-   * "no automatic fix: <TypeScript's message>".
+   * "no automatic fix: <TypeScript's message>", from the last form tried of the first fix.
    */
   finding: Finding;
   /** Fixes that could not be tried: never offered, listed by `check --format json` as not verified. */
@@ -102,6 +102,19 @@ export type Finding =
        * (`ReportProblem.about`); read by `RuleMeta.yieldsTo`, then dropped from the result.
        */
       about?: Location;
+      /**
+       * The finding stands against a guarantee the code states (`ReportProblem.against`): a proof
+       * counts it whatever its severity, and a config that turns its kind off leaves it as an info.
+       */
+      against?: true;
+      /**
+       * The guarantees this finding is against, by the id of each stated declaration
+       * (`StatedGuarantee.declaration`): a proof reads a guarantee as not proven while a finding
+       * names it, whatever the finding's severity or the settings. Set by a rule that says what it
+       * is against (`ReportProblem.against`), else from where the finding lies (`linkFindings`);
+       * absent when no guarantee is known for it.
+       */
+      guarantees?: readonly string[];
     }
   /**
    * Analysis could not decide: always reported, never silent. `hint` says what would make it
@@ -117,6 +130,11 @@ export type Finding =
       shown?: "warning" | "off";
       /** The rule asks for its places not checked to be listed (`RuleMeta.listUnknowns`). */
       listed?: true;
+      /**
+       * The guarantees whose proof stops here (as `guarantees` of a problem): each reads "not
+       * checked" at this place, whatever `shown` says.
+       */
+      guarantees?: readonly string[];
     }
   /** A rule threw: the check is incomplete, so it fails CI. */
   | { kind: "failure"; ruleId: string; message: string; hint: string; location: Location };
@@ -266,6 +284,13 @@ export type RuleInfo<S extends OptionSpecs = OptionSpecs, G extends string = str
    * TypeScript then checks): in a project without it, each finding's fix line says so.
    */
   fixNeedsStrictNulls?: true;
+  /**
+   * The traits this rule proves. The engine lists every reference to each declaration that states
+   * one (the reference ledger, `FileContext.ledger`); the rule marks each reference it reads with
+   * `FileContext.read`, and a reference it leaves unmarked reads "not checked" in the guarantee's
+   * proof.
+   */
+  proves?: RuleProves;
 };
 
 /** A library a rule reads by its types: its name as people say it, and the modules that give them. */
@@ -316,6 +341,210 @@ export type SignalParameter = { readonly index: number; readonly property: "sign
  * the declaration.
  */
 export type SymbolRef = { readonly id: string; readonly name: string };
+
+/**
+ * A declaration whose written type states guarantees (`TypeQueries.statedDeclarationsIn`):
+ * `start` is where its node starts, the place a plugin lists it at (`StatedGuarantee.location`).
+ */
+export type StatedDeclaration = {
+  readonly file: string;
+  readonly start: number;
+  /** The end of the declaration's head: its name and written type, not an initializer or a body. */
+  readonly headEnd: number;
+  readonly end: number;
+  readonly name: string;
+  /** The marker type as written: `Pending`. */
+  readonly marker: string;
+  /** The guarantee names the type states, sorted: `["pending"]`. */
+  readonly guarantees: readonly string[];
+};
+
+/**
+ * How a reference uses a stated declaration, as the reference ledger lists it (closed: a form not
+ * listed here is `other`). `call`: the callee of a call or `new`; `read`: read in place (a member
+ * read, an operand, a condition); `write`: assigned, changed with `++`, deleted, or a property given
+ * its value in an object literal; `alias`: copied to another name (a variable, a field, a default,
+ * a destructured name); `import` and `export`: named in an import or export; `argument`: passed to a
+ * call or to JSX; `stored`: put in an array or object literal; `returned`: returned or yielded;
+ * `jsx-tag` and `jsx-attribute`: a JSX element's tag or attribute name; `type`: named in a type;
+ * `computed`: used as a computed key; `other`: anything else (a branch of `?:`, `??`, a `for…of`);
+ * `tag`: the JSDoc tag that states the trait (`RuleProves.tags`), standing for the declaration's own
+ * body or definition, which its rule reads. The typed flows (`TypeQueries.typedFlowsIn`) are listed by their kind (`FlowKind`).
+ */
+export type ReferenceForm =
+  | "call"
+  | "read"
+  | "write"
+  | "alias"
+  | "import"
+  | "export"
+  | "argument"
+  | "stored"
+  | "returned"
+  | "jsx-tag"
+  | "jsx-attribute"
+  | "type"
+  | "computed"
+  | "other"
+  | "tag"
+  | FlowKind;
+
+/**
+ * How a value of a stated type flows (`TypeQueries.typedFlowsIn`): `produced`, a place typed with
+ * it gets a value whose own type does not hold it (a cast, an `any`, a plain value, a generic call
+ * that returns it); `decided`, the code decides by it (a `switch` subject, a comparison, a key, an
+ * `in` test); `escaped`, an object holding a stated member is written in a way no reference names
+ * (`Object.assign(this, …)`, a literal for a state whose setter also takes a function).
+ */
+export type FlowKind = "produced" | "decided" | "escaped";
+
+/**
+ * What a typed flow goes through (`StatedReference.via`): `value`, a value given to a typed place;
+ * `cast`, `as`, `<T>` or `satisfies`; `any`, an `any` value; `overload`, a return of an overload's
+ * implementation; `override`, a value a class member gives where the member it overrides or
+ * implements is typed (`override id() { return "x" }` over `id(): OrderId`); `function-type`, a function given where one returning the type is expected;
+ * `generic-call`, a call whose type arguments give the type its arguments do not hold;
+ * `indirect-call`, `.call`, `.apply`, `.bind`, `Reflect.apply` or `Reflect.construct`; `spread`, a
+ * spread argument, attribute or property; `reflect`, `Object.assign`, `Object.defineProperty`,
+ * `Reflect.set` or a computed key; `literal`, an object literal; `for-of`, the target of a
+ * `for…of`; `derived`, a value made from one by a method (`switch (s.toLowerCase())`);
+ * `call`, a value given to a call that decides by it (`list.includes(s)`, `map.get(s)`,
+ * `Object.is(s, …)`); `stopped`, the flow scan of the file stopped at its budget here, so the flows after it
+ * are not listed.
+ */
+export type FlowVia =
+  | "value"
+  | "cast"
+  | "any"
+  | "overload"
+  | "override"
+  | "function-type"
+  | "generic-call"
+  | "indirect-call"
+  | "spread"
+  | "reflect"
+  | "literal"
+  | "for-of"
+  | "derived"
+  | "call"
+  | "stopped";
+
+/**
+ * What a rule proves (`RuleInfo.proves`): the reference ledger lists every reference to each
+ * declaration that states one of these, and the rule marks the ones it reads (`FileContext.read`).
+ */
+export type RuleProves = {
+  /** Traits a value, property or parameter states by its written type (`Owned<T>`). */
+  readonly traits?: readonly string[];
+  /**
+   * Traits a function states by its written return type (`(): Release<…>`, or a promise of one): the
+   * function is the stated declaration, and each call a reference to it.
+   */
+  readonly returns?: readonly string[];
+  /**
+   * Traits a module variable with no written type states by the type of the call that makes it
+   * (`const ThemeContext = requiredContext<Theme>()`): the variable is the stated declaration.
+   */
+  readonly made?: readonly string[];
+  /**
+   * Traits a variable declared by an array destructuring states by a type written on it or on the
+   * call that makes it (`const [saving, setSaving] = useState<Pending<boolean>>(false)`): every
+   * element whose type holds the trait (as itself, or in a union member, a parameter or a return of
+   * a function, up to three levels) refers to one stated declaration, the variable declaration.
+   */
+  readonly holders?: readonly string[];
+  /**
+   * Traits whose typed flows enter the ledger, by kind (`TypeQueries.typedFlowsIn`): a type alias
+   * stating a trait of `produced` or `decided` is a stated declaration (each name of it in a type
+   * a reference), with its flows of that kind; a member stating a trait of `escaped` has its holder's
+   * escapes. Listed only when a file of the project declares the trait.
+   */
+  readonly flows?: {
+    readonly produced?: readonly string[];
+    readonly decided?: readonly string[];
+    readonly escaped?: readonly string[];
+  };
+  /**
+   * JSDoc tags (without `@`) whose declarations enter the ledger under the trait `@<tag>`: a
+   * function, a method, a variable holding a function, a property or method of a type, or a type
+   * alias the tag is written on. Each reference to it is listed, and the tag itself as a reference
+   * of form `tag`, which stands for the declaration's body: the rule reads it there.
+   */
+  readonly tags?: readonly string[];
+};
+
+/** A reference to a stated declaration (`TypeQueries.statedReferencesIn`, `typedFlowsIn`). */
+export type StatedReference = {
+  /** The id of the declaration (`declarationId`). */
+  readonly declaration: string;
+  /** The declaration as a symbol: `declarationOf` finds it. */
+  readonly symbol: SymbolRef;
+  /** The declaration's name, and its marker type as written (`Release`). */
+  readonly name: string;
+  readonly marker: string;
+  /** The trait the reference is listed for: one entry per trait the declaration states. */
+  readonly trait: string;
+  /** The identifier, private name or string key that refers to it; for a flow, the expression. */
+  readonly node: ts.Node;
+  readonly form: ReferenceForm;
+  /** For a typed flow (a `FlowKind` form): what it goes through. */
+  readonly via?: FlowVia;
+  /** The code around it, short and on one line: `w = watchPrices`. */
+  readonly text: string;
+};
+
+/** A reference in the ledger: a `StatedReference` without its node, as the cache keeps it. */
+export type LedgerRef = {
+  /** `<file>#<start>` of the reference; `<file>#<start>-<end>` of a typed flow. */
+  readonly id: string;
+  readonly declaration: string;
+  readonly name: string;
+  readonly marker: string;
+  readonly trait: string;
+  readonly form: ReferenceForm;
+  readonly via?: FlowVia;
+  readonly location: Location;
+  readonly text: string;
+};
+
+/**
+ * What a rule says of a reference it read (`FileContext.read`): `decided`, the rule read it
+ * completely (a finding says when it is wrong); `irrelevant`, nothing the guarantee promises
+ * depends on it (an import, a read of a part that cannot change it); `handed-on`, the value goes
+ * to `to`, which the rule's project side settles (`ProjectContext.read`); `unchecked`, the rule
+ * cannot follow it, and `reason` says what it is (after "not checked: ").
+ */
+export type ReadOutcome =
+  | { readonly kind: "decided" }
+  | { readonly kind: "irrelevant" }
+  | { readonly kind: "handed-on"; readonly to: string }
+  | { readonly kind: "unchecked"; readonly reason: string };
+
+/** One rule's mark on a reference of the ledger. */
+export type LedgerMark = {
+  readonly ruleId: string;
+  /** `LedgerRef.id`. */
+  readonly ref: string;
+  readonly trait: string;
+  readonly outcome: ReadOutcome;
+};
+
+/**
+ * Every reference to each stated declaration of a check, and what the rules said of them: a
+ * proof reads a reference its rule did not mark as not checked (`proveGuarantees`).
+ */
+export type Ledger = {
+  /** The traits the ledger lists references for (the active rules' `proves`), sorted. */
+  readonly traits: readonly string[];
+  /** In file and offset order. */
+  readonly refs: readonly LedgerRef[];
+  readonly marks: readonly LedgerMark[];
+  /**
+   * The rule that proves each tag trait (`@neverRejects`, from `RuleProves.tags`): the first active
+   * rule, by id, that lists the tag. Absent when no active rule proves a tag.
+   */
+  readonly tagRules?: Readonly<Record<string, string>>;
+};
 
 /** A type alias by its name and the file that declares it. */
 export type AliasRef = { readonly name: string; readonly file: string; readonly promised: boolean };
@@ -460,6 +689,15 @@ export type TypeQueries = {
    */
   contextualAliasOf(node: ts.Expression): SymbolRef | undefined;
   /**
+   * The type aliases (not generic ones) that the type of an expression, or with `contextual` the
+   * type the surrounding code expects for it, holds inside: the elements and type arguments of an
+   * array, tuple, `Map`, `Set` or `Promise`, and the properties of an object type, up to three
+   * levels down (`OrderId` in `OrderId[]`, `Map<string, OrderId>`, `{ id: OrderId }`). The type
+   * itself is not listed (`contextualAliasOf` gives it), and an alias is not entered. Sorted by
+   * name; each once.
+   */
+  heldAliasesOf(node: ts.Expression, contextual?: boolean): readonly SymbolRef[];
+  /**
    * The property a name destructured from an object reads: `cacheEntryRemoved` of the
    * parameter's type for `{ cacheEntryRemoved }`, as a symbol whose declaration `declarationOf`
    * finds. Undefined for a rest element, an array pattern, a computed key, or a type with no such
@@ -471,6 +709,55 @@ export type TypeQueries = {
    * a trait, `"__guarantee:<name>"`: a rule skips work for a trait nobody states.
    */
   declaresTrait(name: string): boolean;
+  /**
+   * The declarations of `sourceFile` that state a guarantee in their written type: a variable, a
+   * property (a `#private` field, a member of an object type), a parameter of a function with a
+   * body, or a type alias (not a generic one, which is how a marker is defined), whose annotation
+   * names a type that states one or more guarantees. Empty when no file of the program writes a
+   * marker. In source order.
+   */
+  statedDeclarationsIn(sourceFile: ts.SourceFile): readonly StatedDeclaration[];
+  /**
+   * Every reference in `sourceFile` to a declaration of the project that states a trait of
+   * `proves` (the reference ledger): an identifier, private name, string key, JSX name, import or
+   * export name, shorthand property, destructured name or contextually typed property name whose
+   * symbol, after aliases and to its root, is such a declaration. A value, property or parameter
+   * states a trait by its written type (a rest parameter by its elements), a function by its
+   * written return type or a promise of it (`proves.returns`), a declaration with a JSDoc tag of
+   * `proves.tags` by the tag (and the tag itself, form `tag`). Each with its form. Sorted by
+   * offset, then declaration and trait. Empty when no file of the program writes a marker or a tag.
+   */
+  statedReferencesIn(sourceFile: ts.SourceFile, proves: RuleProves): readonly StatedReference[];
+  /**
+   * The typed flows in `sourceFile` of the traits `proves.flows` lists (the reference ledger's
+   * flows): at a return, an argument (a spread one too), an initializer, an assignment, a property
+   * or element of a literal, a JSX attribute or spread, a `yield`, a cast and a `for…of` target, each
+   * value given to a place whose type holds a stated type alias its own type does not (`produced`);
+   * each value of a stated alias the code decides by (`decided`: a `switch` subject, a comparison, a
+   * key, an `in` test); each holder of a stated member written by reflection or in an object literal
+   * whose members no reference names (`escaped`). Only in a file whose imports reach a declaring
+   * file. Past `budget` type questions (default `FLOW_BUDGET`), the scan stops: one flow of `via`
+   * `stopped` for each stated declaration, at the node where it stopped. Sorted by offset, then end,
+   * declaration and trait. Empty when no file of the program declares a flow trait.
+   */
+  typedFlowsIn(
+    sourceFile: ts.SourceFile,
+    proves: RuleProves,
+    budget?: number,
+  ): readonly StatedReference[];
+  /**
+   * Whether every value the node's type can hold is a primitive, or an array or tuple of them (up to
+   * three levels): a copy of it shares nothing that can be changed.
+   */
+  holdsOnlyPrimitives(node: ts.Node): boolean;
+  /**
+   * The declaration a value is, as far as its type says: the function, class or method whose type
+   * `node` has (`w` in `const w = watchPrices` and `watchPrices` in `const { watchPrices } = await
+   * import(…)` both give `watchPrices`). Undefined when the type belongs to no declaration (a
+   * union, a primitive, an object literal type). It follows no assignment: a wrapper function is
+   * its own declaration.
+   */
+  valueOriginOf(node: ts.Node): SymbolRef | undefined;
   /**
    * Whether a file of the project declares a member named `[Symbol.dispose]` or
    * `[Symbol.asyncDispose]` (a class, an interface, a type or an object literal), read from the
@@ -615,6 +902,13 @@ export type TypeQueries = {
    */
   isReadonlyPath(node: ts.Expression): boolean;
   /**
+   * Whether the prop a JSX attribute gives its value to is declared in the project with a type no
+   * code can change through: every property `readonly` (declared so, or by `Readonly<T>`), with a
+   * primitive or such a type in turn; a `ReadonlyArray` of such values; no method, no function, no
+   * mutable array, `Map` or `Set`. False for a prop declared in a package, or with no declaration.
+   */
+  propIsDeeplyReadonly(attribute: ts.JsxAttribute): boolean;
+  /**
    * Whether the call may change what it is given: `argument` is the index of an argument, or
    * `"receiver"` for the object a method is called on. True only when the callee's declaration is
    * in a checked file and, for an argument, its declared parameter type (not the instantiated
@@ -646,6 +940,58 @@ export type TypeQueries = {
    * time is still the same value. False for objects, functions, symbols, `any` and `unknown`.
    */
   isPrimitive(node: ts.Node): boolean;
+  /**
+   * Whether every value of an expression's type is a number: `number`, a number literal or a
+   * numeric enum (a type parameter widened to its constraint; a branded `number & {…}` counts).
+   * False for `bigint`, `any` and `unknown`: dividing a `bigint` by zero throws.
+   */
+  isNumber(node: ts.Node): boolean;
+  /**
+   * The platform's own type of an expression's value, by its name in TypeScript's lib or Node's
+   * types (`Array`, `Map`, `String` for a string or a branded string, `Math`, `MapConstructor` for
+   * `Map` itself), when
+   * every member of its type (`null` and `undefined` aside) is that one type and no class or
+   * interface of the project extends or implements it (a value typed `Map` may then be the
+   * project's subclass). A tuple is `Array`. Undefined for anything else: a type of the project or
+   * a package, a union of two types, `any`, `unknown`.
+   */
+  platformTypeOf(node: ts.Node): string | undefined;
+  /**
+   * For an expression whose type is the platform's array or a tuple (every member of a union), and
+   * so iterates without running code of the project: `"primitives"` when every element type is one
+   * `isPrimitive` accepts, `"values"` otherwise. Undefined when the type is anything else
+   * (`Iterable<T>`, a `Set`, a union with one).
+   */
+  arrayElementsOf(node: ts.Node): "primitives" | "values" | undefined;
+  /**
+   * Whether a property read, an element read or a destructured property runs no code and cannot
+   * throw, as far as the declared types say: the member is declared a property (never an accessor)
+   * of a class, an interface, an object type, a mapped type such as `Record`, an enum or a module
+   * (a class that gives an interface's property as a getter is not seen); or a property of the
+   * platform's types on its closed list (`length` of an array or string, `size` of a `Map`).
+   * An element read is plain with a literal index inside a tuple, a literal key of such a member, or
+   * a key of an index signature whose value is a primitive and is not read further (`xs[0].length`
+   * throws on an empty array). An array pattern is plain on an array.
+   */
+  readIsPlain(
+    node: ts.PropertyAccessExpression | ts.ElementAccessExpression | ts.BindingElement,
+  ): boolean;
+  /**
+   * Whether reading or writing a property may run a getter or setter of the project: the member is
+   * declared as one, with a body. A member declared as a property is read as one, as far as the
+   * declared types say (a class that gives an interface's property as a getter is not seen).
+   */
+  readMayRunAccessor(node: ts.PropertyAccessExpression): boolean;
+  /**
+   * Whether a name is declared by the platform only: TypeScript's lib or Node's types, not the
+   * project or a package (`String`, `setTimeout`).
+   */
+  isPlatformName(node: ts.Node): boolean;
+  /**
+   * Whether the type of the right side of `instanceof` is a class the test cannot run code of: a
+   * constructor of the platform, or a class of the project with no static `Symbol.hasInstance`.
+   */
+  isPlainClass(node: ts.Expression): boolean;
   /**
    * Whether the type of an expression is declared outside the project: in a package (a file found
    * through node_modules) or in TypeScript's own lib. What is asked is where the type is named: its
@@ -719,6 +1065,18 @@ export type ReportProblem = {
    * are warnings. A severity the config gives this finding's kind still wins over it.
    */
   stated?: true;
+  /**
+   * The finding stands against a guarantee the code states: a proof counts it whatever its
+   * severity (a rule set to `info`, a kind lowered or ignored by an override cannot make the
+   * guarantee read proven), and a config that turns its kind `off` still reports it, as an info.
+   * It changes no severity otherwise. `stated` implies it.
+   *
+   * Say which guarantee with the declaration that states it, a node or a symbol (`symbolAt`): the
+   * finding is then linked to that guarantee (`Finding.guarantees`), however the code reaches the
+   * value (an alias, a destructured import, a Provider in another file). With `true` the engine
+   * links the finding from where it lies and its related notes, as far as they say.
+   */
+  against?: true | ts.Node | SymbolRef;
   related?: readonly { node: ts.Node; message: string }[];
   fixes?: readonly Fix[];
   /**
@@ -795,14 +1153,15 @@ export type CoveredPlace = {
  */
 /**
  * Where a trait is stated: a standard type that already says it (`Disposable`), the project's
- * marker type (`Owned<T>`), the config's `facts` line for a package, or the facts a plugin ships
- * for it (stateward's facts).
+ * marker type (`Owned<T>`), the config's `facts` line for a package, the facts a plugin ships
+ * for it (stateward's facts), or a JSDoc tag (`@neverRejects`, `RuleProves.tags`).
  */
 export type TraitSource =
   | { readonly kind: "type"; readonly name: string }
   | { readonly kind: "marker" }
   | { readonly kind: "config"; readonly package: string }
-  | { readonly kind: "shipped"; readonly package: string };
+  | { readonly kind: "shipped"; readonly package: string }
+  | { readonly kind: "tag"; readonly tag: string };
 
 export type StatedGuarantee = {
   /** The guarantee's name, as its marker property writes it: `required-context`. */
@@ -813,6 +1172,11 @@ export type StatedGuarantee = {
   readonly marker: string;
   /** The declaration that states it: `ThemeContext`. */
   readonly name: string;
+  /**
+   * The id of the declaration (`declarationId(location)`): what `Finding.guarantees` names. A
+   * finding is against this guarantee when it lists the id.
+   */
+  readonly declaration: string;
   /**
    * The declaration. Every error of `ruleId` about this guarantee has a related note here (the
    * note that says where the guarantee is stated): that is how its errors are counted.
@@ -826,6 +1190,19 @@ export type StatedGuarantee = {
   readonly covers: CoveredNoun;
   /** The places the proof covers, in file and offset order; empty when nothing uses it. */
   readonly covered: readonly CoveredPlace[];
+  /**
+   * Places that use the guarantee's value in a way the rule cannot follow (a release only in a
+   * closure nothing calls, an `if` chain over an open value): none is proven, so the guarantee
+   * reads "not checked" while one is left, never proven and never unused.
+   */
+  readonly unchecked?: readonly UncheckedPlace[];
+};
+
+/** A place a rule cannot follow, and what is in it, as `not checked: …` says it. */
+export type UncheckedPlace = {
+  readonly location: Location;
+  /** After "not checked: ": "released only in `later`, which nothing calls". */
+  readonly reason: string;
 };
 
 export type FileContext<O extends Options = Options> = {
@@ -844,7 +1221,24 @@ export type FileContext<O extends Options = Options> = {
   /** The add-ons of this rule's plugin that the config switches on, without the plugin prefix. */
   readonly addons: readonly string[];
   report(problem: ReportProblem): void;
-  unknown(input: { message: string; hint: string; node: ts.Node }): void;
+  /** `against`: the declaration whose proof stops here (as `ReportProblem.against`). */
+  unknown(input: {
+    message: string;
+    hint: string;
+    node: ts.Node;
+    against?: ts.Node | SymbolRef;
+  }): void;
+  /**
+   * The references in this file to the declarations that state a trait the active rules prove
+   * (`RuleInfo.proves`), in offset order: the reference ledger. Empty in the editor's fast pass.
+   */
+  readonly ledger: readonly LedgerRef[];
+  /**
+   * Marks a reference of `ledger` as read by this rule, with what it found: a reference of a trait
+   * the rule proves that it leaves unmarked reads "not checked" in the guarantee's proof. Marks are
+   * kept with the rule's findings, so a run from the cache replays them.
+   */
+  read(ref: LedgerRef, outcome: ReadOutcome): void;
 };
 
 /** Project rules decide from their JSON summaries alone, so their results can be cached. */
@@ -859,10 +1253,28 @@ export type ProjectContext<O extends Options = Options> = {
     findingKind?: string;
     /** As in `ReportProblem`. */
     severity?: "info" | "warning";
+    /** As in `ReportProblem`: against a guarantee the code states, so an error while the rule is on. */
+    stated?: true;
+    /**
+     * As in `ReportProblem`; a rule that has only summaries names the declarations as locations
+     * (the `location` of the `StatedGuarantee` they are listed as).
+     */
+    against?: true | readonly Location[];
     related?: readonly RelatedLocation[];
     fixes?: readonly Fix[];
   }): void;
-  unknown(input: { message: string; hint: string; location: Location }): void;
+  unknown(input: {
+    message: string;
+    hint: string;
+    location: Location;
+    /** The declarations whose proof stops here, as `against` names them. */
+    against?: readonly Location[];
+  }): void;
+  /**
+   * Settles a reference the rule's file side handed on (`ReadOutcome` `handed-on`), by its id and
+   * trait as the summaries keep them: `decided`, `irrelevant` or `unchecked`.
+   */
+  read(ref: { readonly id: string; readonly trait: string }, outcome: ReadOutcome): void;
 };
 
 export type FileRule<S extends OptionSpecs = OptionSpecs, G extends string = string> = {
@@ -1275,6 +1687,18 @@ export type CheckResult = {
    * `findings`. Counted, never hidden: the CLI says how many. Empty when ignores are not applied.
    */
   ignored?: readonly IgnoredFinding[];
+  /**
+   * Findings against a stated guarantee (`Finding.guarantees`) that a rule made where the config
+   * turns the rule off: they are not in `findings`, and a proof reads the guarantee as not checked
+   * there, never proven (`ProofInputs.silenced`). Absent when there are none.
+   */
+  silenced?: readonly Finding[];
+  /**
+   * The reference ledger of a full check (every reference to each stated declaration, and the
+   * rules' marks on them), for the proofs (`ProofInputs.ledger`); absent from the editor's fast
+   * pass. Not part of the JSON output.
+   */
+  ledger?: Ledger;
   stats: {
     files: number;
     durationMs: number;

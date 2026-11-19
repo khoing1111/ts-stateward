@@ -7,14 +7,20 @@ function weak(property: string, plain: string, alias: string): string {
   return `\`${property}\` does not tell the members of \`${alias}\` apart: one member has \`${plain}\``;
 }
 
-/** The two decisions (M22): the catch-all member gets its own tag, or the union is allowed open. */
-function fix(alias: string, member: string): string {
+/**
+ * The two decisions (M22): the catch-all member gets its own tag, or the union is stated open
+ * (`OpenUnion`, a type of the project, said where it comes from) and its `switch` needs a `default`.
+ */
+function fix(alias: string, member: string, property = "kind"): string {
   return [
     "one of",
     "- give the catch-all member its own tag, and keep the original value in another field:",
     `    ${member}`,
-    "- or, when the union is open on purpose (data from a server you do not control), allow it:",
-    `    ignore: ["${alias}"] in the rule's options`,
+    `- or, if other kinds may come on purpose, state \`${alias}\` open: wrap its members in \`OpenUnion\`, and every \`switch\` on its \`${property}\` then needs a \`default\``,
+    '    import type { OpenUnion } from "./guarantees.js";',
+    `    type ${alias} = OpenUnion<…>`,
+    "    // src/guarantees.ts, added once: no quick fix writes it",
+    '    export type OpenUnion<T = unknown> = T & { readonly "__guarantee:open-union"?: true };',
   ].join("\n");
 }
 
@@ -24,7 +30,7 @@ function expected(
   alias: string,
   member: string,
 ): ReturnType<typeof says> {
-  return says("events.ts", weak(property, plain, alias), fix(alias, member));
+  return says("events.ts", weak(property, plain, alias), fix(alias, member, property));
 }
 
 describe(`unions/${RULE}: flagged`, () => {
@@ -70,6 +76,7 @@ describe(`unions/${RULE}: flagged`, () => {
         fix(
           "UploadPipelineProgressMessageFromTheServer",
           '| { aVeryLongPropertyNameForTheKindOfMessage: "other"; … }',
+          "aVeryLongPropertyNameForTheKindOfMessage",
         ),
       ),
     ]);
@@ -84,6 +91,21 @@ describe(`unions/${RULE}: flagged`, () => {
       related: [],
       fixes: [],
     });
+  });
+});
+
+describe(`unions/${RULE}: a union stated open`, () => {
+  it("is silent on `OpenUnion<…>`, which says the other kinds are on purpose, and reports the union that does not say it", () => {
+    const found = shown(checkOnly(fixture(`${RULE}/stated-open`), RULE));
+    expect(found).toEqual([
+      says(
+        "messages.ts",
+        weak("kind", "string", "Plain"),
+        fix("Plain", '| { kind: "other"; rawKind: string; payload: unknown }'),
+      ),
+    ]);
+    // The old advice, an `ignore` entry, is gone from the hint: the statement is in the code.
+    expect(found[0]?.hint).not.toContain("ignore:");
   });
 });
 

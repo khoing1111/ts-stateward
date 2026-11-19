@@ -212,13 +212,15 @@ export function reviewFixes(
       if (outcome?.kind === "unchecked") unchecked.push(outcome.form);
     }
     const rejected = mine.flatMap((trial) => trial.rejected);
-    const [first] = rejected;
-    const noFix = offered.length === 0 && unchecked.length === 0 && first !== undefined;
+    // The last form of the first fix is the one that goes furthest (it also writes what the
+    // earlier forms expect to find), so its error is the one that is left to fix.
+    const last = mine.find((trial) => trial.rejected.length > 0)?.rejected.at(-1);
+    const noFix = offered.length === 0 && unchecked.length === 0 && last !== undefined;
     return {
       finding: {
         ...finding,
         fixes: offered,
-        hint: noFix ? `${finding.hint}\nno automatic fix: ${first.reason}` : finding.hint,
+        hint: noFix ? `${finding.hint}\nno automatic fix: ${last.reason}` : finding.hint,
       },
       unchecked,
       rejected,

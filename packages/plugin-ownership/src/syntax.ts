@@ -1,5 +1,6 @@
 /** Reading the syntax of a change: what is written, and the owner's call that would make it. */
 import ts from "@stateward/core/typescript";
+import type { TypeQueries } from "@stateward/core";
 import { capitalized, shorten } from "./text.js";
 
 export function isWrapper(node: ts.Node): boolean {
@@ -143,4 +144,15 @@ export function methodExample(
   const prop = capitalized(baseName(receiver, root));
   const lastWord = ["pop", "shift", "clear"].includes(method);
   return call(`${verb}${prop}`, lastWord ? [] : args.map((arg) => arg.getText(sourceFile)));
+}
+
+/** `Object.assign`, the platform's: it changes its first argument. */
+export function isObjectAssign(callee: ts.Expression, types: TypeQueries): boolean {
+  const current = unwrapped(callee);
+  if (!ts.isPropertyAccessExpression(current) || current.name.text !== "assign") return false;
+  const target = current.expression;
+  if (!ts.isIdentifier(target) || target.text !== "Object") return false;
+  const symbol = types.symbolAt(target);
+  const declaration = symbol && types.declarationOf(symbol);
+  return declaration !== undefined && !types.isOwnFile(declaration.file);
 }

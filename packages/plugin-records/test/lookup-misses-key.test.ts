@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Finding } from "@stateward/core";
+import { typeErrorsOfText } from "@stateward/core/testing";
+import { lookupMissesKey } from "../src/lookup-misses-key.js";
 import { checkOnly, fixture, says, shown } from "./lookup-helpers.js";
 
 const RULE = "lookup-misses-key";
@@ -8,14 +10,29 @@ function unchecked(_map: string, _type: string, access: string): string {
   return `\`${access}\` can be missing, but its type says it never is`;
 }
 
-/** The key is typed with a separately declared union or enum: the table can be checked against it. */
-function declare(map: string, key: string, type: string): string {
-  return `declare \`${map}\` with \`as const satisfies Record<${type}, …>\`, or type \`${key}\` so a missing key is handled`;
+/** The second reading: partial on purpose, so the type says it and each read has a fallback. */
+function partial(map: string, key: string, keys: string): string {
+  return `- or, if some entries are missing on purpose, type it \`Partial<Record<${keys}, string>>\` and read it with \`${map}[${key}] ?? …\``;
 }
 
-/** The key's type is not declared apart from the table: there is no union to check it against. */
-function give(map: string, key: string): string {
-  return `give \`${map}\` its real keys, or type \`${key}\` so a missing key is handled`;
+/** The key is typed with a separately declared union or enum: the table can be checked against it. */
+function declare(map: string, key: string, type: string): string {
+  return [
+    "one of",
+    `- declare \`${map}\` with \`as const satisfies Record<${type}, string>\`, so a missing entry fails to compile`,
+    partial(map, key, type),
+  ].join("\n");
+}
+
+/** The key's type is not declared apart: the keys are named first; a parameter is typed, not declared. */
+function give(map: string, key: string, parameter = false): string {
+  return [
+    "one of",
+    parameter
+      ? `- name the keys \`${map}\` has in a union type, and type it \`Record<…, string>\`, so a caller must give every entry`
+      : `- name the keys \`${map}\` has in a union type, and declare it \`as const satisfies Record<…, string>\`, so a missing entry fails to compile`,
+    partial(map, key, "string"),
+  ].join("\n");
 }
 
 /** A constant key on a record with no fixed keys: type its keys, there is no entry to add. */
@@ -26,6 +43,22 @@ function registry(map: string, key: string): string {
 function inFile(name: string): readonly Finding[] {
   return checkOnly(fixture(`${RULE}/flagged`), RULE).filter((f) => f.location.file.endsWith(name));
 }
+
+describe(`records/${RULE}: a table that is a parameter`, () => {
+  it("types the parameter; `as const satisfies` cannot be written on it", () => {
+    const dir = fixture(`${RULE}/parameter`);
+    const [one, ...rest] = checkOnly(dir, RULE);
+    expect(rest).toEqual([]);
+    expect(one?.hint).toBe(
+      [
+        "one of",
+        "- type `labels` as `Record<Status, string>`, so a caller must give every entry",
+        partial("labels", "status", "Status"),
+      ].join("\n"),
+    );
+    expect(one?.hint).not.toContain("as const satisfies");
+  });
+});
 
 describe(`records/${RULE}: flagged`, () => {
   it("says an index signature is never checked, and does not list keys the map has", () => {
@@ -73,7 +106,7 @@ describe(`records/${RULE}: flagged`, () => {
       says(
         "other-keys.ts",
         unchecked("map", "Record<string, string>", "map[key]"),
-        give("map", "key"),
+        give("map", "key", true),
       ),
       says(
         "other-keys.ts",
@@ -194,5 +227,26 @@ describe(`records/${RULE}: not flagged`, () => {
 
   it("accepts an access that noUncheckedIndexedAccess types as possibly undefined", () => {
     expect(shown(checkOnly(fixture(`${RULE}/not-flagged-unchecked`), RULE))).toEqual([]);
+  });
+});
+
+describe(`records/${RULE}: the table partial on purpose`, () => {
+  const read =
+    'export function title(status: Status): string {\n  return labels[status] ?? "Unknown";\n}\n';
+  const header = 'type Status = "idle" | "failed";\n\n';
+
+  it("is stated with an annotation that compiles with the read, not with `as const satisfies Partial`", () => {
+    const annotated = `${header}const labels: Partial<Record<Status, string>> = { idle: "Idle" };\n\n${read}`;
+    const satisfied = `${header}const labels = { idle: "Idle" } as const satisfies Partial<Record<Status, string>>;\n\n${read}`;
+    expect(typeErrorsOfText(`export {};\n${annotated}`)).toBe("");
+    // The old advice: the literal type has no `failed` entry, so the read does not compile.
+    expect(typeErrorsOfText(`export {};\n${satisfied}`)).toContain("TS7053");
+  });
+
+  it("is what the page says, with an example the docs tests run", () => {
+    const page = lookupMissesKey.meta.explain;
+    expect(page).not.toContain("as const satisfies Partial<Record<Status, V>>` states it");
+    expect(page).toContain("annotate it with `Partial<Record<Status, V>>`");
+    expect(page).toContain('const labels: Partial<Record<Status, string>> = { idle: "Idle" };');
   });
 });

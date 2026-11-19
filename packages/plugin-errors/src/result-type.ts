@@ -65,3 +65,14 @@ export function shorten(text: string, max: number): string {
 export function example(lines: readonly string[]): string {
   return lines.map((line) => `    ${line}`).join("\n");
 }
+
+/** The first of `names` that the code under `scope` does not use already, so an example never shadows one. */
+export function freeName(
+  scope: ts.Node,
+  sourceFile: ts.SourceFile,
+  names: readonly string[],
+): string {
+  const text = scope.getText(sourceFile);
+  const free = names.find((name) => !new RegExp(`\\b${name}\\b`).test(text));
+  return free ?? `${names[0] ?? "result"}Checked`;
+}

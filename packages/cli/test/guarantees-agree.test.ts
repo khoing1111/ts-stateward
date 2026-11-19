@@ -113,6 +113,8 @@ type CheckFinding = {
   kind: string;
   ruleId: string;
   severity: string;
+  against?: boolean;
+  guarantees?: string[];
   message: string;
   location: Located;
   related: { location: Located }[];
@@ -159,7 +161,11 @@ function within(outer: Located, inner: Located): boolean {
  * names its declaration in a note, or lies in a place the guarantee covers.
  */
 function against(finding: CheckFinding, stated: StatedGuarantee): boolean {
-  if (finding.kind !== "problem" || finding.severity === "info") return false;
+  if (finding.kind !== "problem") return false;
+  // A finding a rule links names the declarations it is against: that is what counts.
+  if (finding.guarantees !== undefined) return finding.guarantees.includes(stated.declaration);
+  // A finding the rule judges a weaker signal (its own info) is no guarantee's: `against` marks the rest.
+  if (finding.severity === "info" && finding.against !== true) return false;
   if (finding.ruleId !== stated.ruleId) return false;
   const declared = stated.location;
   return (

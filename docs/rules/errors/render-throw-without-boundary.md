@@ -34,10 +34,15 @@ warning[errors/render-throw-without-boundary]: `<App>` can throw `NotFoundError`
    |
 19 | createRoot(document.body).render(<App />);
    |                                  ^^^^^^^
-   = fix: wrap it in an error boundary, at this render or nearer to what throws; for example with react-error-boundary:
-         <ErrorBoundary FallbackComponent={ErrorPage}>
-           <App />
-         </ErrorBoundary>
+   = fix: one of
+       - wrap it in react-error-boundary's `ErrorBoundary` (imported as a value), or a class of yours with `getDerivedStateFromError`, not around the whole app:
+             <ErrorBoundary fallback={<p>Something went wrong.</p>}>
+               <UserPage id={location.hash.slice(1)} />
+             </ErrorBoundary>
+       - or if one fallback for the whole app is what you want, wrap it and set the `rootBoundaryCounts` option to `true`:
+             <ErrorBoundary fallback={<p>Something went wrong.</p>}>
+               <App />
+             </ErrorBoundary>
    = note: example.tsx:14: `<UserPage>` is rendered
    = note: example.tsx:5: `UserPage` throws `NotFoundError`
    = docs: stateward explain errors/render-throw-without-boundary
@@ -71,6 +76,8 @@ createRoot(document.body).render(<App />);
 ```
 
 There is no quick fix: where the boundary goes, and what it shows, is your call.
+
+The message offers the ways it can be fixed, with your own element as it is written. When the finding is at the app's own render, it points to the render below it that throws (a boundary around the whole app is not counted, see below), and to `rootBoundaryCounts` for one fallback for the whole app. If a component around it from another package is an error boundary, it shows the `boundaries` option with that package added to the ones already there. Where the project already has an error boundary, it names that one; where it has none, react-error-boundary's `ErrorBoundary` (imported as a value) or a class of yours with `getDerivedStateFromError`.
 
 ## Why it matters
 

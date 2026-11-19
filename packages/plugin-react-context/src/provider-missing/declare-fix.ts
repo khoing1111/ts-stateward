@@ -34,6 +34,26 @@ export function ${HELPER}<T>(): RequiredContext<T> {
 }
 `;
 
+/**
+ * What the fix adds to a guarantees file that exists and has no helper: the same helper, with its
+ * own names for what it imports from React, so it cannot clash with what the file already imports.
+ */
+export const HELPER_TEXT = `import { createContext as createReactContext, type Context as ReactContext } from "react";
+
+/**
+ * A React context that every reader gets from a Provider: stateward proves each component that
+ * reads it is rendered under its Provider, and reports any it cannot prove. Readers need no check
+ * for a missing Provider.
+ */
+export type RequiredContext<T> = ReactContext<T> & { readonly "__guarantee:required-context"?: true };
+
+/** Creates a \`RequiredContext\`: it has no default, since no reader can run without a Provider. */
+export function ${HELPER}<T>(): RequiredContext<T> {
+  // The one cast: the default is never read, because every reader is under a Provider.
+  return createReactContext<T>(undefined as never);
+}
+`;
+
 /** `User | undefined` → `User`: the type argument without its `undefined` and `null` members. */
 function valueType(type: ts.TypeNode): string | undefined {
   const inner = ts.isParenthesizedTypeNode(type) ? type.type : type;
@@ -118,6 +138,9 @@ export function declareFixOf(
   const text = `${HELPER}<${type}>()`;
   const rewrite: Edit = { file, start: call.getStart(), end: call.getEnd(), newText: text };
   const create: Edit = { file: helperFile, start: 0, end: 0, newText: GUARANTEES_TEXT };
+  // Added in front of what the file holds: the file's text is not read here, so its imports are
+  // not merged, and the helper keeps clear of their names.
+  const append: Edit = { file: helperFile, start: 0, end: 0, newText: `${HELPER_TEXT}\n` };
   // As TypeScript's own auto-import writes it, once the file is there; else as this file's
   // relative imports end.
   const known = types.importSpecifierFor({ name: "RequiredContext", file: helperFile }, file);
@@ -128,11 +151,17 @@ export function declareFixOf(
     ]),
   ];
   const imports = specifiers.map((specifier) => importEdit(sourceFile, specifier));
+  const imported = helper === "missing" ? [] : imports.map((added) => [rewrite, added]);
+  const appended = helper === "missing" ? [] : imports.map((added) => [append, rewrite, added]);
+  const created = helper === "exists" ? [] : imports.map((added) => [create, rewrite, added]);
   return {
     call: text,
+    // The likeliest first. A summary is cached while the file may come or go, so with `unknown`
+    // each form is kept and the first that compiles is offered.
     forms: [
-      ...(helper === "missing" ? [] : imports.map((added) => [rewrite, added])),
-      ...(helper === "exists" ? [] : imports.map((added) => [create, rewrite, added])),
+      ...(helper === "unknown" && !types.isOwnFile(helperFile)
+        ? [...created, ...imported, ...appended]
+        : [...imported, ...appended, ...(helper === "exists" ? [] : created)]),
     ],
   };
 }

@@ -103,6 +103,13 @@ export type Read = { context: string; loc: Loc };
 export type HookCall = { id: string; loc: Loc };
 export type SlotPosition = { under: string[]; via: SlotRef[]; loc: Loc };
 
+/**
+ * A slot its component hands to something stateward cannot follow instead of rendering it in JSX:
+ * `children` given to `wrap(children)`. What is passed to that slot renders somewhere unknown.
+ * `sink` is where it goes, as written (`wrap(…)`, `child`), `call` the function when it is a call.
+ */
+export type SlotEscape = { name: string; sink: string; call: string | null; loc: Loc };
+
 export type ComponentSummary = {
   id: string;
   name: string;
@@ -115,6 +122,8 @@ export type ComponentSummary = {
   hooks: HookCall[];
   renders: Render[];
   slots: { name: string; positions: SlotPosition[] }[];
+  /** The slots of this component that escape (`SlotEscape`). */
+  escapes: SlotEscape[];
 };
 
 /**
@@ -191,11 +200,19 @@ export type Summary = {
    * The Providers in this file of contexts stated `SingleProvider` or `Stable`: what `stateward
    * guarantees` lists for those traits (`provider-nested` reads `providers`, never this).
    */
-  statedProviders: { context: string; name: string; loc: Loc }[];
+  statedProviders: {
+    context: string;
+    name: string;
+    loc: Loc;
+    /** For a `Stable` context: the places of its value the proof cannot read, and what they are. */
+    unchecked: { loc: Loc; reason: string }[];
+  }[];
   /** The Providers of contexts stated `SingleProvider` in this file. */
   providers: ProviderSite[];
   /** The contexts stated `SingleProvider` those Providers are of, each once, with their declaration. */
   singles: { id: string; name: string; loc: Loc }[];
+  /** The slots of own components that a tag in this file gives content (JSX, or a function). */
+  given: SlotRef[];
 };
 
 /**
@@ -226,4 +243,12 @@ export type ProviderSite = {
   under: string[];
   via: SlotRef[];
   outer: Loc | null;
+  /**
+   * The callback the element is written in, inside its component (`useMemo` of `useMemo(() =>
+   * <StoreContext.Provider>…)`): where it renders is not followed. Absent when written in the
+   * component's own body.
+   */
+  inside?: string;
+  /** The name a variable keeps the element in (`const inner = <StoreContext.Provider>…`): where it renders is not followed. */
+  kept?: string;
 };

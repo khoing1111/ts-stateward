@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseConfig, type RuleConfig } from "@stateward/core";
+import { parseConfig, type RuleConfig, type RuleSetting } from "@stateward/core";
 import { checkFixture, ruleCode } from "@stateward/core/testing";
 import { records } from "../src/index.js";
 import { fixture } from "./helpers.js";
@@ -85,7 +85,27 @@ describe("records", () => {
     const { findings } = checkFixture(fixture("ambiguous-table/flagged"), [records()]);
     const own = findings.filter((f) => f.ruleId === "records/ambiguous-table");
     expect(own.length).toBeGreaterThan(0);
-    expect(own.every((f) => f.kind === "problem" && f.severity === "error")).toBe(true);
+    // A Map of literal pairs is a question, an info: its `get` already handles a missing key.
+    const severity = (message: string): string => (message.includes("is a Map") ? "info" : "error");
+    expect(own.every((f) => f.kind === "problem" && f.severity === severity(f.message))).toBe(true);
+    expect(own.some((f) => f.message.includes("is a Map"))).toBe(true);
+    expect(own.some((f) => !f.message.includes("is a Map"))).toBe(true);
+  });
+
+  it("raises or silences the question about a Map with the `map` kind of `severities`", () => {
+    const dir = fixture("ambiguous-table/flagged");
+    const maps = (setting: Record<string, RuleSetting>): string[] =>
+      checkFixture(dir, [records()], {
+        "records/ambiguous-table": ["error", { severities: setting }],
+      })
+        .findings.filter((f) => f.ruleId === "records/ambiguous-table")
+        .filter((f) => f.message.includes("is a Map"))
+        .map((f) => (f.kind === "problem" ? f.severity : f.kind));
+    const all = maps({});
+    expect(all.length).toBeGreaterThan(0);
+    expect(new Set(all)).toEqual(new Set(["info"]));
+    expect(new Set(maps({ map: "warning" }))).toEqual(new Set(["warning"]));
+    expect(maps({ map: "off" })).toEqual([]);
   });
 });
 

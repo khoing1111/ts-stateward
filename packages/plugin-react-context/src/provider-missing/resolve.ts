@@ -977,12 +977,37 @@ function createResolver(types: TypeQueries, lazyFunctions: readonly string[] = [
   }
 
   /** The Provider a declaration aliases: `const P = Ctx.Provider` or `const { Provider } = Ctx`. */
+  /** Whether a variable is the target of an assignment anywhere in its file. */
+  function isAssignedAgain(declaration: ts.VariableDeclaration): boolean {
+    if (!ts.isIdentifier(declaration.name)) return true;
+    const symbol = types.symbolAt(declaration.name);
+    if (symbol === undefined) return true;
+    const visit = (node: ts.Node): boolean => {
+      if (
+        ts.isBinaryExpression(node) &&
+        node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+      ) {
+        const target = skipWrappers(node.left);
+        if (ts.isIdentifier(target) && types.symbolAt(target)?.id === symbol.id) return true;
+      }
+      return ts.forEachChild(node, visit) ?? false;
+    };
+    return visit(declaration.getSourceFile());
+  }
+
   function providerAliasContext(declaration: ts.Node): Tag | undefined {
     if (ts.isVariableDeclaration(declaration)) {
       const value = declaration.initializer && skipWrappers(declaration.initializer);
-      return value && ts.isPropertyAccessExpression(value) && value.name.text === "Provider"
-        ? providerTag(value.expression)
-        : undefined;
+      if (!(value && ts.isPropertyAccessExpression(value) && value.name.text === "Provider")) {
+        return undefined;
+      }
+      // `let P = ThemeContext.Provider; P = OtherContext.Provider;`: which Provider renders
+      // depends on what ran, so the tag is not read.
+      if (!isConst(declaration) && isAssignedAgain(declaration)) {
+        return { kind: "computed", candidate: false };
+      }
+      return providerTag(value.expression);
     }
     if (!ts.isBindingElement(declaration)) return undefined;
     const key = declaration.propertyName ?? declaration.name;

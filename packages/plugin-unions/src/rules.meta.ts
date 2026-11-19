@@ -14,6 +14,7 @@ export const RULES = {
       tier: "core",
       group: "cases",
       fixNeedsStrictNulls: true,
+      proves: { flows: { decided: ["open-union"] } },
       options: {
         maxHidden: {
           kind: "number",
@@ -27,7 +28,7 @@ export const RULES = {
           kind: "strings",
           default: [],
           description:
-            "Union type names (globs like *Event) whose switches are not checked: matched against the type of the value tested, or of the object whose tag is tested.",
+            "Union type names (globs like *Event) whose switches are not checked: matched against the type of the value tested, or of the object whose tag is tested. A union stated open (`OpenUnion<T>`) is always checked: no setting silences a stated guarantee.",
         },
         severities: {
           kind: "severities",
@@ -41,6 +42,8 @@ export const RULES = {
             "many-missing":
               "a switch without a default does not list more than maxHidden cases (info unless set here)",
             open: "a switch over an open union (`OpenUnion<T>`) has no default",
+            "open-throws":
+              "the default of a switch over an open union only throws (or calls a function that returns `never` or always throws, or rejects), or only checks the value against `never`, so it handles no value outside the union",
             "enum-value":
               'a case names an enum member by its value (`case "person":`), which TypeScript does not check (info unless set here)',
           },

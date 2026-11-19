@@ -13,6 +13,7 @@ import {
   SYNC_CALLBACKS,
   THROWING_CONSTRUCTORS,
   THROWING_GLOBALS,
+  REJECTING_MEMBERS,
   THROWING_MEMBERS,
   builtinId,
   isNonThrowingReactHook,
@@ -32,6 +33,9 @@ import type {
   Try,
 } from "./summary.js";
 
+/** How many `const` names are followed to the error they hold (`const err = new X()`). */
+const HELD_DEPTH = 3;
+
 /** Why something adds `unknown`, as the hover and the messages show it. */
 export const REASON = {
   noDeclaration: "no declaration",
@@ -42,6 +46,7 @@ export const REASON = {
   madeError: "an error made by a call",
   promise: "a promise that is not followed",
   heldPromise: "promise held in a variable",
+  accessor: "a getter or setter runs here",
 } as const;
 
 /** Why a callback handed to a call of the platform that is not in the tables adds `unknown`. */
@@ -449,7 +454,7 @@ export function summarizeThrows(ctx: FileContext, packages?: PackageResolver): T
       ts.isFunctionDeclaration(declaration) || ts.isMethodDeclaration(declaration)
         ? signaturesOf(declaration)
         : [];
-    const doc = docOf(...(signatures.length > 0 ? signatures : [declaration]));
+    const doc = docOf(declaration, ...(signatures.length > 0 ? signatures : [declaration]));
     if (doc === null) return undefined;
     const span = spanOf(at);
     const leaves: Leaf[] = [
@@ -538,6 +543,12 @@ export function summarizeThrows(ctx: FileContext, packages?: PackageResolver): T
     }
     if (ts.isCallExpression(e)) return call(e, walk, false);
     if (ts.isNewExpression(e)) return construct(e, walk);
+    if (ts.isPropertyAccessExpression(e) && runsAccessor(e)) {
+      // `box.value`, `box.value = 1`: a getter or setter of the project runs here.
+      expression(e.expression, walk);
+      walk.sink.push(unknownLeaf(REASON.accessor, textOf(e, sourceFile), e));
+      return [];
+    }
     if (ts.isConditionalExpression(e)) {
       expression(e.condition, walk);
       const branch = { ...walk, conditional: true };
@@ -548,6 +559,13 @@ export function summarizeThrows(ctx: FileContext, packages?: PackageResolver): T
     });
     return [];
   };
+
+  /**
+   * Whether reading or writing the property may run a getter or setter with a body in the project:
+   * its own, or one a class gives for an interface's member the value may be.
+   */
+  const runsAccessor = (access: ts.PropertyAccessExpression): boolean =>
+    types.readMayRunAccessor(access);
 
   /** What the `const` that `name` refers to holds, when it is one this file summarized. */
   const heldBy = (name: ts.Identifier): readonly Effect[] | undefined => {
@@ -758,6 +776,28 @@ export function summarizeThrows(ctx: FileContext, packages?: PackageResolver): T
     const resolved = resolve(name);
     const args = node.arguments;
 
+    if (
+      resolved?.kind === "platform" &&
+      receiver !== undefined &&
+      (resolved.name === "call" || resolved.name === "apply") &&
+      (resolved.owner === "Function" || resolved.owner === "CallableFunction")
+    ) {
+      // `failB.call(null)`, `failB.apply(null, [])`: the function itself runs.
+      const target = calledName(stripParentheses(receiver));
+      const runs = target === undefined ? undefined : resolve(target);
+      evaluateArguments(node, walk);
+      const shown = textOf(receiver, sourceFile);
+      if (runs?.kind === "function") {
+        if (runs.generator) return [];
+        const at = spanOf(receiver);
+        if (!runs.async)
+          walk.sink.push({ k: "call", id: runs.id, part: "throws", text: shown, at });
+        return [{ k: "call", id: runs.id, part: "rejects", text: shown, at }];
+      }
+      const leaf = unknownLeaf(REASON.dynamic, text, callee);
+      walk.sink.push(leaf);
+      return [leaf];
+    }
     if (resolved?.kind === "platform") {
       const key = resolved.owner === null ? resolved.name : `${resolved.owner}.${resolved.name}`;
       if (resolved.owner === "Promise") {
@@ -825,11 +865,16 @@ export function summarizeThrows(ctx: FileContext, packages?: PackageResolver): T
           node,
         );
       }
+      const rejects = REJECTING_MEMBERS.get(key);
+      if (rejects !== undefined) return classLeaves(rejects, `${text}(…)`, node);
       const throws =
         resolved.owner === null
           ? (THROWING_GLOBALS.get(key) ??
             (key === "Array" && args.length === 1 ? ARRAY_LENGTH : []))
-          : (THROWING_MEMBERS.get(key) ?? []);
+          : // `n.toString()` with no radix cannot throw; with one, it may.
+            key === "Number.toString" && args.length === 0
+            ? []
+            : (THROWING_MEMBERS.get(key) ?? []);
       walk.sink.push(...classLeaves(throws, `${text}(…)`, node));
       return mapping && MAPPING_METHODS.has(key) ? mapped : [];
     }
@@ -975,9 +1020,53 @@ export function summarizeThrows(ctx: FileContext, packages?: PackageResolver): T
       : undefined;
   };
 
+  /** `Object.assign(target, …)`: it returns `target`. */
+  const isObjectAssign = (call: ts.CallExpression): boolean => {
+    const callee = stripParentheses(call.expression);
+    return (
+      ts.isPropertyAccessExpression(callee) &&
+      ts.isIdentifier(callee.expression) &&
+      callee.expression.text === "Object" &&
+      callee.name.text === "assign"
+    );
+  };
+
+  /**
+   * The class of the error a value is, when the code makes it in plain sight: `new X(…)`,
+   * `Object.assign(new X(), …)`, or a `const` holding one (`const err = new X(); throw err`).
+   */
+  const madeClass = (value: ts.Expression, depth: number): string | undefined => {
+    const e = unwrap(value);
+    if (ts.isNewExpression(e)) return classRef(stripParentheses(e.expression));
+    if (ts.isCallExpression(e) && isObjectAssign(e)) {
+      const [target] = e.arguments;
+      return target === undefined ? undefined : madeClass(target, depth);
+    }
+    if (!ts.isIdentifier(e) || depth >= HELD_DEPTH) return undefined;
+    const symbol = types.symbolAt(e);
+    const node = symbol === undefined ? undefined : types.declarationOf(symbol)?.node;
+    if (
+      node === undefined ||
+      !ts.isVariableDeclaration(node) ||
+      node.initializer === undefined ||
+      !ts.isVariableDeclarationList(node.parent) ||
+      (node.parent.flags & ts.NodeFlags.Const) === 0
+    ) {
+      return undefined;
+    }
+    return madeClass(node.initializer, depth + 1);
+  };
+
   /** What `throw <value>` (or `reject(value)`) throws; its own calls go to the sink. */
   const thrown = (value: ts.Expression, walk: Walk): Effect[] => {
     const e = stripParentheses(value);
+    if (ts.isCallExpression(e) && isObjectAssign(e)) {
+      const id = madeClass(e, 0);
+      if (id !== undefined) {
+        evaluateArguments(e, walk);
+        return [{ k: "class", id, text: null, at: spanOf(e) }];
+      }
+    }
     if (ts.isNewExpression(e) || ts.isCallExpression(e)) {
       const id = classRef(stripParentheses(e.expression));
       if (id !== undefined) {
@@ -994,6 +1083,8 @@ export function summarizeThrows(ctx: FileContext, packages?: PackageResolver): T
     if (ts.isIdentifier(e)) {
       const of = caughtVariable(e);
       if (of !== undefined) return [{ k: "rethrow", of, maybe: walk.conditional, at: spanOf(e) }];
+      const id = madeClass(e, 0);
+      if (id !== undefined) return [{ k: "class", id, text: null, at: spanOf(e) }];
     }
     expression(e, walk);
     return [unknownLeaf(REASON.thrownValue, `throw ${textOf(e, sourceFile)}`, e)];
@@ -1308,7 +1399,7 @@ export function summarizeThrows(ctx: FileContext, packages?: PackageResolver): T
 
   // ---- @throws --------------------------------------------------------------------------------
 
-  const docOf = (...nodes: readonly ts.Node[]): Doc | null => {
+  const docOf = (declared: ts.Node, ...nodes: readonly ts.Node[]): Doc | null => {
     const tags = new Set(nodes.flatMap((node) => ts.getJSDocTags(node)));
     const entries: DocEntry[] = [];
     const untyped: Span[] = [];
@@ -1334,7 +1425,11 @@ export function summarizeThrows(ctx: FileContext, packages?: PackageResolver): T
       if (type === undefined) untyped.push(spanOf(tag));
       else add(type);
     }
-    return found ? { entries, untyped } : null;
+    const start =
+      ts.isPropertyDeclaration(declared) || ts.isPropertyAssignment(declared)
+        ? declared.name.getStart()
+        : declared.getStart();
+    return found ? { entries, untyped, declared: start } : null;
   };
 
   // ---- functions ------------------------------------------------------------------------------
@@ -1359,7 +1454,7 @@ export function summarizeThrows(ctx: FileContext, packages?: PackageResolver): T
     const walk: Walk = { scope, sink, conditional: false };
     if (ts.isBlock(body)) statement(body, walk);
     else scope.returns.push(...flowing(body, walk));
-    const doc = name === undefined ? null : docOf(declaration, fn);
+    const doc = name === undefined ? null : docOf(declaration, declaration, fn);
     functions.push({
       id: symbol.id,
       name: symbol.name,
@@ -1386,7 +1481,7 @@ export function summarizeThrows(ctx: FileContext, packages?: PackageResolver): T
     node: ts.FunctionDeclaration | ts.MethodDeclaration,
   ): void => {
     const symbol = types.symbolAt(name);
-    const doc = docOf(...signaturesOf(node));
+    const doc = docOf(node, ...signaturesOf(node));
     if (symbol === undefined || doc === null) return;
     functions.push({
       id: symbol.id,

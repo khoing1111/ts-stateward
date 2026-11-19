@@ -51,7 +51,12 @@ export default defineConfig({
           name: "shared",
           include: ["packages/*/test/**/*.test.ts", "packages/*/test/**/*.test.tsx"],
           exclude: [...EXCLUDED, ...ISOLATED],
-          pool: "threads",
+          // A shared worker keeps what every file it ran left in memory. With Node's default heap
+          // (about 2 GB) a worker thread ran out partway through the suite and exited with code 1,
+          // on a different file each run (2026-11-18, 212 files). Worker processes take a larger
+          // heap through execArgv, which a worker thread cannot, and that works on every OS.
+          pool: "forks",
+          execArgv: ["--max-old-space-size=6144"],
           isolate: false,
         },
       },

@@ -45,21 +45,52 @@ function run(
   return findings.map((finding) => show(finding, dir));
 }
 
-const FIX_MISSING = (context: string): string =>
+/** The hint of a missing Provider: the usual ways, a project Provider component, the stated reading. */
+const FIX_MISSING = (context: string, providers: readonly string[] = [], declare = ""): string =>
   [
     "fix: one of",
-    `- wrap it in \`<${context}.Provider value={…}>\``,
+    ...(providers.length === 0
+      ? []
+      : [
+          `- wrap it in ${providers.map((name) => `\`<${name}>\``).join(" and ")}, which gives \`${context}\` to its children`,
+        ]),
+    `- ${providers.length === 0 ? "wrap" : "or wrap"} it in \`<${context}.Provider>\`, giving its \`value\` prop what the readers get`,
     `- or render it inside a component that provides \`${context}\``,
+    ...(declare === ""
+      ? []
+      : [
+          "- or state it required where it is created, to prove every reader (the helper `requiredContext` is in `guarantees.ts`; the quick fix adds it):",
+          `    ${declare}`,
+        ]),
   ].join("\n");
 const FIX_UNREACHABLE =
   "fix: one of\n- render it from the app\n- or list it in `entries` in the react-context options";
 const UNREACHABLE_PROFILE =
   "info src/Profile.tsx:4: not checked: whether `Profile` is under the Provider of `AuthCtx`: no entry point renders it";
 
+/** The call the fixtures' contexts made with no default are stated required with. */
+const DECLARED: Readonly<Record<string, string>> = {
+  AuthCtx: "requiredContext<User>()",
+  AuthContext: "requiredContext<User>()",
+  ThemeCtx: "requiredContext<Theme>()",
+  ThemeContext: "requiredContext<Theme>()",
+};
+
 function missing(site: string, tag: string, context: string, ...notes: string[]): string[] {
+  const declare = DECLARED[context] ?? "";
+  return missingWith({ providers: [], declare }, site, tag, context, ...notes);
+}
+
+function missingWith(
+  extra: { providers: readonly string[]; declare: string },
+  site: string,
+  tag: string,
+  context: string,
+  ...notes: string[]
+): string[] {
   return [
     `error ${site}: \`<${tag}>\` is rendered without \`${context}.Provider\``,
-    FIX_MISSING(context),
+    FIX_MISSING(context, extra.providers, extra.declare),
     ...notes.map((note) => `note ${note}`),
   ];
 }
@@ -264,7 +295,8 @@ describe("react-context/provider-missing: Providers and slots found through decl
 
   it("places children under the Provider through a variable and a conditional", () => {
     expect(run("children-variable")).toEqual([
-      missing(
+      missingWith(
+        { providers: ["AuthGate"], declare: "requiredContext<User>()" },
         "src/main.tsx:14",
         "Profile",
         "AuthCtx",

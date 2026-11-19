@@ -22,7 +22,9 @@ error[records/lookup-misses-key]: `labels[status]` can be missing, but its type 
   |
 6 |   return labels[status].toUpperCase();
   |          ^^^^^^^^^^^^^^
-  = fix: declare `labels` with `as const satisfies Record<Status, …>`, or type `status` so a missing key is handled
+  = fix: one of
+      - declare `labels` with `as const satisfies Record<Status, string>`, so a missing entry fails to compile
+      - or, if some entries are missing on purpose, type it `Partial<Record<Status, string>>` and read it with `labels[status] ?? …`
   = note: example.ts:1: `labels` is read with `Status` keys, declared here
   = docs: stateward explain records/lookup-misses-key
 ```
@@ -48,7 +50,17 @@ The message names the missing entries (the first 3, then a count). The fix line 
 | one known key (`HttpCode.Ok`) on a table with no fixed keys | real keys for the table, or `?.` or `??` for a missing entry |
 | the table comes from a cast (`(value as Record<string, T>)[key]`) | a type where the value is made, or `??` |
 
-There is no quick fix: the values are the code's own. A read with a fallback (`labels[status] ?? "Unknown"`) is not reported; for a table partial on purpose, `as const satisfies Partial<Record<Status, V>>` states it.
+There is no quick fix: the values are the code's own. A read with a fallback (`labels[status] ?? "Unknown"`) is not reported; for a table partial on purpose, annotate it with `Partial<Record<Status, V>>` (an annotation, so that `labels[status] ?? …` type-checks; `as const satisfies Partial<…>` keeps the literal type, and reading it with a `Status` key then fails to compile):
+
+```ts
+type Status = "idle" | "failed";
+
+const labels: Partial<Record<Status, string>> = { idle: "Idle" };
+
+export function title(status: Status): string {
+  return labels[status] ?? "Unknown";
+}
+```
 
 ## Why it matters
 
@@ -67,7 +79,7 @@ There is no quick fix: the values are the code's own. A read with a fallback (`l
 
 ## Turn it on or off
 
-Turn it off only in code where a missing key is normal and handled in a way the rule cannot see:
+A table that is missing entries on purpose says so in its type: `Partial<Record<Status, V>>`, read as `labels[status] ?? fallback`. Turn the rule off only where a missing key is normal and handled in a way the rule cannot see:
 
 ```ts
 rules: { "records/lookup-misses-key": "off" } // or "warning"

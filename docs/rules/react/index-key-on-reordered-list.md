@@ -23,12 +23,14 @@ export function Todos({ initial }: { initial: Todo[] }) {
 `stateward check` prints:
 
 ```text
-warning[react/index-key-on-reordered-list]: list keyed by index, but `todos` is filtered: a row's state can move to the wrong item
+warning[react/index-key-on-reordered-list]: list keyed by index, but `todos` is filtered: a row that keeps state can move it to another item
  --> example.tsx:9:17
   |
 9 |     <label key={index}>
   |                 ^^^^^
-  = fix: key each row by something the item owns, such as `key={todo.id}`, so its state stays with it
+  = fix: one of
+      - key each row by something the item owns, so its state stays with it: `key={todo.id}`
+      - or, if the position is the row's identity on purpose (a log, a fixed grid), list `todos` under the rule's `ignore` option
   = docs: stateward explain react/index-key-on-reordered-list
 ```
 

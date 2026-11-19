@@ -1,5 +1,5 @@
 import { defineRule, option } from "@stateward/core";
-import { sharedSummary } from "../provider-missing/extract.js";
+import { singleSummary } from "../provider-missing/extract.js";
 import type { EntryPoint } from "../provider-missing/options.js";
 import type { Summary } from "../provider-missing/summary.js";
 import { checkNested } from "./check.js";
@@ -85,7 +85,6 @@ A store, a cache or a session is meant to exist once. A second Provider under th
 ## What it does not catch
 
 - Providers of a context declared outside the checked files, and Providers in tests and stories.
-- A Provider that a class component renders, or that JSX passed to a function renders: those places are not followed.
 
 ## Getting the best from it
 
@@ -99,18 +98,24 @@ It combines with \`RequiredContext\`, side by side: \`const StoreContext: Requir
 
 It follows the render tree from \`createRoot(…).render(…)\` and the \`entries\` option, as \`react-context/provider-missing\` does: \`children\`, render props, components passed as props, and the add-ons' dynamic components and routes. A Provider is reported when another Provider of the same context is around it in the same JSX, or above the component that renders it. The finding is at the render that brings in the second Provider; the notes show the outer one and the inner one. A Provider outside any component (in a plain function) cannot be followed, and is an error, since the context states the trait.
 
+The proof reads every place a Provider can be rendered. It follows a component's \`children\` and the props that hold JSX through the components that render them in JSX; those are the forms it reads, and everything else is "not checked". It does not follow a slot its component hands to a call or stores (\`wrap(children)\`, \`{ child: children }\`), or an element passed to a function or returned by a function that is not a component (\`toast(<Inner/>)\`, \`const wrapInner = (c) => <Inner>{c}</Inner>\`). A second Provider may be there, so each such place is listed as "not checked: \`wrap(children)\` in \`<Wrap>\` cannot be followed" (an info with \`--verbose\`), and the guarantee reads "not checked", not an error: the developer keeps the say. The same for a Provider given to such a slot, written in a callback of its component (\`useMemo(() => <StoreContext.Provider>…)\`), or kept in a variable (\`const inner = <StoreContext.Provider>…</StoreContext.Provider>\`). A slot that is only looked at (\`children ? … : …\`, \`children.length\`) is not a place. A Provider the proof does see under another one is an error.
+
+Every reference to the context is read, or listed as "not checked" at its place in \`stateward guarantees\`: a Provider the walk lists is read, and a reader is not about Providers. Another name for the context (\`const C = StoreContext; <C value={…}>\`), and the context or its Provider passed to a call or kept in a literal, are not checked.
+
 ## Turn it on or off
 
 \`\`\`ts
 rules: { "react-context/provider-nested": "off" }
-rules: { "react-context/provider-nested": ["error", { ignore: ["ThemeContext"] }] } // nested on purpose
 \`\`\`
+
+The rule only reads a context stated \`SingleProvider\`, so a second Provider that is meant is stated by removing \`SingleProvider\` from that context's type, not by silencing the rule: the type then says two Providers are fine. The \`ignore\` option no longer leaves a context out: a guarantee the code states is always checked, whatever the options say.
 `;
 
 const OPTIONS = {
   ignore: option.strings({
     default: [],
-    description: "Contexts (names or globs) whose nested Providers are not reported.",
+    description:
+      "Has no effect: a context stated `SingleProvider` is always checked, and the rule reads no other. Remove `SingleProvider` from its type to allow more than one Provider.",
   }),
   lazyFunctions: option.strings({
     default: [],
@@ -129,14 +134,15 @@ export function createProviderNested(entries: readonly EntryPoint[]) {
       defaultSeverity: "error",
       tier: "core",
       group: "providers",
+      proves: { traits: ["single-provider"], made: ["single-provider"] },
       needsTypes: { library: "React", modules: ["react"] },
       widenedBy: ["react-router", "dynamic-components"],
       options: OPTIONS,
       explain: EXPLAIN,
     },
-    summarize: sharedSummary,
+    summarize: singleSummary,
     check: (summaries, ctx) => {
-      checkNested(summaries, entries, ctx, ctx.options.ignore);
+      checkNested(summaries, entries, ctx);
     },
   });
 }

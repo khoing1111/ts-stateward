@@ -85,16 +85,24 @@ function record(file: string, name: string, type: string, written: string, note:
  * A record some read of which uses a wider key: the open dictionary and its choices lead the hint,
  * and it is the only fix (none for an exported table, which other files read).
  */
-function wider(file: string, name: string, type: string, note: string, exported = false): Shown {
+function wider(
+  file: string,
+  name: string,
+  key: string | undefined,
+  type: string,
+  note: string,
+  exported = false,
+): Shown {
   const { value, kind } = parts(type);
   return {
     ...record(file, name, type, "", note),
     hint: ways(
       `type it \`Partial<Record<${kind}, ${value}>>\`, so each read handles a missing key`,
       "or use a `Map`, whose `get` returns `undefined` for a missing key",
-      "or build it with `Object.create(null)`, so it has no inherited keys such as `toString`",
-      `or check the key with \`isKeyOf(${name}, key)\` before reading`,
-      `or, for fixed keys, look keys up as \`keyof typeof ${name}\`, then remove the type and add \`as const\``,
+      key === undefined
+        ? `or read it only where \`Object.hasOwn\` of \`${name}\` and the key is true (needs the ES2022 \`lib\`)`
+        : `or read it only where \`Object.hasOwn(${name}, ${key})\` is true (needs the ES2022 \`lib\`)`,
+      `or, for fixed keys, remove the type and add \`as const\`, then look keys up as \`keyof typeof ${name}\``,
     ),
     fix: exported ? undefined : open(kind),
   };
@@ -113,12 +121,18 @@ function entries(file: string, name: string, type: string, note: string): Shown 
   };
 }
 
-function map(file: string, name: string, keys: string): Shown {
+function map(file: string, name: string, keys: string, value = "V"): Shown {
+  const union = keys.split(", ").slice(0, 3).join(" | ");
   return {
     file,
     name,
-    message: `\`${name}\` is a Map whose keys are fixed and never change`,
-    hint: "use an object `{ … } satisfies Record<…>`, so a missing key fails to compile",
+    message: `\`${name}\` is a Map of literal pairs that no code changes`,
+    // The Map's own `get` already handles a missing key: both readings are offered, as a question.
+    hint: [
+      "one of",
+      `- if its keys are fixed, write it as an object \`{ … } as const satisfies Record<K, ${value}>\` with \`K\` the union of its keys (\`${union}${keys.split(", ").length > 3 ? " | …" : ""}\`), and type the keys that read it \`K\``,
+      `- or, if its keys come from outside, keep the Map, whose \`get\` returns \`undefined\` for a missing key, and list \`${name}\` under the rule's \`ignore\` option`,
+    ].join("\n"),
     notes: [`keys: ${keys}`],
     fix: undefined,
   };
@@ -130,6 +144,19 @@ const LONG_VALUE = "Record<string, TheValueOfEveryEntryInTheTable>";
 
 describe("records/ambiguous-table: flagged", () => {
   const findings = check(FLAGGED);
+
+  it("never offers `Object.create(null)` for a misspelt key, and asks about a Map instead of calling it wrong", () => {
+    for (const finding of findings) {
+      expect(finding.hint).not.toContain("Object.create");
+      expect(finding.message).not.toContain("keys are fixed and never change");
+    }
+    const maps = findings.filter((finding) => finding.message.includes("is a Map"));
+    expect(maps.length).toBeGreaterThan(0);
+    for (const finding of maps) {
+      expect(finding.hint).toContain("- if its keys are fixed, write it as an object");
+      expect(finding.hint).toContain("- or, if its keys come from outside, keep the Map");
+    }
+  });
 
   it("reports a record or Map built from literal keys that nothing in the project changes", () => {
     expect(shown(findings)).toEqual([
@@ -148,11 +175,11 @@ describe("records/ambiguous-table: flagged", () => {
         '"idle" | "done" | "failed"',
         '"idle", "done", "failed"',
       ),
-      wider("keys-of-itself-and-wide.ts", "stock", NUMBER, '"bolts", "nuts"'),
+      wider("keys-of-itself-and-wide.ts", "stock", "item", NUMBER, '"bolts", "nuts"'),
       entries("keys-of-itself-direct.ts", "heights", NUMBER, '"low", "high"'),
       entries("keys-of-itself-for-of.ts", "scores", NUMBER, '"ann", "bob"'),
       entries("keys-of-itself-map.ts", "widths", NUMBER, '"narrow", "wide"'),
-      wider("keys-of-other.ts", "rates", NUMBER, '"day", "night"'),
+      wider("keys-of-other.ts", "rates", "key", NUMBER, '"day", "night"'),
       record("keys-of-other.ts", "periods", STRING, '"day" | "night"', '"day", "night"'),
       record("keys-read-by-union.ts", "levels", NUMBER, "Level", '"low", "high"'),
       record("let-record.ts", "sizes", NUMBER, '"small" | "large"', '"small", "large"'),
@@ -174,7 +201,7 @@ describe("records/ambiguous-table: flagged", () => {
       {
         ...map("long-names.ts", "aVeryLongMapNameThatKeepsGoingOnAndOn", '"x"'),
         message:
-          "`aVeryLongMapNameThatKeepsGoingOnAndOn` is a Map whose keys are fixed and never change",
+          "`aVeryLongMapNameThatKeepsGoingOnAndOn` is a Map of literal pairs that no code changes",
       },
       {
         ...record(
@@ -200,10 +227,10 @@ describe("records/ambiguous-table: flagged", () => {
       record("readonly-param.ts", "palette", STRING, '"red" | "green"', '"red", "green"'),
       map("readonly-param.ts", "tones", '"dark"'),
       record("reexport.ts", "unitNames", STRING, '"m" | "s"', '"m", "s"'),
-      wider("unknown-key.ts", "prices", NUMBER, '"apple", "pear"'),
-      wider("wide-key.ts", "pageTitles", STRING, '"/", "/tasks"', true),
-      wider("wide-key.ts", "sizeNames", STRING, '"s", "m"', true),
-      wider("wide-key.ts", "roleLabels", STRING, '"admin", "editor"', true),
+      wider("unknown-key.ts", "prices", "fruit", NUMBER, '"apple", "pear"'),
+      wider("wide-key.ts", "pageTitles", "pathname", STRING, '"/", "/tasks"', true),
+      wider("wide-key.ts", "sizeNames", undefined, STRING, '"s", "m"', true),
+      wider("wide-key.ts", "roleLabels", "role", STRING, '"admin", "editor"', true),
     ]);
   });
 

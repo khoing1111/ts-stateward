@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Finding } from "@stateward/core";
-import { checkOnly, fixture, says, shown } from "./helpers.js";
+import { typeErrors } from "@stateward/core/testing";
+import { checkOnly, exampleBlocks, fixture, inCopy, says, shown } from "./helpers.js";
 
 const RULE = "finally-can-throw";
 const FILE = fixture(`${RULE}/flagged/finally.ts`);
@@ -20,34 +21,63 @@ function throws(call: string): string {
   return lost(`\`${call}(…)\` can throw`);
 }
 
-const HINT =
-  "catch it inside the `finally`, or move it out, so the original error is kept:\n    finally {\n      try { cleanup(); } catch (e) { report(e); }\n    }";
+const OUT =
+  "- or, if it should run only when the `try` succeeds, move it out of the `finally`, after the `try` statement";
+const CANNOT =
+  "- or, if it cannot throw here, state it with `// stateward-ignore errors/finally-can-throw: <why>`";
 
-function at(message: string) {
-  return says("finally.ts", message, HINT);
+/** The fix: the developer's own statement wrapped, or words where wrapping would change the code. */
+function hintOf(statement: string | undefined): string {
+  return [
+    "one of",
+    statement === undefined
+      ? "- catch it inside the `finally`, around the call that can throw, so the original error is kept"
+      : [
+          "- catch it inside the `finally`, so the original error is kept",
+          "    finally {",
+          `      try { ${statement} } catch (e) { … }`,
+          "    }",
+        ].join("\n"),
+    OUT,
+    CANNOT,
+  ].join("\n");
+}
+
+const THROW_HINT = [
+  "one of",
+  "- move the `throw` out of the `finally`, after the `try` statement: it then happens only when the `try` succeeds, and the original error is kept",
+  "- or, if the `throw` should replace the original error, state it with `// stateward-ignore errors/finally-can-throw: <why>`",
+].join("\n");
+
+function at(message: string, statement?: string) {
+  return says("finally.ts", message, message === lost() ? THROW_HINT : hintOf(statement));
 }
 
 describe(`errors/${RULE}: a finally that can throw`, () => {
   it("names the built-in, the throw or the same-file function", () => {
     expect(shown(flagged())).toEqual([
+      // `const state = JSON.parse(raw);` declares a name the code after it uses: no example.
       at(throws("JSON.parse")),
-      at(throws("JSON.stringify")),
-      at(throws("new URL")),
-      at(throws("decodeURIComponent")),
-      at(throws("decodeURI")),
-      at(throws("structuredClone")),
-      at(throws("atob")),
+      at(throws("JSON.stringify"), "report(JSON.stringify(value));"),
+      at(throws("new URL"), "report(new URL(raw));"),
+      at(throws("decodeURIComponent"), "report(decodeURIComponent(raw));"),
+      at(throws("decodeURI"), "report(decodeURI(raw));"),
+      at(throws("structuredClone"), "report(structuredClone(value));"),
+      at(throws("atob"), "report(atob(raw));"),
       at(lost()),
-      at(throws("this.close")),
-      at(throws("mustHave")),
-      at(throws("mustBeKnown")),
-      at(throws("guardedThenRethrows")),
-      at(throws("mustSave")),
-      at(throws("JSON.parse")),
-      at(throws("JSON.parse")),
-      at(throws("JSON.parse")),
-      at(lost("`someVeryLongFunctionNameForTheTest(…)` can throw")),
-      at(throws("JSON.parse")),
+      at(throws("this.close"), "this.close();"),
+      at(throws("mustHave"), "report(mustHave(raw));"),
+      at(throws("mustBeKnown"), "report(mustBeKnown(raw));"),
+      at(throws("guardedThenRethrows"), "guardedThenRethrows();"),
+      at(throws("mustSave"), "await mustSave();"),
+      at(throws("JSON.parse"), "JSON.parse(raw);"),
+      at(throws("JSON.parse"), "JSON.parse(raw);"),
+      at(throws("JSON.parse"), "JSON.parse(raw);"),
+      at(
+        lost("`someVeryLongFunctionNameForTheTest(…)` can throw"),
+        "someVeryLongFunctionNameForTheTest();",
+      ),
+      at(throws("JSON.parse"), "JSON.parse(raw);"),
     ]);
   });
 
@@ -97,5 +127,50 @@ describe(`errors/${RULE}: a finally that can throw`, () => {
 describe(`errors/${RULE}: not flagged`, () => {
   it("accepts safe calls, a nested try/catch, functions that are not called and shadowed names", () => {
     expect(shown(checkOnly(fixture(`${RULE}/not-flagged`), RULE))).toEqual([]);
+  });
+});
+
+describe(`errors/${RULE}: the readings are not offered as equal`, () => {
+  it("offers moving the call out of the `finally` only for code that should run when the `try` succeeds", () => {
+    for (const finding of flagged()) {
+      expect(finding.hint).not.toContain("- or move it out of the `finally`");
+      expect(finding.hint).toMatch(/move (?:it|the `throw`) out of the `finally`/);
+    }
+    for (const finding of flagged().filter((one) => one.hint.includes("- or, if it should"))) {
+      expect(finding.hint).toContain(
+        "- or, if it should run only when the `try` succeeds, move it out of the `finally`",
+      );
+    }
+  });
+
+  it("compiles the `try` / `catch` the hint wraps the developer's statement in, and silences the finding", () => {
+    const wrappers = flagged().filter((one) => exampleBlocks(one.hint).length > 0);
+    expect(wrappers.length).toBeGreaterThan(5);
+    for (const finding of wrappers) {
+      const [block = []] = exampleBlocks(finding.hint);
+      const inner = block[1]?.trim() ?? "";
+      const text = readFileSync(finding.location.file, "utf8");
+      // The finding is on the call; the hint quotes the whole statement around it.
+      const statementStart = text.lastIndexOf("\n", finding.location.start) + 1;
+      const statementEnd = text.indexOf("\n", finding.location.end);
+      const written = inner.replace("catch (e) { … }", "catch (e) { void e; }");
+      inCopy(
+        fixture(`${RULE}/flagged`),
+        [
+          {
+            file: finding.location.file,
+            start: statementStart,
+            end: statementEnd,
+            text: `    ${written}`,
+          },
+        ],
+        (copy) => {
+          expect(typeErrors(copy)).toBe("");
+          // Only the first throwing call of a `finally` is reported: wrapping it shows the second.
+          const second = text.slice(statementEnd).startsWith("\n    new URL(raw);") ? 1 : 0;
+          expect(checkOnly(copy, RULE)).toHaveLength(flagged().length - 1 + second);
+        },
+      );
+    }
   });
 });

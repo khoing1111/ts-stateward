@@ -1,0 +1,12 @@
+{
+  "overrides": [
+    {
+      "files": [
+        "src/a.ts"
+      ],
+      "rules": {
+        "ownership/resource-not-released": "off"
+      }
+    }
+  ]
+}

@@ -27,6 +27,7 @@ function run(summaries: Map<string, Summary>, entries: readonly EntryPoint[] = [
   const unknowns: Reported[] = [];
   const ctx: ProjectContext = {
     options: {},
+    read: () => undefined,
     report: (problem) => {
       const notes = (problem.related ?? []).map((note) => `${at(note.location)} ${note.message}`);
       problems.push({
@@ -63,6 +64,7 @@ const empty: Summary = {
   providers: [],
   statedProviders: [],
   singles: [],
+  given: [],
 };
 
 function component(id: string, over: Partial<ComponentSummary> = {}): ComponentSummary {
@@ -76,6 +78,7 @@ function component(id: string, over: Partial<ComponentSummary> = {}): ComponentS
     hooks: [],
     renders: [],
     slots: [],
+    escapes: [],
     ...over,
   };
 }

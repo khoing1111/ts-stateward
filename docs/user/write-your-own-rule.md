@@ -97,6 +97,9 @@ warning[team/max-union-members]: `AppEvent` has 13 members; above 12, switches o
 2 | export type AppEvent =
   |             ^^^^^^^^
   = fix: split it into nested unions by kind
+        type AppEvent = UserEvent | SystemEvent;
+        type UserEvent = Click | Key | …;
+        type SystemEvent = Load | Timeout | …;
   = docs: stateward explain team/max-union-members
 
 1 warning in 5 files (1.2 s). Run `stateward explain <rule>` for details.

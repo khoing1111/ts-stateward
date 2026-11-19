@@ -1,0 +1,12 @@
+{
+  "rules": {
+    "react-context/provider-value-changes-every-render": [
+      "error",
+      {
+        "ignore": [
+          "ActionsContext"
+        ]
+      }
+    ]
+  }
+}

@@ -38,7 +38,7 @@ const STATED = (file: string, context: string): string =>
 
 const missing = (site: string, tag: string, context: string): string[] => [
   `error ${site}: \`<${tag}>\` is rendered without \`${context}.Provider\``,
-  `fix: one of\n- wrap it in \`<${context}.Provider value={…}>\`\n- or render it inside a component that provides \`${context}\``,
+  `fix: one of\n- wrap it in \`<${context}.Provider>\`, giving its \`value\` prop what the readers get\n- or render it inside a component that provides \`${context}\``,
 ];
 
 describe("react-context/provider-missing: a context stated required", () => {

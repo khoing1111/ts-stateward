@@ -6,6 +6,7 @@ import {
   type Loc,
   type Placement,
   type RouteSummary,
+  type SlotEscape,
   type SlotPosition,
   type SlotRef,
   type Summary,
@@ -34,6 +35,13 @@ export type Graph = {
   /** Follows `memo(Inner)` to `Inner`; undefined when the id is no component. */
   resolve(id: string): ComponentSummary | undefined;
   positions(slot: SlotRef): readonly Position[];
+  /**
+   * The ways a slot that something is given to escapes (`wrap(children)`): what is passed to it
+   * renders somewhere the walk does not follow. Empty for a slot nothing is given to.
+   */
+  escapesOf(slot: SlotRef): readonly SlotEscape[];
+  /** The slots of a component that something is given to and that escape. */
+  escapedSlotsOf(component: ComponentSummary): readonly SlotEscape[];
 };
 
 /** The route's `outlet` slot: its own `<Outlet/>`s, and those of the components of its element. */
@@ -104,6 +112,14 @@ export function buildGraph(summaries: ReadonlyMap<string, Summary>): Graph {
       component.slots.map((slot) => [`${component.id}\u0000${slot.name}`, slot.positions] as const),
     ),
   );
+  // The slots something is given to: written as content between tags or as a prop's JSX or function.
+  const given = new Set(
+    all.flatMap((summary) =>
+      summary.given.map((slot) => `${resolve(slot.owner)?.id ?? slot.owner}\u0000${slot.name}`),
+    ),
+  );
+  const escapedOf = (component: ComponentSummary): SlotEscape[] =>
+    component.escapes.filter((one) => given.has(`${component.id}\u0000${one.name}`));
   return {
     contexts: new Map(contextList.map((context) => [context.id, context])),
     contextList,
@@ -115,6 +131,11 @@ export function buildGraph(summaries: ReadonlyMap<string, Summary>): Graph {
     unknowns: all.flatMap((summary) => summary.unknowns),
     resolve,
     positions,
+    escapesOf(slot) {
+      const owner = resolve(slot.owner);
+      return owner === undefined ? [] : escapedOf(owner).filter((one) => one.name === slot.name);
+    },
+    escapedSlotsOf: escapedOf,
   };
 
   function positions(slot: SlotRef): readonly Position[] {
@@ -128,6 +149,22 @@ export function buildGraph(summaries: ReadonlyMap<string, Summary>): Graph {
 
 export function union(a: ContextSet, b: Iterable<string>): Set<string> {
   return new Set([...a, ...b]);
+}
+
+/**
+ * The names of the components that give `context` to their `children`: every place the slot
+ * renders is under its Provider (`function SessionProvider({ children })`). At most `limit`.
+ */
+export function providersOf(graph: Graph, context: string, limit = 3): string[] {
+  const names = graph.componentList.flatMap((component) => {
+    const slot = component.slots.find((one) => one.name === "children");
+    return slot !== undefined &&
+      slot.positions.length > 0 &&
+      slot.positions.every((position) => position.under.includes(context))
+      ? [component.name]
+      : [];
+  });
+  return [...new Set(names)].sort().slice(0, limit);
 }
 
 /** Whether `set` provides `context`: it holds it, or holds every context (`ANY_CONTEXT`). */

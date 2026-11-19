@@ -1,0 +1,20 @@
+{
+  "rules": {
+    "react-context/provider-nested": [
+      "error",
+      {
+        "ignore": [
+          "StoreContext"
+        ]
+      }
+    ]
+  },
+  "reactContext": {
+    "entries": [
+      {
+        "file": "src/App.tsx",
+        "export": "App"
+      }
+    ]
+  }
+}

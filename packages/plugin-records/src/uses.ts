@@ -19,11 +19,16 @@ export type Use =
        * (`?.`, `??`, `||`, a check of the result, or `key in record` first).
        */
       handled?: true;
+      /** For a wide key: the key as written (`status`), when it is short enough to show. */
+      key?: string;
     }
   | { kind: "write" }
   | { kind: "escape" }
   /** A mention that neither reads nor changes it: `typeof labels` in a type. */
   | { kind: "none" };
+
+/** The longest key text a hint shows. */
+const MAX_KEY_TEXT = 40;
 
 const READ_ANY: Use = { kind: "read", keys: [], selfKeyed: false };
 const WRITE: Use = { kind: "write" };
@@ -464,9 +469,12 @@ export function classifyUse(
     // `stateward/imports` unknown says why).
     if (types.isErrorType(parent.argumentExpression)) return ESCAPE;
     const keys = keysRead(parent.argumentExpression, types);
-    return keys === null && handlesMissing(parent, current, parent.argumentExpression, types)
-      ? { kind: "read", keys, selfKeyed: false, handled: true }
-      : { kind: "read", keys, selfKeyed: false };
+    if (keys !== null) return { kind: "read", keys, selfKeyed: false };
+    const written = parent.argumentExpression.getText();
+    const key = written.length <= MAX_KEY_TEXT && !written.includes("\n") ? { key: written } : {};
+    return handlesMissing(parent, current, parent.argumentExpression, types)
+      ? { kind: "read", keys, selfKeyed: false, handled: true, ...key }
+      : { kind: "read", keys, selfKeyed: false, ...key };
   }
   if (ts.isPropertyAccessExpression(parent) && parent.expression === current) {
     return kind === "record" ? asRecordMember(parent) : asMapMember(parent, types);

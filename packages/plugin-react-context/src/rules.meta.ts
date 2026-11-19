@@ -41,6 +41,7 @@ export const RULES = {
       defaultSeverity: "error",
       tier: "core",
       group: "providers",
+      proves: { traits: ["required-context"], made: ["required-context"] },
       needsTypes: { library: "React", modules: ["react"] },
       widenedBy: ["react-router", "dynamic-components"],
       options: {
@@ -68,13 +69,15 @@ export const RULES = {
       defaultSeverity: "error",
       tier: "core",
       group: "providers",
+      proves: { traits: ["single-provider"], made: ["single-provider"] },
       needsTypes: { library: "React", modules: ["react"] },
       widenedBy: ["react-router", "dynamic-components"],
       options: {
         ignore: {
           kind: "strings",
           default: [],
-          description: "Contexts (names or globs) whose nested Providers are not reported.",
+          description:
+            "Has no effect: a context stated `SingleProvider` is always checked, and the rule reads no other. Remove `SingleProvider` from its type to allow more than one Provider.",
         },
         lazyFunctions: {
           kind: "strings",
@@ -95,13 +98,14 @@ export const RULES = {
       defaultSeverity: "error",
       tier: "core",
       group: "providers",
+      proves: { traits: ["stable"], made: ["stable"] },
       needsTypes: { library: "React", modules: ["react"] },
       options: {
         ignore: {
           kind: "strings",
           default: [],
           description:
-            "Contexts (names or globs) whose readers are few or cheap, so a new value each render is fine.",
+            "Contexts (names or globs) whose readers are few or cheap, so a new value each render is fine. Not for a context stated `Stable`: it is always checked.",
         },
       },
     },

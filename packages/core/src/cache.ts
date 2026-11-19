@@ -8,6 +8,7 @@ import type {
   FixVerdict,
   Json,
   Location,
+  ReadOutcome,
   RelatedLocation,
   Rule,
   Severity,
@@ -30,7 +31,7 @@ import type {
  */
 
 /** Bumped whenever what is stored, or how a key is computed, changes. */
-export const CACHE_FORMAT = 7;
+export const CACHE_FORMAT = 10;
 
 /**
  * A project rule's summary of one file: the hash of its JSON text, and either that text or, once a
@@ -45,8 +46,22 @@ export type CachedSummary = {
     | { readonly kind: "parsed"; readonly value: Json };
 };
 
-/** What one rule produced on one file. */
-export type RuleResult = { findings: readonly Finding[]; summary?: CachedSummary };
+/** A rule's mark on a reference of the ledger (`FileContext.read`), as its results keep it. */
+export type RuleMark = {
+  readonly ref: string;
+  readonly trait: string;
+  readonly outcome: ReadOutcome;
+};
+
+/**
+ * What one rule produced on one file: its findings, its summary, and its marks on the references of
+ * the ledger (absent when it made none).
+ */
+export type RuleResult = {
+  findings: readonly Finding[];
+  summary?: CachedSummary;
+  marks?: readonly RuleMark[];
+};
 
 /** Frozen all the way down: a cached summary is shared between runs, so no rule may change it. */
 function deepFreeze(value: Json): Json {
@@ -103,6 +118,8 @@ export type ProjectEntry = {
   /** Hash of the rule's summaries, by file. */
   inputs: string;
   findings: readonly Finding[];
+  /** The rule's marks on the references its file sides handed on (`ProjectContext.read`). */
+  marks?: readonly RuleMark[];
   /**
    * The summaries as the rule received them, handed to hovers (the same object while unchanged);
    * undefined until asked for when the entry came from disk.
@@ -185,12 +202,23 @@ export type CacheSnapshot = {
     {
       fingerprint: string;
       /** `summary` is the summary's JSON text, `hash` that text's hash. */
-      rules: Record<string, { findings: readonly Finding[]; summary?: string; hash?: string }>;
+      rules: Record<
+        string,
+        {
+          findings: readonly Finding[];
+          summary?: string;
+          hash?: string;
+          marks?: readonly RuleMark[];
+        }
+      >;
       /** `FileEntry.reads`. */
       reads: Record<string, string>;
     }
   >;
-  projects: Record<string, { inputs: string; findings: readonly Finding[] }>;
+  projects: Record<
+    string,
+    { inputs: string; findings: readonly Finding[]; marks?: readonly RuleMark[] }
+  >;
   programs: Record<string, ProgramRecord>;
   /** `ResultCache.verdicts`: `null` for a fix that compiles, else TypeScript's message. */
   verdicts?: Record<string, string | null>;
@@ -201,14 +229,13 @@ export function toSnapshot(cache: ResultCache): CacheSnapshot {
   for (const [file, entry] of [...cache.files].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
     const rules: CacheSnapshot["files"][string]["rules"] = {};
     for (const [key, result] of entry.rules) {
-      rules[key] =
-        result.summary === undefined
-          ? { findings: result.findings }
-          : {
-              findings: result.findings,
-              summary: summaryText(result.summary),
-              hash: result.summary.hash,
-            };
+      rules[key] = {
+        findings: result.findings,
+        ...(result.summary === undefined
+          ? {}
+          : { summary: summaryText(result.summary), hash: result.summary.hash }),
+        ...(result.marks === undefined ? {} : { marks: result.marks }),
+      };
     }
     files[file] = {
       fingerprint: entry.fingerprint,
@@ -218,7 +245,11 @@ export function toSnapshot(cache: ResultCache): CacheSnapshot {
   }
   const projects: CacheSnapshot["projects"] = {};
   for (const [key, entry] of cache.projects) {
-    projects[key] = { inputs: entry.inputs, findings: entry.findings };
+    projects[key] = {
+      inputs: entry.inputs,
+      findings: entry.findings,
+      ...(entry.marks === undefined ? {} : { marks: entry.marks }),
+    };
   }
   return {
     format: CACHE_FORMAT,
@@ -342,6 +373,43 @@ function stringRecord(value: unknown): Record<string, string> | undefined {
   return record;
 }
 
+function parseOutcome(value: unknown): ReadOutcome | undefined {
+  if (!isFields(value)) return undefined;
+  const { kind } = value;
+  if (kind === "decided" || kind === "irrelevant") return { kind };
+  if (kind === "handed-on" && typeof value.to === "string") return { kind, to: value.to };
+  if (kind === "unchecked" && typeof value.reason === "string") {
+    return { kind, reason: value.reason };
+  }
+  return undefined;
+}
+
+function parseMark(value: unknown): RuleMark | undefined {
+  if (!isFields(value) || typeof value.ref !== "string" || typeof value.trait !== "string") {
+    return undefined;
+  }
+  const outcome = parseOutcome(value.outcome);
+  return outcome && { ref: value.ref, trait: value.trait, outcome };
+}
+
+/** A result's marks: absent stays absent; anything that is not a list of marks is undefined. */
+function parseMarks(value: unknown): { marks?: readonly RuleMark[] } | undefined {
+  if (value === undefined) return {};
+  const marks = parseList(value, parseMark);
+  return marks && { marks };
+}
+
+/** A JSON list of strings; undefined when it is anything else. */
+function parseStrings(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const found: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") return undefined;
+    found.push(item);
+  }
+  return found;
+}
+
 export function parseFinding(value: unknown): Finding | undefined {
   if (!isFields(value)) return undefined;
   const { kind, ruleId, message, hint } = value;
@@ -355,10 +423,18 @@ export function parseFinding(value: unknown): Finding | undefined {
     return undefined;
   }
   if (kind === "failure") return { kind, ruleId, message, hint, location };
+  const guarantees = parseStrings(value.guarantees);
+  if (value.guarantees !== undefined && guarantees === undefined) return undefined;
   if (kind === "unknown") {
-    return value.listed === true
-      ? { kind, ruleId, message, hint, location, listed: true }
-      : { kind, ruleId, message, hint, location };
+    return {
+      kind,
+      ruleId,
+      message,
+      hint,
+      location,
+      ...(value.listed === true ? { listed: true as const } : {}),
+      ...(guarantees === undefined ? {} : { guarantees }),
+    };
   }
   if (kind !== "problem" || !isSeverity(value.severity)) return undefined;
   const related = parseList(value.related, parseRelated);
@@ -379,6 +455,8 @@ export function parseFinding(value: unknown): Finding | undefined {
     fixes,
     ...(findingKind === undefined ? {} : { findingKind }),
     ...(about === undefined ? {} : { about }),
+    ...(value.against === true ? { against: true as const } : {}),
+    ...(guarantees === undefined ? {} : { guarantees }),
   };
 }
 
@@ -415,10 +493,12 @@ export function parseSnapshot(value: unknown): ResultCache {
       const findings = parseList(result.findings, parseFinding);
       if (findings === undefined) return emptyCache();
       const { summary, hash } = result;
+      const marks = parseMarks(result.marks);
+      if (marks === undefined) return emptyCache();
       if (summary === undefined && hash === undefined) {
-        rules.set(key, { findings });
+        rules.set(key, { findings, ...marks });
       } else if (typeof summary === "string" && typeof hash === "string") {
-        rules.set(key, { findings, summary: summaryFromText(summary, hash) });
+        rules.set(key, { findings, summary: summaryFromText(summary, hash), ...marks });
       } else {
         return emptyCache();
       }
@@ -432,9 +512,10 @@ export function parseSnapshot(value: unknown): ResultCache {
   for (const [key, entry] of Object.entries(projects)) {
     if (!isFields(entry) || typeof entry.inputs !== "string") return emptyCache();
     const findings = parseList(entry.findings, parseFinding);
-    if (findings === undefined) return emptyCache();
+    const marks = parseMarks(entry.marks);
+    if (findings === undefined || marks === undefined) return emptyCache();
     // The summaries are rebuilt from the file entries when the rule runs.
-    cache.projects.set(key, { inputs: entry.inputs, findings });
+    cache.projects.set(key, { inputs: entry.inputs, findings, ...marks });
   }
   return cache;
 }

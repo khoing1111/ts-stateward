@@ -1,6 +1,6 @@
 {
   "name": "@stateward/plugin-async",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "stateward rules for async: an async failure is never lost.",
   "license": "MIT",
   "repository": {

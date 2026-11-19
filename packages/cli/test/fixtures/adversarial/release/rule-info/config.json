@@ -1,0 +1,5 @@
+{
+  "rules": {
+    "ownership/resource-not-released": "info"
+  }
+}

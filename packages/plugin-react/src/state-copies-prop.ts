@@ -15,7 +15,7 @@ import {
   type StateBinding,
 } from "./effects.js";
 import { unwrapped } from "./react.js";
-import { fitted } from "./text.js";
+import { fitted, waysHint, type Way } from "./text.js";
 
 const EXPLAIN = `# react/state-copies-prop
 
@@ -52,7 +52,7 @@ React then creates the editor anew when the \`key\` changes, with the new prop a
 
 ## Why it matters
 
-\`useState(name)\` plus an effect that sets it from \`name\` keeps two copies of one value. They disagree for a render after every change of \`name\` (the effect runs after the screen shows the old copy), and what the user typed into \`draft\` is silently thrown away whenever the parent passes a new \`name\`, even the same text in a new render of a list.
+\`useState(name)\` plus an effect that sets it from \`name\` keeps two copies of one value. They disagree for a render after every change of \`name\` (the effect runs after the screen shows the old copy), and what the user typed into \`draft\` is silently thrown away whenever the parent passes a new \`name\`.
 
 ## What it does not catch
 
@@ -63,7 +63,7 @@ It looks, in one component or hook, for \`useState(prop)\` (also \`useState(prop
 - state copied from a context or from another hook's result;
 - a copy meant to differ from the prop: a debounce or throttle hook (the state is set from the prop inside a timer), or a previous value (the effect compares the copy with the prop, or counts the changes in another state).
 
-A draft the user edits (the setter is also called outside the effect, as above) is reported with only the \`key\` fix, since the state is needed. A copy the component also sets to a fixed value elsewhere (\`setShouldBlock(false)\` when the user proceeds) follows the prop except after that event: the message suggests a value derived from the prop and a state for that event, \`const shouldBlock = isDirty && !<that state>\`. The rule stays on with the React Compiler, which does not change what an effect sets.
+A draft the user edits (the setter is also called outside the effect, as above) is reported with only the \`key\` fix, since the state is needed. A copy the component also sets to a fixed value elsewhere (\`setShouldBlock(false)\` when the user proceeds) follows the prop except after that event: the message suggests a value derived from the prop and a new state that records the event, reset when the prop changes (it keeps the prop it was set for, so the derived value follows the prop again once that changes), a \`key\`, or the \`ignore\` option. The rule stays on with the React Compiler, which does not change what an effect sets.
 
 ## Turn it on or off
 
@@ -228,24 +228,37 @@ function enclosingName(node: ts.Node): string | undefined {
   return undefined;
 }
 
-/**
- * The derived value, with `<that state>` for the state the developer adds for the override: no
- * name is made up for it. `isDirty && !<that state>` for `false`, `isDirty || <that state>` for
- * `true`, `<that state> ? "" : query` otherwise.
- */
-function derivedValue(prop: string, value: ts.Expression, sourceFile: ts.SourceFile): string {
-  const constant = unwrapped(value);
-  if (constant.kind === ts.SyntaxKind.FalseKeyword) return `${prop} && !<that state>`;
-  if (constant.kind === ts.SyntaxKind.TrueKeyword) return `${prop} || <that state>`;
-  return `<that state> ? ${textOf(constant, sourceFile)} : ${prop}`;
-}
-
 /** The name a component is declared under (`NameEditor`), or undefined. */
 function componentName(owner: ts.SignatureDeclaration): string | undefined {
   if (ts.isFunctionDeclaration(owner)) return owner.name?.text;
   const parent = owner.parent;
   if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) return parent.name.text;
   return undefined;
+}
+
+/** Start over with a `key`: the component is created anew when the prop changes. */
+function keyWay(component: string | undefined, named: boolean, key: string, draft: boolean): Way[] {
+  const starts = draft ? "so the draft starts over" : "so it starts over";
+  return [
+    {
+      text: fitted((cut) =>
+        named && component !== undefined
+          ? `drop the effect and render \`<${cut.name(component)} key={…}>\` ${starts} when \`${cut.name(key)}\` changes`
+          : `drop the effect and reset the component with a \`key\` that changes with \`${cut.name(key)}\`, ${starts}`,
+      ),
+    },
+  ];
+}
+
+/** The state is meant to follow the prop this way: the option names it. */
+function ignoreWay(state: string): Way {
+  return {
+    text: fitted(
+      (cut) =>
+        `if the prop is meant to reset \`${cut.name(state)}\` this way, list it under the rule's \`ignore\` option`,
+    ),
+    example: [`{ ignore: [${JSON.stringify(state)}] }`],
+  };
 }
 
 export const stateCopiesProp = defineRule({
@@ -294,7 +307,6 @@ export const stateCopiesProp = defineRule({
           // The state follows the prop except after one event: a value
           // derived from the prop and a state for that event says so, with no effect. That state
           // is the developer's to name; the message names only code that exists.
-          const derived = derivedValue(prop, elsewhere.value, sourceFile);
           const where = enclosingName(elsewhere.call);
           const constant = textOf(elsewhere.value, sourceFile);
           ctx.report({
@@ -302,10 +314,16 @@ export const stateCopiesProp = defineRule({
               (cut) =>
                 `\`${cut.name(state)}\` copies the prop \`${cut.name(prop)}\`, except when set elsewhere, and an effect keeps them in sync`,
             ),
-            hint: fitted(
-              (cut) =>
-                `derive it from \`${cut.name(prop)}\` and whatever sets it to \`${cut.name(constant)}\`${where === undefined ? "" : ` (in \`${cut.name(where)}\`)`}: \`const ${cut.name(state)} = ${cut.name(derived)}\``,
-            ),
+            hint: waysHint([
+              {
+                text: fitted(
+                  (cut) =>
+                    `derive it from \`${cut.name(prop)}\`: add a state that \`${where ?? "the event"}\` sets to the current \`${cut.name(prop)}\` in place of setting \`${cut.name(state)}\` to \`${cut.name(constant)}\`, and use \`${cut.name(constant)}\` only while that state equals \`${cut.name(prop)}\``,
+                ),
+              },
+              ...keyWay(component, named, key, false),
+              ignoreWay(state),
+            ]),
             node: set.call,
             related: [
               {
@@ -324,14 +342,14 @@ export const stateCopiesProp = defineRule({
               ? `effect overwrites the draft \`${cut.name(state)}\` with \`${cut.name(prop)}\` whenever it changes: edits are lost`
               : `\`${cut.name(state)}\` copies the prop \`${cut.name(prop)}\` and an effect keeps them in sync`,
           ),
-          hint: fitted((cut) =>
+          hint: waysHint(
             draft
-              ? named
-                ? `drop the effect and render \`<${cut.name(component)} key={…}>\` so the draft starts over when \`${cut.name(key)}\` changes`
-                : `drop the effect and reset the component with a \`key\` that changes with \`${cut.name(key)}\`, so the draft starts over`
-              : !named
-                ? `use \`${cut.name(prop)}\` directly, or drop the effect and reset the component with a \`key\` that changes with \`${cut.name(key)}\``
-                : `use \`${cut.name(prop)}\` directly, or drop the effect and render \`<${cut.name(component)} key={…}>\` so it starts over when \`${cut.name(key)}\` changes`,
+              ? [...keyWay(component, named, key, true), ignoreWay(state)]
+              : [
+                  { text: fitted((cut) => `use \`${cut.name(prop)}\` directly, with no state`) },
+                  ...keyWay(component, named, key, false),
+                  ignoreWay(state),
+                ],
           ),
           node: set.call,
           related: [

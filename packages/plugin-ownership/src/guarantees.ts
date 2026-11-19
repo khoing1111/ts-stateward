@@ -1,8 +1,18 @@
-import type { CoveredPlace, EditorContributions, Json, StatedGuarantee } from "@stateward/core";
+import { declarationId } from "@stateward/core";
+import type {
+  CoveredPlace,
+  EditorContributions,
+  Json,
+  StatedGuarantee,
+  UncheckedPlace,
+} from "@stateward/core";
 // Types only: the rule's modules (and TypeScript) load when the rule runs, not with the plugin.
 import type { OwnedDeclaration, Place } from "./owned.js";
 import type { OpaqueSummary } from "./brand-built-outside-owner.js";
 import type { ReleaseSummary } from "./resource-not-released.js";
+import type { ParamSummary } from "./summary.js";
+import { changedParams, keyOf } from "./params.js";
+import { KEPT_FIX } from "./text.js";
 
 /** The guarantee `Owned<T>` states (owned.ts `OWNED`). */
 const OWNED = "owned";
@@ -17,10 +27,19 @@ export const RESOURCE_ID = "ownership/resource-not-released";
 type GuaranteeSummary = {
   ownedDeclared: OwnedDeclaration[];
   ownerWrites: (Place & { id: string })[];
-  owned: (Place & { kind: string; id: string | null })[];
+  owned: (Place & {
+    kind: string;
+    id: string | null;
+    name: string;
+    place: string;
+    what: string;
+    callee: string | null;
+    index: number;
+  })[];
+  params: ParamSummary[];
 };
 
-const LISTS = ["ownedDeclared", "ownerWrites", "owned"] as const;
+const LISTS = ["ownedDeclared", "ownerWrites", "owned", "params"] as const;
 
 /** The engine hands summaries over as JSON; ours have these lists, whatever else they hold. */
 function isSummary(value: Json): value is GuaranteeSummary {
@@ -61,7 +80,11 @@ export const guarantees: Guarantees = (input) =>
 function isOpaqueSummary(value: Json): value is OpaqueSummary {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const fields = new Map<string, Json>(Object.entries(value));
-  return Array.isArray(fields.get("opaque")) && Array.isArray(fields.get("builds"));
+  return (
+    Array.isArray(fields.get("opaque")) &&
+    Array.isArray(fields.get("builds")) &&
+    Array.isArray(fields.get("unchecked"))
+  );
 }
 
 /**
@@ -73,10 +96,17 @@ const opaqueGuarantees: Guarantees = (input) => {
   if (summaries === undefined) return [];
   const declared = new Map<string, Place & { name: string }>();
   const builds = new Map<string, Place[]>();
+  const unchecked = new Map<string, UncheckedPlace[]>();
   for (const summary of summaries.values()) {
     if (!isOpaqueSummary(summary)) continue;
     for (const one of summary.opaque) declared.set(`${one.file}#${String(one.start)}`, one);
     for (const one of summary.builds) builds.set(one.id, [...(builds.get(one.id) ?? []), one]);
+    for (const one of summary.unchecked) {
+      unchecked.set(one.id, [
+        ...(unchecked.get(one.id) ?? []),
+        { location: { file: one.file, start: one.start, end: one.end }, reason: one.reason },
+      ]);
+    }
   }
   return [...declared.entries()].map(([id, declaration]): StatedGuarantee => {
     const covered = (builds.get(id) ?? []).sort(comparePlace).map((place): CoveredPlace => ({
@@ -88,11 +118,13 @@ const opaqueGuarantees: Guarantees = (input) => {
       source: { kind: "marker" },
       marker: "Opaque",
       name: declaration.name,
+      declaration: declarationId(declaration),
       location: { file: declaration.file, start: declaration.start, end: declaration.end },
       ruleId: BRAND_BUILT_ID,
       promise: `only \`${baseName(declaration.file)}\` builds a value of it`,
       covers: { one: "builder", many: "builders" },
       covered,
+      unchecked: (unchecked.get(id) ?? []).sort((a, b) => comparePlace(a.location, b.location)),
     };
   });
 };
@@ -113,15 +145,39 @@ const releaseGuarantees: Guarantees = (input) => {
   if (summaries === undefined) return [];
   const markers = new Map<string, Place & { name: string }>();
   const callers = new Map<string, Place[]>();
+  const unchecked = new Map<string, UncheckedPlace[]>();
   const stated: StatedGuarantee[] = [];
   for (const summary of summaries.values()) {
     if (!isReleaseSummary(summary)) continue;
     for (const one of summary.markers) markers.set(`${one.file}#${String(one.start)}`, one);
+    for (const param of summary.params ?? []) {
+      const place = { file: param.file, start: param.start, end: param.end };
+      const fnPlace = { file: param.fn.file, start: param.fn.start, end: param.fn.end };
+      stated.push({
+        guarantee: "release",
+        source: { kind: "marker" },
+        marker: "Release",
+        name: `${param.fn.name}(${param.name})`,
+        declaration: declarationId(place),
+        location: place,
+        ruleId: RESOURCE_ID,
+        promise: "the function releases, hands on or returns the parameter on every way out",
+        covers: { one: "function", many: "functions" },
+        covered: [{ name: baseName(param.fn.file), location: fnPlace }],
+        unchecked: param.unchecked === null ? [] : [{ location: place, reason: param.unchecked }],
+      });
+    }
     for (const call of summary.calls) {
       const place = { file: call.file, start: call.start, end: call.end };
       if (call.declaration !== null) {
         const id = `${call.declaration.file}#${String(call.declaration.start)}`;
         callers.set(id, [...(callers.get(id) ?? []), place]);
+        if (call.unchecked !== null) {
+          unchecked.set(id, [
+            ...(unchecked.get(id) ?? []),
+            { location: place, reason: call.unchecked },
+          ]);
+        }
         continue;
       }
       stated.push({
@@ -129,11 +185,13 @@ const releaseGuarantees: Guarantees = (input) => {
         source: call.source,
         marker: call.source.kind === "type" ? call.source.name : call.callee,
         name: `${call.callee}(…)`,
+        declaration: declarationId(place),
         location: place,
         ruleId: RESOURCE_ID,
         promise: "what it returns is released",
         covers: { one: "call", many: "calls" },
         covered: [{ name: baseName(call.file), location: place }],
+        unchecked: call.unchecked === null ? [] : [{ location: place, reason: call.unchecked }],
       });
     }
   }
@@ -147,11 +205,13 @@ const releaseGuarantees: Guarantees = (input) => {
       source: { kind: "marker" },
       marker: "Release",
       name: declaration.name,
+      declaration: declarationId(declaration),
       location: { file: declaration.file, start: declaration.start, end: declaration.end },
       ruleId: RESOURCE_ID,
       promise: "every caller releases what it returns",
       covers: { one: "caller", many: "callers" },
       covered,
+      unchecked: unchecked.get(id) ?? [],
     });
   }
   return stated;
@@ -163,6 +223,19 @@ const ownedGuarantees: Guarantees = (input) => {
   const declared = new Map<string, OwnedDeclaration>();
   /** By declaration id, then by writing file: its first change there. */
   const writers = new Map<string, Map<string, Place>>();
+  /** By declaration id: the places that use the value in a way the rule cannot follow. */
+  const unchecked = new Map<string, UncheckedPlace[]>();
+  const owners = new Map<string, GuaranteeSummary>();
+  for (const [file, summary] of summaries) {
+    if (isSummary(summary)) owners.set(file, summary);
+  }
+  const { witnesses, keeps } = changedParams(owners);
+  const addUnchecked = (id: string, place: Place, reason: string): void => {
+    unchecked.set(id, [
+      ...(unchecked.get(id) ?? []),
+      { location: { file: place.file, start: place.start, end: place.end }, reason },
+    ]);
+  };
   const addWriter = (id: string, place: Place): void => {
     const byFile = writers.get(id) ?? new Map<string, Place>();
     const known = byFile.get(place.file);
@@ -177,6 +250,26 @@ const ownedGuarantees: Guarantees = (input) => {
     for (const write of summary.ownerWrites) addWriter(write.id, write);
     for (const change of summary.owned) {
       if (change.kind === "write" && change.id !== null) addWriter(change.id, change);
+      if (change.id === null) continue;
+      if (change.kind === "unknown") {
+        addUnchecked(
+          change.id,
+          change,
+          change.what !== ""
+            ? `\`${change.place}\` ${change.what}: ${KEPT_FIX}`
+            : `\`${change.place}\` may change \`${change.name}\`: ${KEPT_FIX}`,
+        );
+      } else if (change.kind === "pass" && change.callee !== null) {
+        const key = keyOf(change.callee, change.index);
+        const kept = keeps.get(key);
+        if (kept !== undefined && !witnesses.has(key)) {
+          addUnchecked(
+            change.id,
+            change,
+            `\`${kept}(…)\` may change \`${change.name}\`: ${KEPT_FIX}`,
+          );
+        }
+      }
     }
   }
   return [...declared.values()].sort(comparePlace).map((declaration): StatedGuarantee => {
@@ -191,11 +284,15 @@ const ownedGuarantees: Guarantees = (input) => {
       source: { kind: "marker" },
       marker: declaration.marker,
       name: declaration.name,
+      declaration: declarationId(declaration),
       location: { file: declaration.file, start: declaration.start, end: declaration.end },
       ruleId: STATE_WRITTEN_ID,
       promise: `only \`${ownerOf(declaration.id)}\` changes it`,
       covers: { one: "writer", many: "writers" },
       covered,
+      unchecked: (unchecked.get(declaration.id) ?? []).sort((a, b) =>
+        comparePlace(a.location, b.location),
+      ),
     };
   });
 };

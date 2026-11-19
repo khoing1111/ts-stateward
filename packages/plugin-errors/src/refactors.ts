@@ -62,11 +62,51 @@ export const codeActions: CodeActions = (input) => {
       location: { file: input.file, start: offset, end: offset },
       newText,
     });
+    const lineStart = sourceFile.text.lastIndexOf("\n", clause.getStart(sourceFile)) + 1;
+    const base = /^[ \t]*/.exec(sourceFile.text.slice(lineStart))?.[0] ?? "";
+    const [first] = clause.block.statements;
+    const firstIndent =
+      first === undefined
+        ? ""
+        : (/^[ \t]*/.exec(
+            sourceFile.text.slice(
+              sourceFile.text.lastIndexOf("\n", first.getStart(sourceFile)) + 1,
+            ),
+          )?.[0] ?? "");
+    const unit =
+      firstIndent.startsWith(base) && firstIndent.length > base.length
+        ? firstIndent.slice(base.length)
+        : "  ";
+    const inner = `${base}${unit}`;
+    const body = sourceFile.text.slice(open + 1, close - 1);
+    // A text that spans lines (a template literal) must keep its own lines: the body is then left
+    // as written, with only the lines around it indented.
+    const spansLines = (node: ts.Node): boolean =>
+      ((ts.isTemplateLiteral(node) || ts.isStringLiteralLike(node)) &&
+        node.getText(sourceFile).includes("\n")) ||
+      ts.forEachChild(node, spansLines) === true;
+    if (spansLines(clause.block)) {
+      actions.push({
+        title: HANDLE_KNOWN_TITLE,
+        edits: [
+          at(open + 1, `\n${inner}if (${tests}) {`),
+          at(close - 1, `${inner}} else {\n${inner}${unit}throw ${variable};\n${inner}}\n${base}`),
+        ],
+      });
+      continue;
+    }
+    const indented = body
+      .split("\n")
+      .map((line) => (line.trim() === "" ? line : `${unit}${line}`))
+      .join("\n")
+      .replace(/\s+$/, "");
     actions.push({
       title: HANDLE_KNOWN_TITLE,
       edits: [
-        at(open + 1, `\nif (${tests}) {`),
-        at(close - 1, `\n} else {\nthrow ${variable};\n}\n`),
+        {
+          location: { file: input.file, start: open + 1, end: close - 1 },
+          newText: `\n${inner}if (${tests}) {${indented}\n${inner}} else {\n${inner}${unit}throw ${variable};\n${inner}}\n${base}`,
+        },
       ],
     });
   }

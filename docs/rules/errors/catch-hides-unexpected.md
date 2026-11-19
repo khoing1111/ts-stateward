@@ -31,10 +31,19 @@ error[errors/catch-hides-unexpected]: `catch` ignores errors other than `NotFoun
    |
 10 |     if (e instanceof NotFoundError) {
    |     ^^
-   = fix: end the chain with a branch that rethrows the rest, so they reach the caller:
-         } else {
-           throw e;
-         }
+   = fix: one of
+       - end the chain with a branch that rethrows the rest, so they reach the caller
+             } else {
+               throw e;
+             }
+       - or handle the rest in an `else`, where the `…` is
+             } else {
+               …
+             }
+       - or, if dropping the rest is on purpose, state it in an `else` with a comment
+             } else {
+               // other errors are dropped because …
+             }
    = docs: stateward explain errors/catch-hides-unexpected
 ```
 
@@ -61,7 +70,7 @@ export async function submit(order: string, show: (text: string) => void): Promi
 }
 ```
 
-A quick fix adds `else { throw e; }` to an `if` chain. For a `switch (true)`, add `default: throw e;` yourself; the message shows it. Wrapping the error with `{ cause: e }`, or any statement after the chain, counts too, since it runs for every error.
+A quick fix adds `else { throw e; }` to an `if` chain. The message offers three readings: rethrow, handle the rest in the last branch, or, when dropping them is on purpose, an `else` (or `default:`) with a comment that says why: a branch with only a comment is taken as the drop, stated, and reported no more. For a `switch (true)`, add `default: throw e;` yourself; the message shows it. Wrapping the error with `{ cause: e }`, or any statement after the chain, counts too, since it runs for every error.
 
 ## Why it matters
 

@@ -95,6 +95,7 @@ export const RULES = {
             "Error classes a `@throws` never needs to list (TypeError, *AbortError), as a catch names them.",
         },
       },
+      proves: { tags: ["throws"] },
     },
   },
   "render-throw-without-boundary": {

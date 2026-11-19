@@ -34,11 +34,17 @@ error[errors/catch-misses-error]: `catch` does not handle `RateLimitError` from 
    |
 12 |   } catch (e) {
    |     ^^^^^
-   = fix: add a branch for it, or rethrow what you do not handle:
-         } else if (e instanceof RateLimitError) {
-           …
-         } else {
-           throw e;
+   = fix: one of
+       - add a branch for it, before the `else` you have
+             } else if (e instanceof RateLimitError) {
+               …
+             } else { // yours, unchanged
+       - or rethrow what you do not handle, in the `else` you have
+             } else {
+               throw e;
+             }
+       - or, if the `else` is right for it, use `e` there: read it, log it or report it
+       - or, if `RateLimitError` needs no branch, list it under the rule's `ignoreClasses` option
    = note: example.ts:11: `send(…)` can throw `RateLimitError`
    = docs: stateward explain errors/catch-misses-error
 ```
@@ -69,7 +75,7 @@ export function post(text: string, remaining: number, show: (text: string) => vo
 }
 ```
 
-The message shows the branch in the shape of your `catch`, and links to the call that throws each class. There is no quick fix.
+The message shows the branch in the shape of your `catch`, and links to the call that throws each class. It keeps an `else` or `default` you already have: the branch goes before it, and the other readings are to make it rethrow, to use the error in it (then the rest is handled), or to list the class under `ignoreClasses`. There is no quick fix.
 
 ## Why it matters
 
@@ -83,14 +89,14 @@ What counts as handled: `e instanceof X` handles `X` and every class that extend
 - errors stateward cannot see: from a package it cannot read, a callback, or a dynamic call. The message notes each call it could not see into, with the reason, and `errors/catch-hides-unexpected` makes sure the rest is not dropped;
 - a class whose `extends` cannot be followed, or a branch whose test is not only `instanceof` (`e instanceof A && e.code === 1`, `isAbort(e)`, `e.name === "AbortError"`): it does not guess what that branch handles;
 - errors from the JavaScript engine itself, such as reading a property of `undefined`;
-- built-ins other than `JSON.parse`, `JSON.stringify`, `new URL`, `decodeURIComponent`, `decodeURI`, `structuredClone`, `atob`, `fetch`, `toFixed`, `Array(n)` and `BigInt`: they are taken not to throw;
+- built-ins other than `JSON.parse`, `JSON.stringify`, `new URL`, `decodeURIComponent`, `decodeURI`, `structuredClone`, `atob`, `fetch`, reading a `Response` body (`json()`, `text()`, …), `toFixed`, `Array(n)` and `BigInt`: they are taken not to throw;
 - promises kept in a `let`, a parameter or a property; getters, setters and generators.
 
 ## Getting the best from it
 
 What the `try` can throw is worked out from `throw new X(…)` in the functions it calls, in any file; their `@throws {X}` tags (also on a function with no body, such as `declare function` or a `.d.ts` of your own); the built-ins above; and the packages it calls (`stateward deps` shows how well each package's errors are known). So throw classes, not strings, and document what a function throws with `@throws`. Declare a package's errors under `facts` in the config: `facts: { "config-lib": { load: { throws: ["ConfigError"] } } }`.
 
-An error boundary's fallback is checked the same way: what the components below the boundary throw while rendering and in their effects, down to the next boundary, is its `try` (the hover on the boundary lists it). A fallback (react-error-boundary's `FallbackComponent`, `fallbackRender` or `onError`, or a boundary class's `getDerivedStateFromError`) that branches with `if` / `else if`, `switch (true)` or `? :` on `error instanceof X` needs a branch for each class the boundary can catch, or a branch for the rest that does more than return `null` or nothing. A fallback that does not branch on `instanceof`, whose tests are not only `instanceof`, or that is passed as anything other than a function written in place or the name of one of your functions, is left alone.
+An error boundary's fallback is checked the same way: what the components below the boundary throw while rendering and in their effects, down to the next boundary, is its `try` (the hover on the boundary lists it). A fallback (react-error-boundary's `FallbackComponent`, `fallbackRender` or `onError`, or a boundary class's `getDerivedStateFromError`) that branches with `if` / `else if`, `switch (true)` or `? :` on `error instanceof X` needs a branch for each class the boundary can catch, or a branch for the rest that does more than return `null` or nothing. The message shows both, written for the kind of fallback (for a boundary class's `getDerivedStateFromError` it describes the branch for the rest, since the state is yours), and the `ignoreClasses` option with the class named. A fallback that does not branch on `instanceof`, whose tests are not only `instanceof`, or that is passed as anything other than a function written in place or the name of one of your functions, is left alone.
 
 ## Turn it on or off
 

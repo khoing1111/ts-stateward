@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { Finding, TextEdit } from "@stateward/core";
 import { checkOnly, fixture, says, shown } from "./helpers.js";
@@ -15,12 +16,38 @@ function swallowed(classes: string): string {
   return `\`catch\` ignores errors other than ${classes}`;
 }
 
+/** The readings of a chain with no branch for the rest: rethrow, handle, drop on purpose. */
 function chainHint(variable: string): string {
-  return `end the chain with a branch that rethrows the rest, so they reach the caller:\n    } else {\n      throw ${variable};\n    }`;
+  return [
+    "one of",
+    "- end the chain with a branch that rethrows the rest, so they reach the caller",
+    "    } else {",
+    `      throw ${variable};`,
+    "    }",
+    "- or handle the rest in an `else`, where the `…` is",
+    "    } else {",
+    "      …",
+    "    }",
+    "- or, if dropping the rest is on purpose, state it in an `else` with a comment",
+    "    } else {",
+    "      // other errors are dropped because …",
+    "    }",
+  ].join("\n");
 }
 
 function switchHint(variable: string): string {
-  return `end the switch with a case that rethrows the rest, so they reach the caller:\n    default:\n      throw ${variable};`;
+  return [
+    "one of",
+    "- end the switch with a case that rethrows the rest, so they reach the caller",
+    "    default:",
+    `      throw ${variable};`,
+    "- or handle the rest in a `default` case, where the `…` is",
+    "    default:",
+    "      …",
+    "- or, if dropping the rest is on purpose, state it in a `default` case",
+    "    default:",
+    "      // other errors are dropped because …",
+  ].join("\n");
 }
 
 /** Applies the edits to the text, last first so earlier offsets stay valid. */
@@ -75,6 +102,21 @@ describe(`errors/${RULE}: a catch that handles some classes and swallows the res
       says("chains.ts", swallowed("`NotFoundError` and `AuthError`"), chainHint("e")),
       says("chains.ts", swallowed("`NotFoundError`"), chainHint("e")),
     ]);
+  });
+
+  it("takes an empty last branch with a comment as the drop, stated; one with nothing in it is reported", () => {
+    const dir = fixture(`${RULE}/stated`);
+    const found = shown(checkOnly(dir, RULE));
+    expect(found).toEqual([
+      says("stated.ts", swallowed("`NotFoundError`"), chainHint("e")),
+      says("stated.ts", swallowed("`NotFoundError`"), switchHint("e")),
+    ]);
+    // Only the two bare branches: `bareElse` and `bareDefault`, by the line of their `if` and `switch`.
+    const text = readFileSync(path.join(dir, "stated.ts"), "utf8");
+    const lines = checkOnly(dir, RULE).map(
+      (finding) => text.slice(0, finding.location.start).split("\n").length,
+    );
+    expect(lines).toEqual([38, 49]);
   });
 
   it("is an error that names the first `if` or the `switch`", () => {

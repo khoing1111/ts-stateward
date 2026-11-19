@@ -3,6 +3,7 @@ import { defineRule, matchesName, option } from "@stateward/core";
 import type { FileContext } from "@stateward/core";
 import { isReactCall, reactName, unwrapped, usesCompiler } from "./react.js";
 import { notStable, whyNote } from "./stable-messages.js";
+import { markContextReferences } from "../context-reads.js";
 import { STABLE, StableScope } from "./stable.js";
 import { fitted, shorten } from "./text.js";
 import { RenderScope, isFunctionLike, renderFunctionOf, type Fresh, type Value } from "./value.js";
@@ -67,7 +68,9 @@ It reads \`<Ctx.Provider value={…}>\`, and \`<Ctx value={…}>\` for a context
 
 ### A context stated \`Stable\`
 
-Some contexts hold a value that never changes, such as a context of actions (\`add\`, \`remove\`) kept apart from the state they change. Add \`Stable\` to the type of such a context, and the rule then proves that its Provider's value never changes: it must be built only from setters, a \`dispatch\`, refs, module constants, state whose setter is never used (\`const [store] = useState(createStore)\`), and \`useMemo\` or \`useCallback\` whose dependencies are all of those. A value built from state that is set, from props, a new literal, and a value the rule cannot follow (a hook of the project) are errors that name the cause.
+Some contexts hold a value that never changes, such as a context of actions (\`add\`, \`remove\`) kept apart from the state they change. Add \`Stable\` to the type of such a context, and the rule then proves that its Provider's value never changes: it must be built only from setters, a \`dispatch\`, refs, module constants, state whose setter is never used (\`const [store] = useState(createStore)\`), and \`useMemo\` or \`useCallback\` whose dependencies are all of those and list everything it reads that can change (state or a prop read in the callback but missing from the list keeps its first value, so it is not proven). A value built from state that is set, from props, the result of a hook of the project, a module \`let\` that its file assigns again, a property of a module \`const\` that its file assigns (\`holder.current = …\`), or a new literal is an error that names the cause. A property of a module holder is read only when every write to it is in sight: a \`readonly\` property, or a property of a \`const\` object written in place in the same file, not exported and used only through its properties; a holder another file declares, a class instance, or a holder used whole (\`const h = holder\`, \`Object.assign(holder, …)\`) is not checked.
+
+The proof lists every value the value is built from and reads each one. It reads the names a \`useMemo\` or \`useCallback\` callback uses, written in place or named (\`useCallback(handler, [])\`, \`useMemo(build, [])\` with a function of the component), through the local helper functions it calls (\`const helper = () => onSave(user)\`), the object literals and nested closures inside them, and the arguments of a call that makes a \`const\` it reads (\`makeHelper(onSave)\`). Each read is a value that never changes (fine); a value that can change and the list names (the value then changes: the error above); or a value that can change and the list leaves out: "\`helper\` reads \`onSave\`, which the \`useCallback\` does not list". A function from another module reads nothing of the component. Every reference to the context is read, or listed as "not checked" at its place: a Provider whose \`value\` the rule reads is read, a reader is not about the value, and another name for the context or its Provider (\`const Prov = Actions.Provider\`), or either passed to a call (\`createElement(Actions.Provider, …)\`), is not checked. The fix line offers a \`useMemo\` only when what the value reads never changes. Everything else is not checked, and \`stateward guarantees\` says so instead of "proven": the result of a function stateward cannot read (\`const actions = makeActions()\`), a dependency list that is not an array written in place, a callback that is not a function written in place or declared in the component, a \`value\` given through a spread of props, and a Provider outside a component.
 
 \`\`\`ts
 // guarantees.ts: add the type if it is not there yet
@@ -360,12 +363,13 @@ export const providerValueChangesEveryRender = defineRule({
     defaultSeverity: "error",
     tier: "core",
     group: "providers",
+    proves: { traits: ["stable"], made: ["stable"] },
     needsTypes: { library: "React", modules: ["react"] },
     options: {
       ignore: option.strings({
         default: [],
         description:
-          "Contexts (names or globs) whose readers are few or cheap, so a new value each render is fine.",
+          "Contexts (names or globs) whose readers are few or cheap, so a new value each render is fine. Not for a context stated `Stable`: it is always checked.",
       }),
     },
     explain: EXPLAIN,
@@ -375,6 +379,8 @@ export const providerValueChangesEveryRender = defineRule({
     const { sourceFile } = ctx;
     const scopes = new Map<ts.Node, RenderScope>();
     const stableScopes = new Map<ts.Node, StableScope>();
+    // The Providers of contexts stated `Stable` whose value this check reads.
+    const values = new Set<ts.Node>();
     const visit = (node: ts.Node): void => {
       if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
         const provided = providedContext(ctx, node.tagName);
@@ -389,22 +395,29 @@ export const providerValueChangesEveryRender = defineRule({
         const init = attribute?.initializer;
         if (
           context !== undefined &&
-          !matchesName(context, ctx.options.ignore) &&
+          // `ignore` leaves a context stated `Stable` alone no more than any setting.
+          (stated || !matchesName(context, ctx.options.ignore)) &&
           init !== undefined &&
           ts.isJsxExpression(init) &&
           init.expression !== undefined
         ) {
           const fn = renderFunctionOf(node);
           if (fn !== undefined && stated) {
+            values.add(node);
             let scope = stableScopes.get(fn);
             if (scope === undefined) {
               scope = new StableScope(ctx.types, fn, compiled);
               stableScopes.set(fn, scope);
             }
-            const why = scope.check(init.expression);
+            const { why } = scope.check(init.expression);
             if (why !== undefined) {
               ctx.report({
                 ...notStable(context, why),
+                // Against the context's declaration, wherever the Provider is (another file, `<S value>`).
+                against:
+                  ctx.types.symbolAt(
+                    ts.isPropertyAccessExpression(provided) ? provided.name : provided,
+                  ) ?? true,
                 node: init.expression,
                 related: [
                   ...(why.node === init.expression
@@ -455,5 +468,6 @@ export const providerValueChangesEveryRender = defineRule({
       ts.forEachChild(node, visit);
     };
     visit(sourceFile);
+    markContextReferences(ctx, STABLE, { values });
   },
 });

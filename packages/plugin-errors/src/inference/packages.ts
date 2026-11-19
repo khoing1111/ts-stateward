@@ -495,6 +495,11 @@ function summaryOf(state: Opened, file: string): ThrowsSummary | undefined {
     addons: [],
     facts: {},
     shippedFacts: {},
+    // A package's code has no stated declarations of the project: nothing to mark.
+    ledger: [],
+    read() {
+      // Nothing is listed, so nothing is marked.
+    },
     report() {
       // A package's source is read for facts, never reported on.
     },

@@ -5,6 +5,8 @@ export { defaults, defineConfig, parseConfig } from "./config.js";
 export { matchesFile, matchesName, option } from "./options.js";
 export type { ConfigOptionsOf, GroupConfigsOf, RuleConfigsOf } from "./options.js";
 export { defineRule, definePlugin } from "./define.js";
+// The id of a stated declaration, which `StatedGuarantee.declaration` and `Finding.guarantees` name.
+export { declarationId } from "./stated.js";
 export { lazyRule, moduleLoader } from "./lazy.js";
 export type { ModuleLoader } from "./lazy.js";
 // Running a check from code: what the testing helper (`@stateward/core/testing`) is built on.
@@ -24,6 +26,8 @@ export {
 } from "./release.js";
 // Facts about packages: the config's and the shipped lines, and the promises they say never reject.
 export { neverRejectsFactOf } from "./package-facts.js";
+// The platform calls that do not throw: the closed list the proofs share.
+export { isSafePlatformCall, iteratesPlainly } from "./safe-calls.js";
 export type { FactContext, PackageFact } from "./package-facts.js";
 export type { ReleaseCandidate, ReleaseOptions, ReleaseTrait, ReleaseWay } from "./release.js";
 // What a pack learns about a library's code, cached outside the project.
@@ -59,16 +63,24 @@ export type {
   FixReview,
   FixSetReview,
   FixVerdict,
+  FlowKind,
+  FlowVia,
   RejectedFix,
   GroupIdOf,
   HiddenFindings,
   IgnoreOptions,
   IgnoredFinding,
   Json,
+  Ledger,
+  LedgerMark,
+  LedgerRef,
   Literal,
   NarrowedMembers,
   SignalParameter,
+  StatedDeclaration,
   StatedGuarantee,
+  StatedReference,
+  UncheckedPlace,
   TraitSource,
   ReleaseFact,
   NoOptions,
@@ -94,6 +106,8 @@ export type {
   ProjectContext,
   ProjectRule,
   RelatedLocation,
+  ReadOutcome,
+  ReferenceForm,
   ReportProblem,
   LazyRule,
   PluginRule,
@@ -103,6 +117,7 @@ export type {
   RuleIdOf,
   RuleInfo,
   RuleMeta,
+  RuleProves,
   RuleSelection,
   RuleSetting,
   RuleTier,

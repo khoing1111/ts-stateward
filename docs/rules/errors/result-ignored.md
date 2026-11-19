@@ -22,9 +22,12 @@ error[errors/result-ignored]: the `Result` of `saveUser(…)` is dropped: its er
   |
 6 |   await saveUser(name);
   |   ^^^^^^^^^^^^^^^^^^^^^
-  = fix: check it, or pass it on:
-        const saved = await saveUser(name);
-        if (!saved.ok) return saved;
+  = fix: one of
+      - check it, and handle its failure (report it, recover, or pass it on from a function that returns a Result)
+            const saved = await saveUser(name);
+            if (!saved.ok) { … }
+      - or, if dropping it is on purpose, write `void` before the call and set the rule's `allowVoid` option to `true`
+      - or, if `saveUser` may always be dropped, list it under the rule's `ignore` option
   = docs: stateward explain errors/result-ignored
 ```
 
@@ -42,7 +45,7 @@ export async function rename(name: string): Promise<Result<void>> {
 }
 ```
 
-The message shows how, with your names and your Result's shape. There is no quick fix.
+The message shows how, with your names and your Result's shape: the check, and `return` of it only where the function returns that Result. If the drop is on purpose, it says so in the rule's options: `allowVoid` for `void save()`, `ignore` for a function that may always be dropped. There is no quick fix.
 
 ## Why it matters
 

@@ -25,11 +25,14 @@ warning[errors/result-unchecked]: code after the `if` runs even when `saveSettin
   |
 8 |   if (!result.ok) toast("Could not save");
   |       ^^^^^^^^^^
-  = fix: end the branch that handles the failure with `return` (or `throw`):
-        if (!result.ok) {
-          // … what it shows now
-          return;
-        }
+  = fix: one of
+      - end the branch that handles the failure with `return`
+            if (!result.ok) {
+              // … what it shows now
+              return;
+            }
+      - or, if the lines after the `if` should run either way, say so with an `else` for the success path
+            if (!result.ok) { … } else { … }
   = docs: stateward explain errors/result-unchecked
 ```
 
@@ -51,7 +54,9 @@ export async function submit(values: string): Promise<void> {
 }
 ```
 
-For an RTK Query trigger, add `.unwrap()` so a failure throws: `await deletePlan(id).unwrap()`. Where the result is dropped, a quick fix adds it.
+For an RTK Query trigger, add `.unwrap()` so a failure throws: `await deletePlan(id).unwrap()`. Where the result is dropped, a quick fix adds it; outside a `try` with a `catch` the thrown failure needs one around it, or a caller that catches. The message names three readings: the `.unwrap()`, a check (`if ("error" in result) throw result.error;` inside a `try`, so the `catch` and its rollback run; a stop outside one), and an `else` for the success path when the lines after the call should run either way.
+
+Where the check is there and the code goes on after it, the message offers two readings: end the branch that handles the failure (a `return` in a function that returns nothing, a `throw` of the error inside a `try` with a `catch` so its rollback runs, and in words where the function returns a value), or an `else` for the success path when the lines after the `if` should run either way. Where only `data` is taken out of the result, there is nothing to check: the message says to keep the whole result, check it, then take `data` out of it.
 
 ## Why it matters
 

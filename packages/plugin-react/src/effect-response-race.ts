@@ -17,11 +17,16 @@ import {
   guardedByStaleFlag,
   loadersIn,
   proveAborted,
+  ignoreAbortLine,
+  rejectionHandlerOf,
+  withSignalText,
   type Loader,
+  type RejectionHandler,
   type Verdict,
 } from "./latest-wins.js";
+import type { LatestWinsSummary } from "./latest-wins-guarantee.js";
 import { calleeName, reactName, unwrapped } from "./react.js";
-import { fitted, shorten } from "./text.js";
+import { fitted } from "./text.js";
 import { bindingPath, isFunctionLike, RenderScope } from "./value.js";
 
 const EXPLAIN = `# react/effect-response-race
@@ -60,7 +65,9 @@ export function Profile({ userId }: { userId: string }) {
 }
 \`\`\`
 
-A flag that the cleanup sets, checked before each write, is proven too (the React docs' pattern): \`let ignore = false;\`, \`if (!ignore) setName(…)\`, \`return () => { ignore = true; };\`. It drops the late answer but lets the request run to the end.
+The abort rejects the request, so a \`catch\` of it runs on every change and on unmount: it ignores the abort first with \`if (e instanceof DOMException && e.name === "AbortError") return;\` (the quick fix writes that line when the \`catch\` is in the effect and its function returns nothing).
+
+A flag that the cleanup sets, checked before each write, is proven too (the React docs' pattern): \`let ignore = false;\`, \`if (!ignore) setName(…)\`, \`return () => { ignore = true; };\`. It drops the late answer but lets the request run to the end. Only a check after the last \`await\` before the write counts: \`if (ignore) return;\` before \`await load()\` runs when the request starts, not when it answers.
 
 ## Why it matters
 
@@ -68,7 +75,7 @@ The effect starts a request every time \`userId\` changes, and nothing stops the
 
 ## What it does not catch
 
-A function whose parameters take an \`AbortSignal\`, directly or as \`signal\` in an options object (\`fetch(url, { signal })\`, axios's \`signal\`, your own \`fetchUser(id, signal)\`), says it can be cancelled. For every call to one in an effect whose answer sets state (after an \`await\`, in a \`.then\`, or through a function of the component that sets state), the rule proves that the call gets the signal of an \`AbortController\` the effect creates and aborts in its cleanup, or that every write checks a flag the cleanup sets. What it cannot prove is an error that names the missing step. A signal received by a function written in the effect (\`async function load(signal)\`) counts when every call of it passes the effect's signal. It is silent on:
+A function whose parameters take an \`AbortSignal\`, directly or as \`signal\` in an options object (\`fetch(url, { signal })\`, axios's \`signal\`, your own \`fetchUser(id, signal)\`), says it can be cancelled. For every call to one in an effect whose answer sets state (after an \`await\`, in a \`.then\`, or through a function of the component that sets state), the rule proves that the call gets the signal of an \`AbortController\` the effect creates and aborts in its cleanup on every path (an abort under an \`if\` is not proven), or that every write checks a flag the cleanup sets. A loader of the project is listed by \`stateward guarantees\` ("latest wins"), and each finding about a call to it stands against it. What it cannot prove is an error that names the missing step. A signal received by a function written in the effect (\`async function load(signal)\`) counts when every call of it passes the effect's signal. It is silent on:
 
 - an effect that runs once (an empty dependency list, or dependencies that keep their identity): no newer request can overtake it;
 - the calls of TanStack Query, SWR and RTK Query, which manage their own cancellation;
@@ -422,6 +429,8 @@ function proofMessage(verdict: Verdict, call: string, input: string | undefined)
         return `\`${cut.name(call)}\` takes an AbortSignal the effect never passes: ${late}`;
       case "abort":
         return `effect never aborts \`${cut.name(verdict.name)}\` in its cleanup: ${late}`;
+      case "conditional":
+        return `effect aborts \`${cut.name(verdict.name)}\` only on some paths of its cleanup: ${late}`;
       case "foreign":
         return `\`${cut.name(call)}\` gets a signal the effect does not abort: ${late}`;
       case "unreadable":
@@ -436,40 +445,133 @@ function proofMessage(verdict: Verdict, call: string, input: string | undefined)
   });
 }
 
-/** The call with the signal where its callee takes it: `fetchUser(…, { signal: controller.signal })`. */
-function withSignal(loader: Loader, sourceFile: ts.SourceFile): string {
-  const callee = loader.call.expression.getText(sourceFile).replace(/\s+/g, "");
-  const signal =
-    loader.at.property === undefined ? "controller.signal" : "{ signal: controller.signal }";
-  return `${shorten(callee, 40)}(${loader.at.index === 0 ? "" : "…, "}${signal})`;
+/**
+ * The call written with the signal, as the quick fix writes it (`fetchUser(userId, controller.signal)`);
+ * undefined when it does not fit on a line of a hint, or the signal cannot be added to it.
+ */
+function withSignal(loader: Loader, sourceFile: ts.SourceFile): string | undefined {
+  const written = withSignalText(sourceFile, loader.call, loader.at, "controller");
+  return written === undefined || written.length > MAX_EXAMPLE ? undefined : written;
 }
 
-function proofHint(verdict: Verdict, call: string, passed: string): string {
+/** An example line of a hint is at most this long. */
+const MAX_EXAMPLE = 96;
+
+/** Where the signal goes, in words, for a call too long to show. */
+function signalPlace(loader: Loader): string {
+  return loader.at.property === undefined
+    ? `as argument ${String(loader.at.index + 1)}`
+    : `as the \`signal\` option, argument ${String(loader.at.index + 1)}`;
+}
+
+/** What to do with a `catch` the abort now reaches: the line when it fits that function, else words. */
+function catchLines(handler: RejectionHandler | undefined): string[] {
+  if (handler === undefined) return [];
+  if (handler.kind === "block" && handler.voidReturn) {
+    return [
+      "the abort rejects the request, so ignore it in the `catch`, or it shows an error on every change:",
+      `    ${ignoreAbortLine(handler.param)}`,
+    ];
+  }
+  return [
+    "the abort rejects the request: make the `catch` ignore an `AbortError` (a `DOMException` named `AbortError`), or it shows an error on every change",
+  ];
+}
+
+function proofHint(
+  verdict: Verdict,
+  call: string,
+  passed: string | undefined,
+  place: string,
+  handler: RejectionHandler | undefined,
+): string {
   switch (verdict.kind) {
     case "abort":
-      return fitted(
-        (cut) =>
-          `abort it when the effect is cleaned up: \`return () => ${cut.name(verdict.name)}.abort();\``,
-      );
+    case "conditional":
+      return [
+        fitted(
+          (cut) =>
+            `abort it when the effect is cleaned up${verdict.kind === "conditional" ? ", on every path" : ""}: \`return () => ${cut.name(verdict.name)}.abort();\``,
+        ),
+        ...catchLines(handler),
+      ].join("\n");
     case "unreadable":
       return "return the cleanup as a function written in the effect, so it can be checked: `return () => controller.abort();`";
     case "pass":
     case "foreign":
     case "proven":
       return [
-        fitted(
-          (cut) =>
-            `create a controller in the effect, pass its signal to \`${cut.name(call)}\`, and abort it in the cleanup:`,
+        fitted((cut) =>
+          passed === undefined
+            ? `create a controller in the effect, pass \`controller.signal\` to \`${cut.name(call)}\` ${place}, and abort it in the cleanup:`
+            : `create a controller in the effect, pass its signal to \`${cut.name(call)}\`, and abort it in the cleanup:`,
         ),
         "    const controller = new AbortController();",
-        `    ${passed}`,
+        ...(passed === undefined ? [] : [`    ${passed}`]),
         "    return () => controller.abort();",
+        ...catchLines(handler),
       ].join("\n");
     default: {
       const unreachable: never = verdict;
       return unreachable;
     }
   }
+}
+
+/**
+ * The loader's declaration when it is a function of the project: the type of its parameter states
+ * that a late answer can be dropped, so its findings stand against it ("latest wins").
+ */
+function loaderDeclaration(types: TypeQueries, call: ts.CallExpression): ts.Node | undefined {
+  const callee = unwrapped(call.expression);
+  const name = ts.isPropertyAccessExpression(callee) ? callee.name : callee;
+  const symbol = ts.isIdentifier(name) ? types.symbolAt(name) : undefined;
+  const declared = symbol === undefined ? undefined : types.declarationOf(symbol);
+  return declared !== undefined && types.isOwnFile(declared.file) ? declared.node : undefined;
+}
+
+/** The name a loader's declaration is listed under: its own name, else the call's. */
+function loaderName(
+  declaration: ts.Node,
+  call: ts.CallExpression,
+  sourceFile: ts.SourceFile,
+): string {
+  const named =
+    (ts.isFunctionDeclaration(declaration) ||
+      ts.isVariableDeclaration(declaration) ||
+      ts.isMethodDeclaration(declaration) ||
+      ts.isPropertyDeclaration(declaration) ||
+      ts.isPropertyAssignment(declaration)) &&
+    declaration.name !== undefined &&
+    ts.isIdentifier(declaration.name)
+      ? declaration.name.text
+      : undefined;
+  return named ?? call.expression.getText(sourceFile).replace(/\s+/g, "");
+}
+
+function placeOf(node: ts.Node): { file: string; start: number; end: number } {
+  return { file: node.getSourceFile().fileName, start: node.getStart(), end: node.getEnd() };
+}
+
+/** Every call in an effect to a loader of the project that takes an `AbortSignal`. */
+function latestWinsSummary(
+  types: TypeQueries,
+  sourceFile: ts.SourceFile,
+): LatestWinsSummary | undefined {
+  const calls: LatestWinsSummary["calls"] = [];
+  for (const effect of effectsIn(types, sourceFile)) {
+    const cleanups = cleanupsOf(types, effect);
+    for (const loader of loadersIn(types, effect, stateWrites(types, effect), cleanups)) {
+      const declaration = loaderDeclaration(types, loader.call);
+      if (declaration === undefined) continue;
+      calls.push({
+        name: loaderName(declaration, loader.call, sourceFile),
+        declaration: placeOf(declaration),
+        call: placeOf(loader.call),
+      });
+    }
+  }
+  return calls.length === 0 ? undefined : { calls };
 }
 
 function fixTitle(call: string): string {
@@ -502,6 +604,9 @@ export const effectResponseRace = defineRule({
     },
     sharedOptions: { stableHooks: "dependency-changes-every-render" },
     explain: EXPLAIN,
+  },
+  summarize(ctx) {
+    return latestWinsSummary(ctx.types, ctx.sourceFile);
   },
   check(ctx) {
     const { sourceFile, types } = ctx;
@@ -544,15 +649,23 @@ export const effectResponseRace = defineRule({
         const call = callText(loader.call, sourceFile);
         const input = changingInput(effect, loader.call, sourceFile, stable);
         const own = verdict.kind === "pass" || verdict.kind === "abort";
+        const against = loaderDeclaration(types, loader.call);
         ctx.report({
           message: proofMessage(verdict, call, input),
-          hint: proofHint(verdict, call, withSignal(loader, sourceFile)),
+          hint: proofHint(
+            verdict,
+            call,
+            withSignal(loader, sourceFile),
+            signalPlace(loader),
+            rejectionHandlerOf(sourceFile, loader.call),
+          ),
           node: loader.call,
           related: loader.writes
             .filter((write) => write !== loader.call)
             .slice(0, 3)
             .map((write) => ({ node: write, message: "state is set from the answer" })),
           ...(fix === undefined || !own ? {} : { fixes: [{ ...fix, title: fixTitle(call) }] }),
+          ...(against === undefined ? {} : { against }),
         });
       }
       if (!guessing || effect.deps === "unreadable") continue;
@@ -588,6 +701,20 @@ export const effectResponseRace = defineRule({
         });
         continue;
       }
+      // The write as the developer wrote it, behind the check, when it is a statement of its own.
+      const written =
+        ts.isCallExpression(late.node) &&
+        ts.isExpressionStatement(late.node.parent) &&
+        !late.node.getText(sourceFile).includes("\n") &&
+        // `if (!ignore) set(await load())` checks the flag before the answer arrives.
+        !late.node.getText(sourceFile).includes("await") &&
+        late.node.getText(sourceFile).length <= MAX_EXAMPLE
+          ? late.node.getText(sourceFile)
+          : undefined;
+      const later = (cut: { name: (text: string) => string }): string =>
+        written === undefined
+          ? ` (check \`ignore\` before \`${cut.name(late.setter)}\` once it answers)`
+          : "";
       ctx.report({
         message: fitted(
           (cut) =>
@@ -596,11 +723,11 @@ export const effectResponseRace = defineRule({
         hint: [
           fitted((cut) =>
             dataHook === undefined
-              ? "ignore a response that arrives after the effect is cleaned up:"
-              : `load it with \`${dataHook.hook}\` from ${cut.name(dataHook.pkg)}, which drops late responses, or ignore them:`,
+              ? `ignore a response that arrives after the effect is cleaned up${later(cut)}:`
+              : `load it with \`${dataHook.hook}\` from ${cut.name(dataHook.pkg)}, which drops late responses, or ignore them${later(cut)}:`,
           ),
           "    let ignore = false;",
-          `    … if (!ignore) ${late.setter}(…);`,
+          ...(written === undefined ? [] : [`    if (!ignore) ${written};`]),
           "    return () => { ignore = true; };",
         ].join("\n"),
         node: late.node,

@@ -1,11 +1,16 @@
 import path from "node:path";
 import ts from "@stateward/core/typescript";
 import type { FileContext, TypeQueries } from "@stateward/core";
+import { markContextReferences } from "../context-reads.js";
 import { declareFixOf, removalOf } from "./declare-fix.js";
 import { fateOf, isValueWrapper, type FateEnv } from "./fate.js";
 import { placementOf } from "./placement.js";
+import { usesCompiler } from "../provider-value/react.js";
+import { uncheckedAt } from "../provider-value/stable.js";
 import {
   REQUIRED_CONTEXT,
+  SINGLE_PROVIDER,
+  STABLE_CONTEXT,
   createResolver,
   type Resolver,
   type StatedRef,
@@ -125,6 +130,13 @@ function exportNamesOf(file: ts.SourceFile, ctx: FileContext): Map<string, strin
 /** A marker's type text longer than this is listed by its guarantee's name instead. */
 const MARKER_TEXT_MAX = 60;
 
+/** The types the traits are stated by, for a marker too long to show as written. */
+const TRAIT_NAMES: Readonly<Record<string, string>> = {
+  [REQUIRED_CONTEXT]: "RequiredContext",
+  [SINGLE_PROVIDER]: "SingleProvider",
+  [STABLE_CONTEXT]: "Stable",
+};
+
 export function summarizeFile(
   ctx: FileContext<{ readonly lazyFunctions: readonly string[] }>,
 ): Summary | undefined {
@@ -154,6 +166,7 @@ export function summarizeFile(
     providers: [],
     statedProviders: [],
     singles: [],
+    given: [],
   };
   const hookSummaries: HookSummary[] = [];
   const scopes = new Map<ts.Node, Scope>();
@@ -179,6 +192,7 @@ export function summarizeFile(
       hooks: [],
       renders: [],
       slots: [],
+      escapes: [],
     };
     const fn = anchor !== undefined && isFunctionLike(anchor) ? anchor : undefined;
     const scope: Scope = { kind, fn, anchor, component, slots: new Map() };
@@ -405,6 +419,11 @@ export function summarizeFile(
             renderTarget(element, loc, name, target.id, target.origin);
         return;
       case "component":
+        for (const slot of slotsGiven(element)) {
+          if (!summary.given.some((one) => one.owner === tag.id && one.name === slot)) {
+            summary.given.push({ owner: tag.id, name: slot });
+          }
+        }
         renderTarget(element, loc, name, tag.id);
         return;
     }
@@ -503,6 +522,15 @@ export function summarizeFile(
       for (const site of fate.sites) addPosition(scope, name, site, site);
     } else if (isRenderPosition(node, resolver)) {
       addPosition(scope, name, node, node);
+    } else if (!fate.inspected && !isDeclarationName(node)) {
+      // Handed to something that is not followed (`wrap(children)`): what is given to the slot
+      // renders somewhere unknown.
+      scope.component.escapes.push({
+        name,
+        sink: fate.call === undefined ? fate.detail : `${fate.call}(…)`,
+        call: fate.call ?? null,
+        loc: locOf(node),
+      });
     }
   }
 
@@ -522,6 +550,8 @@ export function summarizeFile(
           : "";
     const stop = site.entryRoot ?? site.scope?.anchor ?? sourceFile;
     const at = placementAt(element, site);
+    const inside = callbackAround(element, stop, site.scope?.fn);
+    const kept = keptIn(element);
     summary.providers.push({
       owner,
       context,
@@ -531,8 +561,64 @@ export function summarizeFile(
       under: at.under,
       via: at.via,
       outer: enclosingProvider(element, context, stop, site.scope?.fn),
+      ...(inside === undefined ? {} : { inside }),
+      ...(kept === undefined ? {} : { kept }),
     });
     if (!summary.singles.some((known) => known.id === single.id)) summary.singles.push(single);
+  }
+
+  /**
+   * The variable that keeps the JSX the element is part of (`const inner = <P>…</P>`), through
+   * enclosing elements, `(…)`, `?:` and `&&`: where that JSX renders is not followed.
+   */
+  function keptIn(element: ts.Node): string | undefined {
+    let at: ts.Node = element;
+    while (
+      ts.isJsxElement(at.parent) ||
+      ts.isJsxFragment(at.parent) ||
+      ts.isJsxExpression(at.parent) ||
+      ts.isParenthesizedExpression(at.parent) ||
+      ts.isConditionalExpression(at.parent) ||
+      (ts.isBinaryExpression(at.parent) &&
+        at.parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken)
+    ) {
+      // An attribute's value (`<A icon={<P/>} />`) is given to a component, read elsewhere.
+      if (ts.isJsxExpression(at.parent) && ts.isJsxAttribute(at.parent.parent)) return undefined;
+      at = at.parent;
+    }
+    const parent = at.parent;
+    return ts.isVariableDeclaration(parent) &&
+      parent.initializer === at &&
+      ts.isIdentifier(parent.name)
+      ? parent.name.text
+      : undefined;
+  }
+
+  /**
+   * The function between `element` and its component (`fn`), up to `stop`, as the call it is given
+   * to names it (`useMemo`), or the function's own name; undefined when there is none.
+   */
+  function callbackAround(
+    element: ts.Node,
+    stop: ts.Node,
+    fn: FunctionLike | undefined,
+  ): string | undefined {
+    // Outside a component the Provider is not followed at all, and says so on its own.
+    if (fn === undefined) return undefined;
+    for (
+      let child = element.parent;
+      child !== stop && !ts.isSourceFile(child);
+      child = child.parent
+    ) {
+      if (child === fn) return undefined;
+      if (!ts.isFunctionLike(child)) continue;
+      const parent = child.parent;
+      if (ts.isCallExpression(parent)) return parent.expression.getText(sourceFile);
+      if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) return parent.name.text;
+      if (ts.isFunctionDeclaration(child) && child.name !== undefined) return child.name.text;
+      return "a function";
+    }
+    return undefined;
   }
 
   /** The nearest Provider of `context` whose children hold `element`, up to `stop`. */
@@ -601,12 +687,18 @@ export function summarizeFile(
     if (!ts.isVariableStatement(statement) || !ts.isSourceFile(statement.parent)) return;
     const stated = resolver.contextTraits(name);
     if (stated === undefined) return;
-    const text = ctx.types.typeTextOf(name);
+    // The type as it is written (`RequiredContext<Store> & SingleProvider`), else as TypeScript
+    // prints it; a long one by the names of the traits it states.
+    const text = (declaration.type?.getText(sourceFile) ?? ctx.types.typeTextOf(name)).replace(
+      /\s+/g,
+      " ",
+    );
+    const named = stated.traits.map((trait) => TRAIT_NAMES[trait] ?? trait).join(" & ");
     summary.declared.push({
       id: stated.id,
       name: name.text,
       loc: stated.loc,
-      marker: text.length <= MARKER_TEXT_MAX ? text : REQUIRED_CONTEXT,
+      marker: text.length <= MARKER_TEXT_MAX ? text : named,
       traits: stated.traits,
     });
   }
@@ -626,7 +718,17 @@ export function summarizeFile(
     if (named === undefined) return;
     const stated = resolver.contextTraits(named);
     if (stated?.traits.some((trait) => trait !== REQUIRED_CONTEXT) !== true) return;
-    summary.statedProviders.push({ context: stated.id, name: tagText(tag), loc: locOf(opening) });
+    summary.statedProviders.push({
+      context: stated.id,
+      name: tagText(tag),
+      loc: locOf(opening),
+      unchecked: stated.traits.includes(STABLE_CONTEXT)
+        ? uncheckedAt(ctx.types, usesCompiler(ctx.types, ctx.file), opening).map((place) => ({
+            loc: locOf(place.node),
+            reason: place.reason,
+          }))
+        : [],
+    });
   }
 
   function handleDeclaration(declaration: ts.VariableDeclaration): void {
@@ -699,7 +801,8 @@ export function summarizeFile(
     summary.guards.length === 0 &&
     summary.declared.length === 0 &&
     summary.providers.length === 0 &&
-    summary.statedProviders.length === 0;
+    summary.statedProviders.length === 0 &&
+    summary.given.length === 0;
   return empty ? undefined : summary;
 }
 
@@ -731,6 +834,27 @@ function givesSlots(element: ts.JsxElement | ts.JsxSelfClosingElement): boolean 
   return found;
 }
 
+/**
+ * The slots of the component an element renders that it gives content: `children` when something
+ * is written between the tags, and each prop whose value holds JSX or a function.
+ */
+function slotsGiven(element: ts.JsxElement | ts.JsxSelfClosingElement): string[] {
+  const slots: string[] = [];
+  if (ts.isJsxElement(element) && element.children.some((child) => !isBlankText(child))) {
+    slots.push("children");
+  }
+  const opening = ts.isJsxElement(element) ? element.openingElement : element;
+  for (const attribute of opening.attributes.properties) {
+    if (!ts.isJsxAttribute(attribute) || attribute.initializer === undefined) continue;
+    const holds = (node: ts.Node): boolean =>
+      isJsxOrFunction(node) || (ts.forEachChild(node, holds) ?? false);
+    if (holds(attribute.initializer)) {
+      slots.push(ts.isIdentifier(attribute.name) ? attribute.name.text : attribute.name.getText());
+    }
+  }
+  return slots;
+}
+
 function isBlankText(node: ts.JsxChild): boolean {
   return ts.isJsxText(node) && node.containsOnlyTriviaWhiteSpaces;
 }
@@ -751,6 +875,15 @@ function hookOf(component: ComponentSummary): HookSummary {
     reads: component.reads,
     hooks: component.hooks,
   };
+}
+
+/** The name a parameter or a destructured prop is declared with, which reads nothing. */
+function isDeclarationName(node: ts.Node): boolean {
+  const parent = node.parent;
+  return (
+    (ts.isBindingElement(parent) && parent.name === node) ||
+    (ts.isParameter(parent) && parent.name === node)
+  );
 }
 
 /** `b` in `a.b` is a property name, not a reference to a variable called `b`. */
@@ -785,5 +918,28 @@ export function sharedSummary(
   if (hit?.sourceFile === ctx.sourceFile) return hit.summary;
   const summary = summarizeFile(ctx);
   known.set(key, { sourceFile: ctx.sourceFile, summary });
+  return summary;
+}
+
+/** `provider-missing`'s summary, with the references to contexts stated required marked. */
+export function requiredSummary(
+  ctx: FileContext<{ readonly lazyFunctions: readonly string[] }>,
+): Summary | undefined {
+  const summary = sharedSummary(ctx);
+  const reads = new Set<number>();
+  for (const one of [...(summary?.components ?? []), ...(summary?.hooks ?? [])]) {
+    for (const read of one.reads) reads.add(read.loc.start);
+  }
+  markContextReferences(ctx, REQUIRED_CONTEXT, { reads });
+  return summary;
+}
+
+/** `provider-nested`'s summary, with the references to contexts stated `SingleProvider` marked. */
+export function singleSummary(
+  ctx: FileContext<{ readonly lazyFunctions: readonly string[] }>,
+): Summary | undefined {
+  const summary = sharedSummary(ctx);
+  const providers = new Set((summary?.providers ?? []).map((one) => one.loc.start));
+  markContextReferences(ctx, SINGLE_PROVIDER, { providers });
   return summary;
 }

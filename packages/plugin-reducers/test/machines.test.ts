@@ -1,9 +1,20 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { check as checkProject, parseConfig } from "@stateward/core";
-import { checkFixture } from "@stateward/core/testing";
+import { checkFixture, typeErrorsOfText } from "@stateward/core/testing";
 import { reducers } from "../src/index.js";
 import { check, fixture, shown, type Shown } from "./helpers.js";
+
+/** The ways out of a state nothing leaves: an event, the mark where the module keeps it, the option. */
+function neverLeft(tag: string, mark: string): string {
+  return [
+    "one of",
+    `- handle an event that leaves "${tag}", so a case returns another state`,
+    ...mark.split("\n"),
+    "- or, to treat it as final in every reducer, list it under the rule's `finalStates` option:",
+    `    { finalStates: ["${tag}"] }`,
+  ].join("\n");
+}
 
 class TestError extends Error {
   constructor(message: string) {
@@ -28,7 +39,10 @@ const checkoutExpected: Shown[] = [
     file: "reducer.ts",
     at: "checkoutReducer",
     message: '`checkoutReducer` reaches "paymentFailed" but never leaves it',
-    hint: 'handle an event that leaves "paymentFailed", or mark it final (quick fix available)',
+    hint: neverLeft(
+      "paymentFailed",
+      '- or add "paymentFailed" to `@final` on `CheckoutState` (quick fix)',
+    ),
     notes: [
       'CheckoutPage.tsx: initialCheckout: starts at "cart"',
       'reducer.ts: { status: "paying", items: state.items, address: event.address }: "cart" goes to "paying" on `submitAddress`',
@@ -42,7 +56,12 @@ const checkoutExpected: Shown[] = [
     file: "reducer.ts",
     at: "checkoutReducer",
     message: '`checkoutReducer` never reaches "review": no case returns it',
-    hint: 'add the event that leads to "review", or remove it from `CheckoutState`',
+    hint: [
+      "one of",
+      '- add the event that leads to "review", so a case returns it',
+      '- or remove "review" from `CheckoutState`, if it is not used',
+      '- or, if "review" is entered from outside the reducer, list it under the rule\'s `ignoreStates` option',
+    ].join("\n"),
     notes: [
       'CheckoutPage.tsx: initialCheckout: starts at "cart"',
       'types.ts: "review": "review" is declared',
@@ -54,7 +73,7 @@ const checkoutExpected: Shown[] = [
 const uploadExpected: Shown[] = [
   {
     rule: "reducers/state-cannot-leave",
-    severity: "warning",
+    severity: "error",
     file: "upload.ts",
     at: '@final "done" | "discarded" | "payed"',
     message: '`@final` names "payed", which is not a state of `UploadState`',
@@ -68,7 +87,12 @@ const uploadExpected: Shown[] = [
     file: "upload.ts",
     at: "uploadReducer",
     message: '`uploadReducer` never reaches "discarded": no case returns it',
-    hint: 'add the event that leads to "discarded", or remove it from `UploadState`',
+    hint: [
+      "one of",
+      '- add the event that leads to "discarded", so a case returns it',
+      '- or remove "discarded" from `UploadState`, if it is not used',
+      '- or, if "discarded" is entered from outside the reducer, list it under the rule\'s `ignoreStates` option',
+    ].join("\n"),
     notes: [
       'upload.ts: @initial "idle": starts at "idle"',
       'upload.ts: "discarded": "discarded" is declared',
@@ -81,7 +105,12 @@ const uploadExpected: Shown[] = [
     file: "upload.ts",
     at: "uploadReducer",
     message: '`uploadReducer` never reaches "draft": no case returns it',
-    hint: 'add the event that leads to "draft", or remove it from `UploadState`',
+    hint: [
+      "one of",
+      '- add the event that leads to "draft", so a case returns it',
+      '- or remove "draft" from `UploadState`, if it is not used',
+      '- or, if "draft" is entered from outside the reducer, list it under the rule\'s `ignoreStates` option',
+    ].join("\n"),
     notes: [
       'upload.ts: @initial "idle": starts at "idle"',
       'upload.ts: "draft": "draft" is declared',
@@ -94,7 +123,12 @@ const uploadExpected: Shown[] = [
     file: "upload.ts",
     at: "uploadReducer",
     message: '`uploadReducer` never reaches "scheduled": only unreached "draft" leads to it',
-    hint: 'make "draft" reachable, or remove "scheduled" from `UploadState`',
+    hint: [
+      "one of",
+      '- make "draft" reachable, so the cases that lead to "scheduled" can run',
+      '- or remove "scheduled" from `UploadState`, if it is not used',
+      '- or, if "scheduled" is entered from outside the reducer, list it under the rule\'s `ignoreStates` option',
+    ].join("\n"),
     notes: [
       'upload.ts: @initial "idle": starts at "idle"',
       'upload.ts: { phase: "scheduled", file: state.file }: returns "scheduled" only from "draft"',
@@ -104,7 +138,7 @@ const uploadExpected: Shown[] = [
   },
   {
     rule: "reducers/state-cannot-leave",
-    severity: "warning",
+    severity: "error",
     file: "upload.ts",
     at: '{ phase: "idle" }',
     message: '"done" is marked final, but `uploadReducer` leaves it on `restart`',
@@ -121,13 +155,17 @@ const unreadableExpected: Shown[] = [
     file: "fetch.ts",
     at: "restored",
     message: "constant `restored` can be any state of `FetchState`",
-    hint: 'type it with the state it starts in, e.g. `const restored: Extract<FetchState, { status: "done" }> = …`',
+    hint: [
+      "one of",
+      "- type it with the state it holds, `Extract<FetchState, { status: … }>`, and make whatever builds it give that type",
+      '- or, if it may be any state on purpose, turn this kind off: `severities: { "whole-return": "off" }` in the rule\'s options',
+    ].join("\n"),
     notes: ["fetch.ts: fetchReducer: in `fetchReducer`"],
     fixes: [],
   },
   {
     rule: "reducers/reducer-not-readable",
-    severity: "info",
+    severity: "error",
     file: "job.ts",
     at: '@initial "queud"',
     message: '`@initial` names "queud", which is not a state of `JobState`',
@@ -141,7 +179,13 @@ const unreadableExpected: Shown[] = [
     file: "job.ts",
     at: "applyEvent(state, event)",
     message: "`applyEvent(state, event)` can return any state of `JobState`",
-    hint: 'declare its return type as the states it returns, e.g. `Extract<JobState, { status: "done" }>`',
+    // `applyEvent` gives back the state it is passed: a return type cannot say so, so writing its steps comes first.
+    hint: [
+      "one of",
+      "- write the steps of `applyEvent` in the reducer, so each state it gives is read",
+      "- or declare its return type as the states it gives, `Extract<JobState, { status: … }>`: only if it never gives back the state it is passed, which a return type cannot say",
+      '- or, if it may be any state on purpose, turn this kind off: `severities: { "whole-return": "off" }` in the rule\'s options',
+    ].join("\n"),
     notes: ["job.ts: jobReducer: in `jobReducer`"],
     fixes: [],
   },
@@ -172,7 +216,7 @@ const unreadableExpected: Shown[] = [
     file: "prose.ts",
     at: "orderReducer",
     message: '`orderReducer` reaches "done" but never leaves it',
-    hint: 'handle an event that leaves "done", or add it to `@final` on `OrderState`',
+    hint: neverLeft("done", '- or add "done" to `@final` on `OrderState`'),
     notes: [
       'prose.ts: { stage: "open" }: starts at "open"',
       'prose.ts: event === "finish" && state.stage === "open" ? { stage: "done" } : state: "open" goes to "done"',
@@ -185,7 +229,10 @@ const unreadableExpected: Shown[] = [
     file: "queue.ts",
     at: "queueReducer",
     message: "`queueReducer` can start in any state: no start is known",
-    hint: "add `/** @initial empty */` to `queueReducer`",
+    hint: [
+      "list, quoted, the states it can start in, above `queueReducer` (for example one state):",
+      '    /** @initial "empty" */',
+    ].join("\n"),
     notes: ["queue.ts: queueReducer: handed on"],
     fixes: [],
   },
@@ -195,7 +242,12 @@ const unreadableExpected: Shown[] = [
     file: "search.ts",
     at: "searchReducer",
     message: "`searchReducer` can start in any state: it is also used outside `useReducer`",
-    hint: "list its starts with `@initial`, or call it only through `useReducer`",
+    hint: [
+      "one of",
+      "- list, quoted, the states it can start in, above `searchReducer` (for example one state):",
+      '    /** @initial "found" */',
+      "- or call it only through `useReducer`",
+    ].join("\n"),
     notes: ["search.ts: searchReducer: called", "search.ts: searchReducer: called"],
     fixes: [],
   },
@@ -205,7 +257,12 @@ const unreadableExpected: Shown[] = [
     file: "session.ts",
     at: "saved",
     message: "`sessionReducer` can start in any state: the state it starts from is not known",
-    hint: "start from a constant state, or list where it starts with `@initial` on the reducer",
+    hint: [
+      "one of",
+      "- start from a constant state",
+      "- or list, quoted, the states it can start in, above `sessionReducer` (for example one state):",
+      '    /** @initial "closed" */',
+    ].join("\n"),
     notes: ["session.ts: sessionReducer: `sessionReducer` is declared"],
     fixes: [],
   },
@@ -268,7 +325,12 @@ describe("reducers: a reducer that starts from its `state = initialState` defaul
         file: "reducer.ts",
         at: "uploadReducer",
         message: '`uploadReducer` never reaches "retrying": no case returns it',
-        hint: 'add the event that leads to "retrying", or remove it from `UploadState`',
+        hint: [
+          "one of",
+          '- add the event that leads to "retrying", so a case returns it',
+          '- or remove "retrying" from `UploadState`, if it is not used',
+          '- or, if "retrying" is entered from outside the reducer, list it under the rule\'s `ignoreStates` option',
+        ].join("\n"),
         notes: [
           'reducer.ts: initialUpload: starts at "idle"',
           'reducer.ts: "retrying": "retrying" is declared',
@@ -286,18 +348,39 @@ describe("reducers/reducer-not-readable and the unknown of state-unreachable", (
     expect(shown(UNREADABLE, findings)).toEqual(unreadableExpected);
   });
 
+  it("no longer offers a return type that its own helper cannot have", () => {
+    // `applyEvent` gives back the state it is passed: the old example, `Extract<JobState, { status: "done" }>`, fails.
+    const helper = (returnType: string): string =>
+      [
+        'type JobState = { status: "queued" } | { status: "running" } | { status: "done" };',
+        `declare const flag: boolean;`,
+        `export function applyEvent(state: JobState): ${returnType} {`,
+        '  return flag ? { status: "running" } : state;',
+        "}",
+      ].join("\n");
+    expect(typeErrorsOfText(helper('Extract<JobState, { status: "done" }>'))).toContain("TS2322");
+    for (const finding of findings) {
+      expect(finding.hint).not.toContain('{ status: "done" }');
+    }
+  });
+
   it("is info under recommended and an error under strict; the unknown stays unknown", () => {
-    const severities = (preset: "recommended" | "strict"): string[] => {
+    // `stated`: the findings against `@initial`, a guarantee the code states, which are errors
+    // under every preset, so `check` and `guarantees` agree.
+    const severities = (preset: "recommended" | "strict", stated: boolean): string[] => {
       const parsed = parseConfig({ plugins: [reducers()], preset }, UNREADABLE);
       if (!parsed.ok) throw new TestError(parsed.errors.join("\n"));
       return checkProject({ config: parsed.value, cwd: UNREADABLE }).findings.flatMap((finding) =>
-        finding.ruleId === "reducers/reducer-not-readable" && finding.kind === "problem"
+        finding.ruleId === "reducers/reducer-not-readable" &&
+        finding.kind === "problem" &&
+        (finding.against === true) === stated
           ? [finding.severity]
           : [],
       );
     };
-    expect(new Set(severities("recommended"))).toEqual(new Set(["info"]));
-    expect(new Set(severities("strict"))).toEqual(new Set(["error"]));
+    expect(new Set(severities("recommended", false))).toEqual(new Set(["info"]));
+    expect(new Set(severities("strict", false))).toEqual(new Set(["error"]));
+    expect(new Set(severities("recommended", true))).toEqual(new Set(["error"]));
     expect(
       findings.filter((finding) => finding.kind === "unknown").map((finding) => finding.ruleId),
     ).toEqual(["reducers/state-unreachable"]);
@@ -325,7 +408,7 @@ describe("reducers/state-cannot-leave: final states in a `FINAL_STATES` const", 
         file: "order.ts",
         at: "orderReducer",
         message: '`orderReducer` reaches "failed" but never leaves it',
-        hint: 'handle an event that leaves "failed", or mark it final (quick fix available)',
+        hint: neverLeft("failed", '- or add "failed" to `ORDER_FINAL_STATES` (quick fix)'),
         notes: [
           'order.ts: INITIAL_STATE: starts at "open"',
           'order.ts: { status: "failed" }: "open" goes to "failed"',
@@ -338,7 +421,7 @@ describe("reducers/state-cannot-leave: final states in a `FINAL_STATES` const", 
         file: "ticket.ts",
         at: "ticketReducer",
         message: '`ticketReducer` reaches "stuck" but never leaves it',
-        hint: 'handle an event that leaves "stuck", or mark it final (quick fix available)',
+        hint: neverLeft("stuck", '- or add "stuck" to `TICKET_FINAL_STATUSES` (quick fix)'),
         notes: [
           'ticket.ts: { status: "open" }: starts at "open"',
           'ticket.ts: event.type === "close" ? { status: "closed" } : { status: "stuck" }: "open" goes to "stuck"',

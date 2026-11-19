@@ -29,8 +29,10 @@ describe("ownership: the guarantees it states", { timeout: 30_000 }, () => {
   it("lists each value stated owned with the modules that change it, the owner's replacements included", () => {
     expect(listed(OWNED)).toEqual([
       // The owner never changes it; three other modules do.
-      "mine.ts registry Mine<Map<string, number>>: not proven: 4 errors [cast.ts, methods.ts, reexport.ts]",
-      "settings.ts settings Owned<Settings>: not proven: 13 errors [alias.ts, cast.ts, direct.ts, methods.ts, reexport.ts, settings.ts]",
+      "mine.ts registry Mine<Map<string, number>>: not proven: 3 errors [cast.ts, methods.ts, reexport.ts]",
+      // A parameter typed `Owned` states it, and no rule proves a parameter: core lists it as not checked.
+      "param.ts target Owned: not checked: `Owned` is stated on a declaration no rule checks: state it where its pack's page shows []",
+      "settings.ts settings Owned<Settings>: not proven: 12 errors [alias.ts, cast.ts, direct.ts, methods.ts, reexport.ts, settings.ts]",
       "store.ts Store.items Owned<string[]>: not proven: 3 errors [alias.ts, methods.ts, store.ts]",
       // `count += 1` in its own module: replaced by its owner only.
       "store.ts count Owned<number>: proven for 1 writer [store.ts]",

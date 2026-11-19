@@ -24,9 +24,13 @@ info[react-context/fake-default-value]: `ThemeContext` defaults to `{} as Theme`
   |
 5 | const ThemeContext = createContext({} as Theme);
   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  = fix: create it with `undefined`, and read it in a hook that throws when the Provider is missing:
-        const ThemeContext = createContext<Theme | undefined>(undefined);
-        // in useTheme(): if (value === undefined) throw new Error("ThemeContext needs a Provider");
+  = fix: one of
+      - state it required, with `requiredContext`, a helper you add once in `guarantees.ts` (`stateward explain react-context/provider-missing` shows it), so a missing Provider is a finding
+            requiredContext<Theme>()
+      - or create it with `undefined`, and read it in a hook that throws when the Provider is missing
+            const ThemeContext = createContext<Theme | undefined>(undefined);
+            // the hook that reads it: throw when the value is undefined, as "ThemeContext needs a Provider"
+      - or, if the placeholder is meant, list `ThemeContext` under the rule's `ignore` option
   = docs: stateward explain react-context/fake-default-value
 ```
 
@@ -69,7 +73,7 @@ It reads React's `createContext` (also `React.createContext`) called with a cast
 
 ## Turn it on or off
 
-It is an info under `recommended` (shown in the editor, it does not fail `check`) and an error under `strict`. Turn it off when the defaults are real values (a default theme, a logger that does nothing):
+It is an info under `recommended` (shown in the editor, it does not fail `check`) and an error under `strict`. A real default is never reported (a default theme, a logger that does nothing); a placeholder that is meant is listed under `ignore`, or the rule is turned off:
 
 ```ts
 rules: { "react-context/fake-default-value": "off" } // or "warning"

@@ -52,7 +52,7 @@ export function useCheckout() {
 }
 \`\`\`
 
-There is no quick fix: which event leads there is your design.
+There is no quick fix: which event leads there is your design. The message names three readings: an event that leads to the state, removing the state, and, when something outside the reducer sets it, listing it under \`ignoreStates\`.
 
 ## Why it matters
 
@@ -135,9 +135,19 @@ export const stateUnreachable = defineRule({
             (cut) => `\`${cut.name(reducer.name)}\` never reaches ${quoted(tag)}: ${cause}`,
           ),
           hint: fitted((cut) =>
-            only.length > 0
-              ? `make ${only.map(quoted).join(", ")} reachable, or remove ${quoted(tag)} from \`${cut.name(reducer.stateName)}\``
-              : `add the event that leads to ${quoted(tag)}, or remove it from \`${cut.name(reducer.stateName)}\``,
+            [
+              "one of",
+              only.length > 0
+                ? `- make ${only.map(quoted).join(", ")} reachable, so the cases that lead to ${quoted(tag)} can run`
+                : reducer.idleEvents.length > 0
+                  ? `- return ${quoted(tag)} from a case: ${reducer.idleEvents
+                      .slice(0, 3)
+                      .map((event) => `\`${cut.name(event)}\``)
+                      .join(", ")} returns the state unchanged now`
+                  : `- add the event that leads to ${quoted(tag)}, so a case returns it`,
+              `- or remove ${quoted(tag)} from \`${cut.name(reducer.stateName)}\`, if it is not used`,
+              `- or, if ${quoted(tag)} is entered from outside the reducer, list it under the rule's \`ignoreStates\` option`,
+            ].join("\n"),
           ),
           location: at(machine.file, reducer.at),
           related: [

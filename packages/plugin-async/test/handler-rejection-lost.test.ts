@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { check, parseConfig } from "@stateward/core";
+import { typeErrorsOfText } from "@stateward/core/testing";
 import type { Finding, PackageFactsConfig } from "@stateward/core";
 import { asyncFlow } from "../src/index.js";
 import { checkOnly, fixture, says, shown } from "./handler-helpers.js";
@@ -17,23 +18,33 @@ function failure(name: string, role: "handler" | "listener" | "callback"): strin
   return `unhandled rejection: nothing catches a failure of the async \`${name}\` ${role}`;
 }
 
-function body(code: string): string {
-  return `  try { ${code} } catch (e) { showError(e); }`;
+type Role = "handler" | "listener" | "callback";
+
+/** What a hint offers: the statement shown wrapped, the function it can tag, the prop it can list. */
+type Offer = { statement?: string; tag?: string; prop?: string };
+
+/** The fix of a handler nothing awaits: wrap the failure, then the readings that state a purpose. */
+function hintFor(role: Role, { statement, tag, prop }: Offer): string {
+  const where = `catch inside the ${role}, since nothing awaits it`;
+  const ways: string[] = [
+    statement === undefined
+      ? `- ${where}: wrap the statement that fails, and those that use its result, in a \`try\` with a \`catch\``
+      : `- ${where}: wrap the call that fails, and keep the other statements\n    try { ${statement} } catch (error) { … }`,
+  ];
+  if (tag !== undefined) {
+    ways.push(
+      `- or, if \`${tag}\` shows or records its own failures, tag it with \`@neverRejects\` in its JSDoc: stateward then proves the tag and trusts it at its callers`,
+    );
+  }
+  if (prop !== undefined) {
+    ways.push(
+      `- or, if the component given \`${prop}\` awaits it itself, list the prop under the rule's \`ignoreProps\` option`,
+    );
+  }
+  return ways.length === 1 ? (ways[0] ?? "").replace(/^- /, "") : ["one of", ...ways].join("\n");
 }
 
-function jsx(name: string, code = "await save();"): string {
-  return `catch inside the handler, since nothing awaits it:\n    ${name}={async () => {\n    ${body(code)}\n    }}`;
-}
-
-/** The example repeats the call the listener or callback was passed to, with its own arguments. */
-function passed(
-  role: "listener" | "callback",
-  first: string,
-  last: string,
-  code = "await save();",
-): string {
-  return `catch inside the ${role}, since nothing awaits it:\n    ${first}\n    ${body(code)}\n    ${last}`;
-}
+const SAVE = "await save();";
 
 function at(file: string, message: string, hint: string) {
   return says(file, message, hint);
@@ -44,71 +55,104 @@ describe(`async/${RULE}: an async function that nothing awaits`, () => {
     const found = shown(flagged()).slice(0, 12);
     const file = "handlers.tsx";
     expect(found).toEqual([
-      at(file, failure("onClick", "handler"), jsx("onClick")),
-      at(file, failure("onSubmit", "handler"), jsx("onSubmit", "await load();")),
-      at(file, failure("onSave", "handler"), jsx("onSave")),
-      at(file, failure("onSave", "handler"), jsx("onSave", 'await fetch("/api");')),
-      at(file, failure("onSave", "handler"), jsx("onSave", "await saveAll();")),
-      at(file, failure("onSave", "handler"), jsx("onSave", "await saveLater();")),
-      at(file, failure("onSave", "handler"), jsx("onSave", "await Promise.all([save(), save()]);")),
-      at(file, failure("onChange", "handler"), jsx("onChange")),
-      at(file, failure("onBlur", "handler"), jsx("onBlur")),
+      at(
+        file,
+        failure("onClick", "handler"),
+        hintFor("handler", { statement: SAVE, tag: "save", prop: "onClick" }),
+      ),
+      // `const items = await load()`: the code after it uses `items`, so no example is written.
+      at(
+        file,
+        failure("onSubmit", "handler"),
+        hintFor("handler", { tag: "load", prop: "onSubmit" }),
+      ),
+      // A handler with no block body has no statement to wrap.
+      at(file, failure("onSave", "handler"), hintFor("handler", { tag: "save", prop: "onSave" })),
+      // `fetch` and `Promise.all` are the language's: no function to tag, no package for facts.
+      at(file, failure("onSave", "handler"), hintFor("handler", { prop: "onSave" })),
+      at(
+        file,
+        failure("onSave", "handler"),
+        hintFor("handler", { tag: "saveAll", prop: "onSave" }),
+      ),
+      at(
+        file,
+        failure("onSave", "handler"),
+        hintFor("handler", { tag: "saveLater", prop: "onSave" }),
+      ),
+      at(file, failure("onSave", "handler"), hintFor("handler", { prop: "onSave" })),
+      at(
+        file,
+        failure("onChange", "handler"),
+        hintFor("handler", { statement: SAVE, tag: "save", prop: "onChange" }),
+      ),
+      at(
+        file,
+        failure("onBlur", "handler"),
+        hintFor("handler", { statement: SAVE, tag: "save", prop: "onBlur" }),
+      ),
       at(
         file,
         failure("onFocus", "handler"),
-        jsx("onFocus", "for await (const item of stream()) { … }"),
+        hintFor("handler", {
+          statement: "for await (const item of stream()) setItems([item]);",
+          prop: "onFocus",
+        }),
       ),
-      at(file, failure("onKeyDown", "handler"), jsx("onKeyDown")),
-      at(file, failure("onInput", "handler"), jsx("onInput", 'await fetch("/api");')),
+      at(
+        file,
+        failure("onKeyDown", "handler"),
+        hintFor("handler", { tag: "save", prop: "onKeyDown" }),
+      ),
+      at(
+        file,
+        failure("onInput", "handler"),
+        hintFor("handler", { statement: 'return await fetch("/api");', prop: "onInput" }),
+      ),
     ]);
   });
 
   it("names the call for addEventListener and the timers, once per handler", () => {
     const found = shown(flagged()).slice(12);
     const file = "handlers.tsx";
-    const listener = (first: string, code?: string) =>
-      passed("listener", `${first}, async () => {`, "});", code);
-    const callback = (call: string, last: string, code?: string) =>
-      passed("callback", `${call}(async () => {`, last, code);
+    const listener = hintFor("listener", { statement: SAVE, tag: "save" });
+    const callback = hintFor("callback", { statement: SAVE, tag: "save" });
     expect(found).toEqual([
+      at(file, failure("addEventListener", "listener"), listener),
+      at(file, failure("addEventListener", "listener"), listener),
+      at(file, failure("setTimeout", "callback"), callback),
+      at(file, failure("setInterval", "callback"), callback),
+      at(file, failure("queueMicrotask", "callback"), callback),
+      at(file, failure("setTimeout", "callback"), callback),
+      at(file, failure("setTimeout", "callback"), callback),
+      at(file, failure("addEventListener", "listener"), listener),
       at(
-        file,
-        failure("addEventListener", "listener"),
-        listener('target.addEventListener("click"'),
-      ),
-      at(
-        file,
-        failure("addEventListener", "listener"),
-        listener('document.addEventListener("keydown"'),
-      ),
-      at(file, failure("setTimeout", "callback"), callback("setTimeout", "}, 100);")),
-      at(file, failure("setInterval", "callback"), callback("setInterval", "}, 1000);")),
-      at(file, failure("queueMicrotask", "callback"), callback("queueMicrotask", "});")),
-      at(file, failure("setTimeout", "callback"), callback("window.setTimeout", "}, 100);")),
-      at(file, failure("setTimeout", "callback"), callback("setTimeout", "}, 100);")),
-      at(
-        file,
-        failure("addEventListener", "listener"),
-        listener('someVeryLongObjectName.addEventListener("x"'),
+        "partly-caught.tsx",
+        failure("onClick", "handler"),
+        hintFor("handler", {
+          statement: "await removeThenReload();",
+          tag: "removeThenReload",
+          prop: "onClick",
+        }),
       ),
       at(
         "partly-caught.tsx",
         failure("onClick", "handler"),
-        jsx("onClick", "await removeThenReload();"),
+        hintFor("handler", { statement: "await rethrows();", tag: "rethrows", prop: "onClick" }),
       ),
-      at("partly-caught.tsx", failure("onClick", "handler"), jsx("onClick", "await rethrows();")),
+      // A `.then` callback does not catch; `then` is the language's, so there is nothing to tag.
       at(
         "then.ts",
         failure("setTimeout", "callback"),
-        callback("setTimeout", "});", 'await save().then(() => showError("saved"));'),
+        hintFor("callback", { statement: 'await save().then(() => showError("saved"));' }),
       ),
       at(
         "then.ts",
         failure("addEventListener", "listener"),
-        listener(
-          'button.addEventListener("click"',
-          'await saveEverything("the first argument", "the second …;',
-        ),
+        hintFor("listener", {
+          statement: 'await saveEverything("the first argument", "the second argument");',
+          tag: "saveEverything",
+        }),
       ),
     ]);
   });
@@ -150,6 +194,39 @@ describe(`async/${RULE}: an async function that nothing awaits`, () => {
       // Only quoted names may push a line past its limit.
       expect(finding.message.replace(/`[^`]*`/g, "").length).toBeLessThanOrEqual(100);
       expect(finding.hint.split("\n")[0]?.replace(/`[^`]*`/g, "").length).toBeLessThanOrEqual(140);
+    }
+  });
+});
+
+describe(`async/${RULE}: the handler's own code`, () => {
+  it("wraps only the call that fails, and never writes a name the project does not have", () => {
+    const dir = fixture(`${RULE}/keeps`);
+    const [one, ...rest] = shown(checkOnly(dir, RULE));
+    expect(rest).toEqual([]);
+    // `event` and `preventDefault()` stay where they are: only `await save(id);` is shown.
+    expect(one?.hint).toBe(
+      hintFor("handler", { statement: "await save(id);", tag: "save", prop: "onSubmit" }),
+    );
+    expect(one?.hint).not.toContain("showError");
+    expect(one?.hint).not.toContain("async () => {");
+    // The shown line, put in the handler where its statement was (`…` filled in), compiles.
+    const shownLine = one?.hint.split("\n")[2]?.trim().replace("…", "void error;") ?? "";
+    expect(shownLine).toContain("try { await save(id); }");
+    expect(
+      typeErrorsOfText(
+        [
+          "declare function save(id: string): Promise<void>;",
+          "declare const id: string;",
+          "export const onSubmit = async (event: { preventDefault(): void }) => {",
+          "  event.preventDefault();",
+          `  ${shownLine}`,
+          "};",
+        ].join("\n"),
+      ),
+    ).toBe("");
+    for (const finding of flagged()) {
+      expect(finding.hint).not.toContain("showError(e)");
+      expect(finding.hint).not.toContain("catch (e)");
     }
   });
 });
@@ -218,7 +295,11 @@ describe(`async/${RULE}: promises that do not reject`, () => {
       at(
         "triggers.tsx",
         failure("onClick", "handler"),
-        jsx("onClick", 'await addTodo("bread").unwrap();'),
+        hintFor("handler", {
+          statement: 'await addTodo("bread").unwrap();',
+          tag: "unwrap",
+          prop: "onClick",
+        }),
       ),
     ]);
   });
@@ -227,8 +308,20 @@ describe(`async/${RULE}: promises that do not reject`, () => {
 describe(`async/${RULE}: the project says a prop never rejects`, () => {
   it("accepts `@neverRejects` on the prop, its function type or the function, and a prop the component awaits in its own try", () => {
     expect(shown(checkOnly(fixture(`${RULE}/real-b`), RULE))).toEqual([
-      at("search.tsx", failure("onClick", "handler"), jsx("onClick", 'await handleExport("c");')),
-      at("search.tsx", failure("onSubmit", "handler"), jsx("onSubmit", "await search(query);")),
+      at(
+        "search.tsx",
+        failure("onClick", "handler"),
+        hintFor("handler", {
+          statement: 'await handleExport("c");',
+          tag: "handleExport",
+          prop: "onClick",
+        }),
+      ),
+      at(
+        "search.tsx",
+        failure("onSubmit", "handler"),
+        hintFor("handler", { statement: "await search(query);", tag: "search", prop: "onSubmit" }),
+      ),
     ]);
   });
 });
@@ -286,11 +379,15 @@ describe(`async/${RULE}: library facts`, () => {
 
   it("takes `rejects: []` to mean the package function never rejects", () => {
     expect(awaited(withFacts({}))).toEqual([
-      'try { await send("hi"); } catch (e) { showError(e); }',
-      "try { await fetchAll(); } catch (e) { showError(e); }",
+      'try { await send("hi"); } catch (error) { … }',
+      "try { await fetchAll(); } catch (error) { … }",
     ]);
+    // A package's function: the way to say it never rejects is a `facts` entry in the config.
+    expect(withFacts({})[0]?.hint.split("\n")[3]).toBe(
+      '- or, if `send` of `quiet-client` never rejects, state it in the config: `facts: { "quiet-client": { "send": { rejects: [] } } }`',
+    );
     expect(awaited(withFacts({ "quiet-client": { send: { rejects: [] } } }))).toEqual([
-      "try { await fetchAll(); } catch (e) { showError(e); }",
+      "try { await fetchAll(); } catch (error) { … }",
     ]);
     // A list of errors says it does reject.
     expect(

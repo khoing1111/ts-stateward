@@ -24,7 +24,10 @@ warning[react/timer-runs-after-unmount]: `closeTimer` can still run `onClose(…
   |
 6 |     closeTimer.current = window.setTimeout(() => onClose(), 150);
   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  = fix: add an effect that clears it on unmount: `useEffect(() => () => clearTimeout(closeTimer.current), [])` (quick fix)
+  = fix: one of
+      - add an effect that clears it on unmount, after the ref's declaration (quick fix):
+            useEffect(() => () => clearTimeout(closeTimer.current), []);
+      - or if it should still run after the component is gone, say so on the line above the timer with `// stateward-ignore react/timer-runs-after-unmount: <why>`
   = docs: stateward explain react/timer-runs-after-unmount
 ```
 
@@ -44,6 +47,8 @@ export function RailMenu({ onClose }: { onClose: () => void }) {
 ```
 
 The quick fix writes that effect after the ref's declaration (and imports `useEffect` when the file does not); it is tried on a copy of your code before it is offered.
+
+A `cancelAnimationFrame` needs a number, and a clear call needs more than `null`: when the ref's type can be `undefined` (for a frame) or `null`, the effect puts an `if` around the clear call so that it compiles. A timer that is meant to run after the component is gone is stated with `// stateward-ignore react/timer-runs-after-unmount: <why>` on the line above it.
 
 ## Why it matters
 

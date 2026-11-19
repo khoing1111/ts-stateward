@@ -23,9 +23,8 @@ error[records/ambiguous-table]: `labels` accepts any string key, so a misspelt o
   = fix: one of
       - type it `Partial<Record<string, string>>`, so each read handles a missing key
       - or use a `Map`, whose `get` returns `undefined` for a missing key
-      - or build it with `Object.create(null)`, so it has no inherited keys such as `toString`
-      - or check the key with `isKeyOf(labels, key)` before reading
-      - or, for fixed keys, look keys up as `keyof typeof labels`, then remove the type and add `as const`
+      - or read it only where `Object.hasOwn(labels, status)` is true (needs the ES2022 `lib`)
+      - or, for fixed keys, remove the type and add `as const`, then look keys up as `keyof typeof labels`
   = note: keys: "idle", "done"
   = docs: stateward explain records/ambiguous-table
 ```
@@ -66,8 +65,10 @@ The suggestion follows what the code shows:
 | reads use a key type declared apart from the table (`status: Status`) | `as const satisfies Record<Status, V>`, with a note where `Status` is declared |
 | every read with that type has a fallback (`labels[status] ?? "Other"`) | `as const satisfies Partial<Record<Status, V>>` |
 | no declared key type: the object defines the keys | `as const` alone |
-| some read uses a wider key (a `string`) and does not handle a miss | `Partial<Record<string, V>>`, a `Map`, `Object.create(null)` (no inherited keys such as `"toString"`), or `isKeyOf` before reading |
+| some read uses a wider key (a `string`) and does not handle a miss | `Partial<Record<string, V>>`, a `Map`, or `Object.hasOwn` before reading |
 | reads look keys up again from `Object.keys(labels)` | `Object.entries(labels)` |
+
+A `Map` of literal pairs is reported as a question: its `get` already returns `undefined` for a missing key, so the message offers both readings, an object `{ … } as const satisfies Record<…>` when the keys are fixed, and keeping the Map (list its name under `ignore`) when they come from outside. The object form needs a union `K` of the keys (the message shows it, from the Map's entries) and the keys that read it typed `K`: a read with a `string` key does not compile against it. The question is an info (kind `map`); `severities: { map: "warning" }` raises it, `"off"` is silent.
 
 A type derived from the object (`keyof typeof labels`) never gets the `satisfies` suggestion: there is no separate union to check against. The editor offers a quick fix for the fixed table ("Use satisfies: the keys are fixed", or "Use as const: the object defines the keys") when every read uses a key the table has, and "Use Partial<Record<string, …>>: keys come from outside" for a table no other file reads. Each is offered only when the code still compiles after it.
 
@@ -76,6 +77,7 @@ A type derived from the object (`keyof typeof labels`) never gets the `satisfies
 ```ts
 rules: { "records/ambiguous-table": "off" } // or "warning"
 rules: { "records/ambiguous-table": ["error", { ignore: ["*_MESSAGES"] }] } // keep some names open
+rules: { "records/ambiguous-table": ["error", { severities: { map: "warning" } }] } // a Map of literal pairs asks as a warning
 ```
 
 This rule was called `records/table-type-too-loose` before 1.2; the old id still works, with a warning.
@@ -85,5 +87,6 @@ Options, set as `rules: { "records/ambiguous-table": ["error", { … }] }`:
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
 | `ignore` | list of strings | `[]` | Variable names (globs like *_MESSAGES) that may stay typed as open-ended records. |
+| `severities` | object of kinds to "error", "warning", "info" or "off" | `{}` | A severity per kind of finding. Kinds: `record`: a table typed `Record<string, V>` whose keys the code shows to be fixed or from outside; `map`: a Map of literal pairs that no code changes: a question, since its `get` already handles a missing key (info unless set here). |
 
 Core rule: error under `recommended` and `strict`. Group: `records/keys`.

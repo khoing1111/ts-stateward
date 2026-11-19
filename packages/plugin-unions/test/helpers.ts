@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkFixture, expectMessageStandard } from "@stateward/core/testing";
@@ -59,3 +61,26 @@ export function applied(text: string, edits: readonly TextEdit[]): string {
 
 /** The type errors of each text, as `tsc` prints them (computed in this process). */
 export { typeErrorsOfTexts as typeErrorsOf } from "@stateward/core/testing";
+
+/**
+ * Runs `then` on a copy of the fixture `dir` (a sibling folder, so a tsconfig that reaches
+ * `../` still resolves) with `files` written into it, and removes the copy.
+ */
+export function inCopy<T>(
+  dir: string,
+  files: Readonly<Record<string, string>>,
+  then: (copy: string) => T,
+): T {
+  const copy = `${dir}-copy-${randomUUID().slice(0, 8)}`;
+  try {
+    cpSync(dir, copy, { recursive: true });
+    for (const [name, text] of Object.entries(files)) {
+      const target = path.join(copy, name);
+      mkdirSync(path.dirname(target), { recursive: true });
+      writeFileSync(target, text);
+    }
+    return then(copy);
+  } finally {
+    rmSync(copy, { recursive: true, force: true });
+  }
+}

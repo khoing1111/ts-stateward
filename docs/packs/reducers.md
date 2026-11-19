@@ -91,6 +91,6 @@ function job(state: JobState, event: JobEvent): JobState {
 info[reducers/reducer-not-readable]: `advance(state, event)` can return any state of `JobState`
 ```
 
-Fix: write the steps in the reducer itself, or give the helper a return type that names its states (`Extract<JobState, { status: "running" | "done" }>`).
+Fix: write the steps in the reducer itself. A helper that gives back the state it is passed, as `advance` does, cannot say so in its return type; one that only builds new states can name them (`Extract<JobState, { status: "running" | "done" }>`). A start or a constant that is one state gets the same kind of type, and the rule's `severities` option turns the kind off where any state is meant.
 
 Coverage rule (it points at code whose types do not say enough to check it): info under `recommended`, error under `strict`. Group: `reducers/graph`.

@@ -1,4 +1,11 @@
-import type { CoveredPlace, EditorContributions, Json, StatedGuarantee } from "@stateward/core";
+import { declarationId } from "@stateward/core";
+import type {
+  CoveredPlace,
+  EditorContributions,
+  Json,
+  StatedGuarantee,
+  UncheckedPlace,
+} from "@stateward/core";
 
 /** The trait `OpenUnion<T>` states: `"__guarantee:open-union"?: true`. */
 export const OPEN_UNION = "open-union";
@@ -16,6 +23,11 @@ type Place = { file: string; start: number; end: number };
 export type OpenSummary = {
   declared: (Place & { name: string })[];
   switches: (Place & { id: string })[];
+  /**
+   * The `if` chains over an open value: not read as a switch, so the union is not proven for them
+   * (`reason`, after "not checked: ").
+   */
+  chains?: (Place & { id: string; reason: string })[];
 };
 
 /** The engine hands summaries over as JSON; ours have these two lists. */
@@ -46,11 +58,19 @@ export const guarantees: Guarantees = (input) => {
   if (summaries === undefined) return [];
   const declared = new Map<string, Place & { name: string }>();
   const switches = new Map<string, Place[]>();
+  const chains = new Map<string, UncheckedPlace[]>();
   for (const summary of summaries.values()) {
     if (!isSummary(summary)) continue;
     for (const one of summary.declared) declared.set(`${one.file}#${String(one.start)}`, one);
     for (const one of summary.switches)
       switches.set(one.id, [...(switches.get(one.id) ?? []), one]);
+    for (const one of summary.chains ?? []) {
+      const place: UncheckedPlace = {
+        location: { file: one.file, start: one.start, end: one.end },
+        reason: one.reason,
+      };
+      chains.set(one.id, [...(chains.get(one.id) ?? []), place]);
+    }
   }
   return [...declared.entries()]
     .sort(([, a], [, b]) => comparePlace(a, b))
@@ -63,11 +83,13 @@ export const guarantees: Guarantees = (input) => {
         guarantee: OPEN_UNION,
         marker: "OpenUnion",
         name: declaration.name,
+        declaration: declarationId(declaration),
         location: { file: declaration.file, start: declaration.start, end: declaration.end },
         ruleId: NON_EXHAUSTIVE_SWITCH_ID,
         promise: "every `switch` on it handles a value it does not list",
-        covers: { one: "switch", many: "switches" },
+        covers: { one: "switch or lookup", many: "switches and lookups" },
         covered,
+        unchecked: (chains.get(id) ?? []).sort((a, b) => comparePlace(a.location, b.location)),
       };
     });
 };

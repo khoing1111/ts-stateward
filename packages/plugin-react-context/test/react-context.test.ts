@@ -8,12 +8,23 @@ function fixture(name: string): string {
   return fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 }
 
-/** The plain form, in the context's own names. */
-function hintFor(label: string, name: string, type: string): string {
+/** The readings of a placeholder default, in the context's own names (`this context` is unnamed). */
+function hintFor(name: string, type: string): string {
+  const unnamed = name === "this context";
+  const hook = "the hook that reads it";
+  const created = `createContext<${type} | undefined>(undefined)`;
   return [
-    "create it with `undefined`, and read it in a hook that throws when the Provider is missing:",
-    `    const ${name} = createContext<${type} | undefined>(undefined);`,
-    `    // in use${label}(): if (value === undefined) throw new Error("${name} needs a Provider");`,
+    "one of",
+    "- state it required, with `requiredContext`, a helper you add once in `guarantees.ts` (`stateward explain react-context/provider-missing` shows it), so a missing Provider is a finding",
+    `    requiredContext<${type}>()`,
+    "- or create it with `undefined`, and read it in a hook that throws when the Provider is missing",
+    unnamed ? `    ${created}` : `    const ${name} = ${created};`,
+    unnamed
+      ? `    // ${hook}: throw when the value is undefined`
+      : `    // ${hook}: throw when the value is undefined, as "${name} needs a Provider"`,
+    unnamed
+      ? "- or, if the placeholder is meant, list the context under the rule's `ignore` option"
+      : `- or, if the placeholder is meant, list \`${name}\` under the rule's \`ignore\` option`,
   ].join("\n");
 }
 
@@ -53,13 +64,20 @@ describe("react-context/fake-default-value", () => {
         ruleId: "react-context/fake-default-value",
         severity: "info",
       });
-      expect(finding.hint).toContain("create it with `undefined`, and read it in a hook");
+      expect(finding.hint).toContain("- or create it with `undefined`,");
+      expect(finding.hint).not.toContain(
+        "the quick fix of `react-context/provider-missing` writes it",
+      );
+      // Names the code does not have, and lines cut in the middle of a string, are gone.
+      expect(finding.hint).not.toContain("MyContext");
+      expect(finding.hint).not.toContain("useMy");
+      for (const line of finding.hint.split("\n")) expect(line.length).toBeLessThanOrEqual(400);
       expect(finding.hint).not.toContain("@stateward");
     }
     // The context's own names when it ends in "Context", a neutral name when it does not.
-    expect(findings[0]?.hint).toBe(hintFor("My", "MyContext", "Theme"));
+    expect(findings[0]?.hint).toBe(hintFor("A", "Theme"));
     expect(findings.find((f) => f.message.includes("`ThemeContext`"))?.hint).toBe(
-      hintFor("Theme", "ThemeContext", "Theme"),
+      hintFor("ThemeContext", "Theme"),
     );
     expectMessageStandard(findings);
   });
@@ -91,11 +109,7 @@ describe("react-context/fake-default-value", () => {
           "    requiredContext<Theme>()",
         ].join("\n"),
       ],
-      [
-        "contexts.ts",
-        headline("this context", "undefined as never"),
-        hintFor("My", "MyContext", "T"),
-      ],
+      ["contexts.ts", headline("this context", "undefined as never"), hintFor("this context", "T")],
     ]);
   });
 

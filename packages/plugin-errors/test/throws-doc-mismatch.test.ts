@@ -5,6 +5,15 @@ import { checkOnly, fixture, says, shown } from "./helpers.js";
 
 const RULE = "throws-doc-mismatch";
 
+/** The readings of a class the tag leaves out: it escapes by mistake, or callers are to handle it. */
+function leftOut(fn: string, cls: string): string {
+  return [
+    "one of",
+    `- catch it inside \`${fn}\`, if it escapes by mistake`,
+    `- or add it to the tag, if callers are to handle it: \`@throws {${cls}}\``,
+  ].join("\n");
+}
+
 function flagged(): readonly Finding[] {
   return checkOnly(fixture(`${RULE}/flagged`), RULE);
 }
@@ -15,7 +24,7 @@ describe(`errors/${RULE}: a @throws tag that does not match the body`, () => {
       says(
         "docs.ts",
         "`@throws` of `loadUser` does not list `SyntaxError`",
-        "add it to the tag: `@throws {SyntaxError}`",
+        leftOut("loadUser", "SyntaxError"),
       ),
       says(
         "docs.ts",
@@ -25,12 +34,12 @@ describe(`errors/${RULE}: a @throws tag that does not match the body`, () => {
       says(
         "docs.ts",
         "`@throws` of `saysNever` does not list `ParseError`",
-        "add it to the tag: `@throws {ParseError}`",
+        leftOut("saysNever", "ParseError"),
       ),
       says(
         "docs.ts",
         "`@throws` of `fetchUser` does not list `TypeError`",
-        "add it to the tag: `@throws {TypeError}`",
+        leftOut("fetchUser", "TypeError"),
       ),
       says(
         "docs.ts",
@@ -50,7 +59,7 @@ describe(`errors/${RULE}: a @throws tag that does not match the body`, () => {
       says(
         "docs.ts",
         "`@throws` of `viaThen` does not list `NotFoundError`",
-        "add it to the tag: `@throws {NotFoundError}`",
+        leftOut("viaThen", "NotFoundError"),
       ),
     ]);
   });

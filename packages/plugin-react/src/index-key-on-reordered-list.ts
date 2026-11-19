@@ -304,6 +304,20 @@ function rendersOnlyText(callback: ts.ArrowFunction | ts.FunctionExpression): bo
   return tags > 0 && !stateful;
 }
 
+/**
+ * The key to show for the row's item: `item.id` when its type has an `id`, the item itself when it
+ * is a primitive (unique values: a string or number), and nothing when the code gives no hint, so
+ * the hint says it in words instead of writing a property the item may not have.
+ */
+function keyExample(
+  item: string,
+  parameter: ts.BindingName,
+  types: TypeQueries,
+): string | undefined {
+  if (types.hasDefinedProperty(parameter, "id")) return `${item}.id`;
+  return types.isPrimitive(parameter) ? item : undefined;
+}
+
 function itemName(callback: ts.ArrowFunction | ts.FunctionExpression): string | undefined {
   const [first] = callback.parameters;
   return first !== undefined && ts.isIdentifier(first.name) ? first.name.text : undefined;
@@ -356,11 +370,15 @@ export const indexKeyOnReorderedList = defineRule({
           !matchesName(change.name, ctx.options.ignore) &&
           (ctx.options.textOnlyRows || !rendersOnlyText(map.callback))
         ) {
+          const [first] = map.callback.parameters;
           const item = itemName(map.callback);
-          const example = item === undefined ? "an id" : `${item}.id`;
+          const example =
+            item === undefined || first === undefined
+              ? undefined
+              : keyExample(item, first.name, types);
           const tails = [
-            "a row's state can move to the wrong item",
-            "row state can move to the wrong item",
+            "a row that keeps state can move it to another item",
+            "its state can move to another item",
           ];
           const build = (tail: string) =>
             fitted(
@@ -370,9 +388,16 @@ export const indexKeyOnReorderedList = defineRule({
           const full = build(tails[0] ?? "");
           ctx.report({
             message: full.length <= MAX_HEADLINE ? full : build(tails[1] ?? ""),
-            hint: fitted(
-              (cut) =>
-                `key each row by something the item owns, such as \`key={${cut.name(example)}}\`, so its state stays with it`,
+            hint: fitted((cut) =>
+              [
+                "one of",
+                example === undefined
+                  ? "- key each row by something the item owns and no other item has, so its state stays with it"
+                  : example === item
+                    ? `- key each row by the item itself, if no two items are equal, so its state stays with it: \`key={${cut.name(example)}}\``
+                    : `- key each row by something the item owns, so its state stays with it: \`key={${cut.name(example)}}\``,
+                `- or, if the position is the row's identity on purpose (a log, a fixed grid), list \`${cut.name(change.name)}\` under the rule's \`ignore\` option`,
+              ].join("\n"),
             ),
             node: key,
           });

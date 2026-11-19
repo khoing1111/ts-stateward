@@ -56,7 +56,11 @@ const dependencies: Shown[] = [
     at: "removeItem",
     message:
       "`<CartRow>` re-renders every time: `removeItem` from `useCart()` is a new function each time",
-    hint: "keep the latest handler in a ref (React's `useEffectEvent`, or your own hook)",
+    hint: [
+      "one of",
+      "- wrap `removeItem` in `useCallback` inside `useCart` (cart.ts:10), listing what it reads as dependencies (a state setter needs none)",
+      "- or keep the latest handler in a ref with your own hook, and name that hook in the rule's `stableHooks` option",
+    ].join("\n"),
     notes: [
       "cart.ts: (id: string) => {\n    setItems((current) => current.filter((item) => item.id !== id));\n  }: `removeItem` is created on every render of `useCart`",
     ],

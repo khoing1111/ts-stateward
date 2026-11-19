@@ -32,7 +32,10 @@ error[reducers/state-unreachable]: `checkout` never reaches "review": no case re
   |
 6 | function checkout(state: CheckoutState, event: CheckoutEvent): CheckoutState {
   |          ^^^^^^^^
-  = fix: add the event that leads to "review", or remove it from `CheckoutState`
+  = fix: one of
+      - add the event that leads to "review", so a case returns it
+      - or remove "review" from `CheckoutState`, if it is not used
+      - or, if "review" is entered from outside the reducer, list it under the rule's `ignoreStates` option
   = note: example.ts:16: starts at "cart"
   = note: example.ts:3: "review" is declared
   = docs: stateward explain reducers/state-unreachable
@@ -62,7 +65,7 @@ export function useCheckout() {
 }
 ```
 
-There is no quick fix: which event leads there is your design.
+There is no quick fix: which event leads there is your design. The message names three readings: an event that leads to the state, removing the state, and, when something outside the reducer sets it, listing it under `ignoreStates`.
 
 ## Why it matters
 

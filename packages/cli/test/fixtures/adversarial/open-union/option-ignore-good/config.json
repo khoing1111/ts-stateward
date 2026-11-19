@@ -1,0 +1,12 @@
+{
+  "rules": {
+    "unions/non-exhaustive-switch": [
+      "error",
+      {
+        "ignore": [
+          "OrderStatus"
+        ]
+      }
+    ]
+  }
+}

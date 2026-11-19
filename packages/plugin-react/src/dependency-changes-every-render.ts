@@ -56,7 +56,7 @@ The finding is at the dependency, where the cost shows; a note points at the pla
 - a function that uses nothing from its hook or component: move it to module scope, where it never changes (a quick fix, when it is a \`const\` or \`function\` in the body that calls no hook);
 - a fresh result of a plain function of yours (\`const columns = getColumns(prefix)\`): wrap the call in \`useMemo\` on its inputs (\`useMemo(() => getColumns(prefix), [prefix])\`); when an argument is itself new every render, the message says to make that argument stable first;
 - a function that uses only parameters of its hook, and that your code calls where it uses it: make those parameters of the function, and pass them at the call;
-- a function passed as an \`on…\` prop to a \`memo\` component: keep the latest handler in a ref (React's \`useEffectEvent\`, or your own hook, named when \`stableHooks\` lists it);
+- a function passed as an \`on…\` prop to a \`memo\` component: wrap it in \`useCallback\` where it is created, with what it reads as dependencies, or keep the latest handler in a ref with your own hook, named in \`stableHooks\` (not React's \`useEffectEvent\`: React does not allow passing it to other components);
 - any other function, object or array: wrap it in \`useCallback\` or \`useMemo\` where it is created.
 
 ## Why it matters

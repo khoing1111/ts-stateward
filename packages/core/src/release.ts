@@ -187,6 +187,8 @@ export function describeTraitSource(source: TraitSource): string {
       return `the config's facts for ${source.package}`;
     case "shipped":
       return `stateward's facts for ${source.package}`;
+    case "tag":
+      return `the JSDoc tag \`@${source.tag}\``;
     default: {
       const unreachable: never = source;
       return unreachable;

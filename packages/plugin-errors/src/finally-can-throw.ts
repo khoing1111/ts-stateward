@@ -30,7 +30,7 @@ export async function send(file: string, saved: string): Promise<void> {
 }
 \`\`\`
 
-Give the cleanup its own \`try\` / \`catch\`, or move it out of the \`finally\`:
+Give the cleanup its own \`try\` / \`catch\` inside the \`finally\`, so it still runs when the \`try\` fails (move it out of the \`finally\` only if it should run when the \`try\` succeeds):
 
 \`\`\`ts example-good
 declare function upload(file: string): Promise<void>;
@@ -150,10 +150,46 @@ function headline(cause: Cause): string {
   );
 }
 
-const HINT = withExample(
-  "catch it inside the `finally`, or move it out, so the original error is kept:",
-  ["finally {", "  try { cleanup(); } catch (e) { report(e); }", "}"],
-);
+/** The longest statement written out in an example. */
+const STATEMENT_MAX = 70;
+
+/**
+ * The fix: catch it inside the `finally` (the statement as written, when wrapping it keeps the
+ * code working), or move it out after the `try` statement. A `throw` has nothing to catch around.
+ */
+function hint(cause: Cause, ctx: FileContext): string {
+  const statement = ts.findAncestor(cause.node, ts.isStatement);
+  const text = statement?.getText(ctx.sourceFile) ?? "";
+  const wrappable =
+    cause.kind !== "throw" &&
+    statement !== undefined &&
+    ts.isExpressionStatement(statement) &&
+    !text.includes("\n") &&
+    text.length <= STATEMENT_MAX;
+  const out =
+    "- or, if it should run only when the `try` succeeds, move it out of the `finally`, after the `try` statement";
+  const cannot =
+    "- or, if it cannot throw here, state it with `// stateward-ignore errors/finally-can-throw: <why>`";
+  if (cause.kind === "throw") {
+    return [
+      "one of",
+      "- move the `throw` out of the `finally`, after the `try` statement: it then happens only when the `try` succeeds, and the original error is kept",
+      "- or, if the `throw` should replace the original error, state it with `// stateward-ignore errors/finally-can-throw: <why>`",
+    ].join("\n");
+  }
+  return [
+    "one of",
+    wrappable
+      ? withExample("- catch it inside the `finally`, so the original error is kept", [
+          "finally {",
+          `  try { ${text} } catch (e) { … }`,
+          "}",
+        ])
+      : "- catch it inside the `finally`, around the call that can throw, so the original error is kept",
+    out,
+    cannot,
+  ].join("\n");
+}
 
 /** `shown` holds what is already reported: a `finally` inside a `finally` is looked at twice. */
 function checkFinally(block: ts.Block, shown: Set<ts.Node>, ctx: FileContext): void {
@@ -165,7 +201,12 @@ function checkFinally(block: ts.Block, shown: Set<ts.Node>, ctx: FileContext): v
   });
   if (found === undefined || shown.has(found.node)) return;
   shown.add(found.node);
-  ctx.report({ node: found.node, message: headline(found), hint: HINT, findingKind: found.kind });
+  ctx.report({
+    node: found.node,
+    message: headline(found),
+    hint: hint(found, ctx),
+    findingKind: found.kind,
+  });
 }
 
 export const finallyCanThrow = defineRule({

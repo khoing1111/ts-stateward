@@ -1,7 +1,7 @@
 import { defineRule, option } from "@stateward/core";
 import { checkSummaries } from "./check.js";
 import type { EntryPoint } from "./options.js";
-import { sharedSummary } from "./extract.js";
+import { requiredSummary } from "./extract.js";
 import type { Summary } from "./summary.js";
 
 /** The rule's id, as the editor's hover asks for its summaries. */
@@ -70,6 +70,7 @@ A render the rule cannot follow is listed as not checked (an info), with what wo
 - A component picked at run time (\`const Panel = panels[tab]\`): turn on the \`react-context/dynamic-components\` add-on, or pick it from a \`const\` object by a key with a fixed set of values. A component picked from a \`let\`, a parameter or a key typed \`string\`, or one given \`children\`, props or a function, stays not checked.
 - A class component of the project (\`<ErrorBoundary>\`): render the components that read contexts inside it as function components.
 - JSX passed to a call (\`toast(<Profile/>)\`), stored, or returned from a function that is not a component.
+- A component given to a slot its component hands on instead of rendering in JSX (\`<Wrap><Profile/></Wrap>\` with \`wrap(children)\` in \`Wrap\`): \`Profile\` is "rendered through \`wrap(…)\`, which cannot be followed", not "no entry point renders it".
 - Nested React Router routes, when the \`react-context/react-router\` add-on is off: one finding per router.
 - A context declared in a package outside the checked files.
 - A component that reads a required context but that nothing renders, and an app with no \`createRoot\` call: list the entry point in \`entries\` (below).
@@ -112,6 +113,21 @@ const ThemeContext = requiredContext<Theme>(); // a RequiredContext<Theme>, from
 - Every component that reads it, with \`useContext\`, \`use\` or \`<ThemeContext.Consumer>\`, must be rendered under its Provider, whether or not it checks the value.
 - A place the rule cannot follow is an error with the path to it, never "not checked".
 - Each error names the declaration that states it.
+- Every reference to the context is read, or listed as "not checked" at its place in \`stateward guarantees\`: a reader in a component or hook the rule follows, and a Provider, are read; another name for the context (\`const C = ThemeContext\`), the context passed to any other call (\`makeHook(ThemeContext)\`) or kept in a literal, and a class's \`static contextType\` are not checked.
+
+\`requiredContext\` is a helper you add once, in \`guarantees.ts\` (the quick fix writes the file, or adds the helper to the one you have). Its code:
+
+\`\`\`ts example-good file=guarantees.ts
+import { createContext, type Context } from "react";
+
+export type RequiredContext<T> = Context<T> & { readonly "__guarantee:required-context"?: true };
+
+/** Creates a \\\`RequiredContext\\\`: it has no default, since no reader can run without a Provider. */
+export function requiredContext<T>(): RequiredContext<T> {
+  // The one cast: the default is never read, because every reader is under a Provider.
+  return createContext<T>(undefined as never);
+}
+\`\`\`
 
 The quick fix on a context the rule infers as required (also offered on its declaration in the editor) writes \`guarantees.ts\` the first time, imports it, and rewrites \`createContext<User | undefined>(undefined)\` to \`requiredContext<User>()\`. Once every reader is proven, a second quick fix removes the hook's run-time check, reported as an info. \`check --fix\` applies neither: stating a guarantee is a decision for the developer. Tests are left out of the proof, so a test that renders a reader must render it inside its Provider. The guarantees guide, \`docs/user/guarantees.md\`, has the full example.
 
@@ -148,12 +164,13 @@ export function createProviderMissing(entries: readonly EntryPoint[]) {
       defaultSeverity: "error",
       tier: "core",
       group: "providers",
+      proves: { traits: ["required-context"], made: ["required-context"] },
       needsTypes: { library: "React", modules: ["react"] },
       widenedBy: ["react-router", "dynamic-components"],
       options: OPTIONS,
       explain: EXPLAIN,
     },
-    summarize: sharedSummary,
+    summarize: requiredSummary,
     check: (summaries, ctx) => {
       checkSummaries(summaries, entries, ctx, ctx.options.ignore);
     },

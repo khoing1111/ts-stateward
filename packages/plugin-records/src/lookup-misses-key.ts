@@ -47,7 +47,17 @@ The message names the missing entries (the first 3, then a count). The fix line 
 | one known key (\`HttpCode.Ok\`) on a table with no fixed keys | real keys for the table, or \`?.\` or \`??\` for a missing entry |
 | the table comes from a cast (\`(value as Record<string, T>)[key]\`) | a type where the value is made, or \`??\` |
 
-There is no quick fix: the values are the code's own. A read with a fallback (\`labels[status] ?? "Unknown"\`) is not reported; for a table partial on purpose, \`as const satisfies Partial<Record<Status, V>>\` states it.
+There is no quick fix: the values are the code's own. A read with a fallback (\`labels[status] ?? "Unknown"\`) is not reported; for a table partial on purpose, annotate it with \`Partial<Record<Status, V>>\` (an annotation, so that \`labels[status] ?? …\` type-checks; \`as const satisfies Partial<…>\` keeps the literal type, and reading it with a \`Status\` key then fails to compile):
+
+\`\`\`ts example-good file=partial.ts
+type Status = "idle" | "failed";
+
+const labels: Partial<Record<Status, string>> = { idle: "Idle" };
+
+export function title(status: Status): string {
+  return labels[status] ?? "Unknown";
+}
+\`\`\`
 
 ## Why it matters
 
@@ -66,7 +76,7 @@ There is no quick fix: the values are the code's own. A read with a fallback (\`
 
 ## Turn it on or off
 
-Turn it off only in code where a missing key is normal and handled in a way the rule cannot see:
+A table that is missing entries on purpose says so in its type: \`Partial<Record<Status, V>>\`, read as \`labels[status] ?? fallback\`. Turn the rule off only where a missing key is normal and handled in a way the rule cannot see:
 
 \`\`\`ts
 rules: { "records/lookup-misses-key": "off" } // or "warning"
@@ -210,17 +220,53 @@ function indexedHeadline(access: string): string {
   return fitted((cut) => `\`${cut(access)}\` can be missing, but its type says it never is`);
 }
 
-function indexedHint(map: string, key: string, declared: DeclaredKeyType | undefined): string {
-  if (declared === undefined) {
-    return fitted(
-      (cut) =>
-        `give \`${cut(map)}\` its real keys, or type \`${cut(key)}\` so a missing key is handled`,
-    );
-  }
-  return fitted(
+/** Where the table is declared: a variable or property (`as const satisfies` fits), or elsewhere. */
+type TableKind = "variable" | "parameter" | "other";
+
+/** The value type shown in a fix: the read's own type, or `…` when it is too long to quote. */
+function valueShown(value: string): string {
+  return value.length > INSERTED_MAX ? "…" : value;
+}
+
+/**
+ * The ways to make a missing key visible (M22), in what the code can say: the table is checked
+ * against the keys' type (`as const satisfies` on a variable, the type itself on a parameter), or
+ * it is partial on purpose and each read has a fallback (`Partial<Record<…>>` and `??`).
+ */
+function indexedHint(
+  map: string,
+  key: string,
+  declared: DeclaredKeyType | undefined,
+  kind: TableKind,
+  value: string,
+): string {
+  const keys = declared?.name ?? "…";
+  const shownValue = valueShown(value);
+  const partialKeys = declared?.name ?? "string";
+  const fixed = fitted((cut) => {
+    if (kind === "variable") {
+      return declared === undefined
+        ? `- name the keys \`${cut(map)}\` has in a union type, and declare it \`as const satisfies Record<…, ${shownValue}>\`, so a missing entry fails to compile`
+        : `- declare \`${cut(map)}\` with \`as const satisfies Record<${cut(keys)}, ${shownValue}>\`, so a missing entry fails to compile`;
+    }
+    return declared === undefined
+      ? `- name the keys \`${cut(map)}\` has in a union type, and type it \`Record<…, ${shownValue}>\`, so a caller must give every entry`
+      : `- type \`${cut(map)}\` as \`Record<${cut(keys)}, ${shownValue}>\`, so a caller must give every entry`;
+  });
+  const partial = fitted(
     (cut) =>
-      `declare \`${cut(map)}\` with \`as const satisfies Record<${cut(declared.name)}, …>\`, or type \`${cut(key)}\` so a missing key is handled`,
+      `- or, if some entries are missing on purpose, type it \`Partial<Record<${cut(partialKeys)}, ${shownValue}>>\` and read it with \`${cut(map)}[${cut(key)}] ?? …\``,
   );
+  return ["one of", fixed, partial].join("\n");
+}
+
+/** Whether the table is a variable or property, a parameter, or something else (a call, a field of a value). */
+function tableKind(table: ts.Expression, ctx: FileContext): TableKind {
+  const symbol = ctx.types.symbolAt(stripParentheses(table));
+  const node = symbol === undefined ? undefined : ctx.types.declarationOf(symbol)?.node;
+  if (node === undefined) return "other";
+  if (ts.isParameter(node)) return "parameter";
+  return ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node) ? "variable" : "other";
 }
 
 /**
@@ -537,7 +583,13 @@ function checkAccess(
       hint:
         keys.length === 1 && only !== undefined
           ? registryHint(map, only.label)
-          : indexedHint(map, key, declared),
+          : indexedHint(
+              map,
+              key,
+              declared,
+              tableKind(node.expression, ctx),
+              ctx.types.typeTextOf(node),
+            ),
       related: declared === undefined ? [] : [keyTypeNote(map, declared)],
     });
     return;

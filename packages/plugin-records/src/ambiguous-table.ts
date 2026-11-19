@@ -65,8 +65,10 @@ The suggestion follows what the code shows:
 | reads use a key type declared apart from the table (\`status: Status\`) | \`as const satisfies Record<Status, V>\`, with a note where \`Status\` is declared |
 | every read with that type has a fallback (\`labels[status] ?? "Other"\`) | \`as const satisfies Partial<Record<Status, V>>\` |
 | no declared key type: the object defines the keys | \`as const\` alone |
-| some read uses a wider key (a \`string\`) and does not handle a miss | \`Partial<Record<string, V>>\`, a \`Map\`, \`Object.create(null)\` (no inherited keys such as \`"toString"\`), or \`isKeyOf\` before reading |
+| some read uses a wider key (a \`string\`) and does not handle a miss | \`Partial<Record<string, V>>\`, a \`Map\`, or \`Object.hasOwn\` before reading |
 | reads look keys up again from \`Object.keys(labels)\` | \`Object.entries(labels)\` |
+
+A \`Map\` of literal pairs is reported as a question: its \`get\` already returns \`undefined\` for a missing key, so the message offers both readings, an object \`{ … } as const satisfies Record<…>\` when the keys are fixed, and keeping the Map (list its name under \`ignore\`) when they come from outside. The object form needs a union \`K\` of the keys (the message shows it, from the Map's entries) and the keys that read it typed \`K\`: a read with a \`string\` key does not compile against it. The question is an info (kind \`map\`); \`severities: { map: "warning" }\` raises it, \`"off"\` is silent.
 
 A type derived from the object (\`keyof typeof labels\`) never gets the \`satisfies\` suggestion: there is no separate union to check against. The editor offers a quick fix for the fixed table ("Use satisfies: the keys are fixed", or "Use as const: the object defines the keys") when every read uses a key the table has, and "Use Partial<Record<string, …>>: keys come from outside" for a table no other file reads. Each is offered only when the code still compiles after it.
 
@@ -75,6 +77,7 @@ A type derived from the object (\`keyof typeof labels\`) never gets the \`satisf
 \`\`\`ts
 rules: { "records/ambiguous-table": "off" } // or "warning"
 rules: { "records/ambiguous-table": ["error", { ignore: ["*_MESSAGES"] }] } // keep some names open
+rules: { "records/ambiguous-table": ["error", { severities: { map: "warning" } }] } // a Map of literal pairs asks as a warning
 \`\`\`
 
 This rule was called \`records/table-type-too-loose\` before 1.2; the old id still works, with a warning.
@@ -129,6 +132,7 @@ function projectOf(summaries: ReadonlyMap<string, FileSummary>): Project {
         keys: [...new Set([...(sum?.keys ?? []), ...use.keys])],
         handledWide: (sum?.handledWide ?? false) || use.handledWide,
         unhandledWide: (sum?.unhandledWide ?? false) || use.unhandledWide,
+        wideKeys: [...new Set([...(sum?.wideKeys ?? []), ...use.wideKeys])],
         keyTypes: mergedKeyTypes(sum?.keyTypes ?? [], use.keyTypes),
       });
     }
@@ -387,7 +391,12 @@ function fixedOf(candidate: Candidate, use: UseSummary | undefined): Fixed {
  * The hint as M22 lists it: `one of`, then a line per way to fix. Its parts are cut in turn while
  * a line is longer than a fix line may be: the key type, the value (never the name).
  */
-function hintOf(candidate: Candidate, advice: Advice, fixed: Fixed): string {
+function hintOf(
+  candidate: Candidate,
+  advice: Advice,
+  fixed: Fixed,
+  wideKey: string | undefined,
+): string {
   const keysText = fixed.kind === "as-const" ? "" : keyTypeName(candidate, fixed.type);
   const build = (keys: string, name: string, value: string): string => {
     const open = `\`Partial<Record<${candidate.keyKind}, ${value}>>\``;
@@ -414,9 +423,12 @@ function hintOf(candidate: Candidate, advice: Advice, fixed: Fixed): string {
           return [
             `type it ${open}, so each read handles a missing key`,
             "or use a `Map`, whose `get` returns `undefined` for a missing key",
-            "or build it with `Object.create(null)`, so it has no inherited keys such as `toString`",
-            `or check the key with \`isKeyOf(${name}, key)\` before reading`,
-            `or, for fixed keys, look keys up as \`${fixed.kind === "as-const" ? `keyof typeof ${name}` : keys}\`, then ${fixedShort}`,
+            // Written in the developer's names; the rule reads `Object.hasOwn` and `in` as the check.
+            wideKey === undefined
+              ? `or read it only where \`Object.hasOwn\` of \`${name}\` and the key is true (needs the ES2022 \`lib\`)`
+              : `or read it only where \`Object.hasOwn(${name}, ${wideKey})\` is true (needs the ES2022 \`lib\`)`,
+            // The type is changed first: a key type taken from the object needs the object's own type.
+            `or, for fixed keys, ${fixedShort}, then look keys up as \`${fixed.kind === "as-const" ? `keyof typeof ${name}` : keys}\``,
           ];
         case "use-entries":
           return [
@@ -474,14 +486,21 @@ function recordMessage(
   candidate: Candidate,
   advice: Advice,
   fixed: Fixed,
+  wideKey: string | undefined,
 ): { message: string; hint: string } {
-  return { message: headlineOf(candidate), hint: hintOf(candidate, advice, fixed) };
+  return { message: headlineOf(candidate), hint: hintOf(candidate, advice, fixed, wideKey) };
 }
 
 function mapMessage(candidate: Candidate): { message: string; hint: string } {
+  const keys = candidate.labels.slice(0, 3).join(" | ");
+  const union = candidate.labels.length > 3 ? `${keys} | …` : keys;
   return {
-    message: `\`${shorten(candidate.name)}\` is a Map whose keys are fixed and never change`,
-    hint: "use an object `{ … } satisfies Record<…>`, so a missing key fails to compile",
+    message: `\`${shorten(candidate.name)}\` is a Map of literal pairs that no code changes`,
+    hint: [
+      "one of",
+      `- if its keys are fixed, write it as an object \`{ … } as const satisfies Record<K, ${candidate.valueText === "" ? "V" : shorten(candidate.valueText, 30)}>\` with \`K\` the union of its keys (\`${union}\`), and type the keys that read it \`K\``,
+      `- or, if its keys come from outside, keep the Map, whose \`get\` returns \`undefined\` for a missing key, and list \`${shorten(candidate.name)}\` under the rule's \`ignore\` option`,
+    ].join("\n"),
   };
 }
 
@@ -502,6 +521,14 @@ export const ambiguousTable = defineRule({
         description:
           "Variable names (globs like *_MESSAGES) that may stay typed as open-ended records.",
       }),
+      severities: option.severities({
+        kinds: {
+          record:
+            "a table typed `Record<string, V>` whose keys the code shows to be fixed or from outside",
+          map: "a Map of literal pairs that no code changes: a question, since its `get` already handles a missing key (info unless set here)",
+        },
+        description: "A severity per kind of finding.",
+      }),
     },
     explain: EXPLAIN,
   },
@@ -519,11 +546,15 @@ export const ambiguousTable = defineRule({
         const fixed = fixedOf(candidate, use);
         const { message, hint } =
           candidate.kind === "record"
-            ? recordMessage(candidate, adviceFor(candidate, use), fixed)
+            ? recordMessage(candidate, adviceFor(candidate, use), fixed, use?.wideKeys[0])
             : mapMessage(candidate);
         ctx.report({
           message,
           hint,
+          // A Map answers a missing key itself: asking which reading is meant is an info.
+          ...(candidate.kind === "record"
+            ? { findingKind: "record" }
+            : { findingKind: "map", severity: "info" as const }),
           location: { file, start: candidate.start, end: candidate.end },
           related: [
             {

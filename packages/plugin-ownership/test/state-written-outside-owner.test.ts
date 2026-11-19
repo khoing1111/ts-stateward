@@ -1,15 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { checkFixture } from "@stateward/core/testing";
-import { parseConfig, type RuleConfig } from "@stateward/core";
+import { parseConfig, type Finding, type RuleConfig } from "@stateward/core";
 import { ownership } from "../src/index.js";
 import { check, fixture, shown, type Shown } from "./helpers.js";
 
 /** The fix line of a change outside the owner: the read-only view first, `Owned` second. */
-function hintFor(owner: string, example: string): string {
+function hintFor(owner: string, example: string, writer: string): string {
   return [
     "one of",
     `- add a function in \`${owner}\` that makes the change (e.g. \`${example}\`), call it, and export the value read-only (\`readonly\` at every level)`,
     `- or state it \`Owned\`, so stateward proves that only \`${owner}\` changes it`,
+    "- or, if these files share it on purpose, list them under the rule's `owners` option:",
+    `    { owners: { ${JSON.stringify(owner)}: [${JSON.stringify(writer)}] } }`,
   ].join("\n");
 }
 
@@ -34,7 +36,7 @@ function change(
     file,
     at,
     message: `\`${name}\` is changed outside its module, \`${owner}\``,
-    hint: hintFor(owner, example),
+    hint: hintFor(owner, example, file),
     notes: [...through, `${declared}: \`${name}\` is declared in \`${owner}\`, which owns it`],
   };
 }
@@ -144,7 +146,7 @@ describe("ownership/state-written-outside-owner option `owners`", () => {
         file: "other.ts",
         at: "store.user.name",
         message: "`store` is changed outside its module, `store.ts`",
-        hint: hintFor("store.ts", 'setName("Grace")'),
+        hint: hintFor("store.ts", 'setName("Grace")', "other.ts"),
         notes: ["store: `store` is declared in `store.ts`, which owns it"],
       },
     ]);
@@ -200,5 +202,65 @@ describe("ownership/state-written-outside-owner options `ignore` and `severities
         ],
       }),
     ).toEqual([]);
+  });
+});
+
+/** The record the hint shows for `owners`, read back as the option's value. */
+function ownersShown(hint: string): Record<string, string[]> {
+  const lines = hint.split("\n");
+  const at = lines.findIndex((line) => line.includes("`owners` option"));
+  const joined = lines
+    .slice(at + 1)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  // Three forms: `{ owners: { … } }`, `owners: { … }`, or the entry alone, `"file": [ … ],`.
+  const record = joined.startsWith("{ owners: ")
+    ? joined.slice("{ owners: ".length, -" }".length)
+    : joined.startsWith("owners: ")
+      ? joined.slice("owners: ".length)
+      : `{ ${joined} }`;
+  const value: unknown = JSON.parse(record.replace(/,\s*([\]}])/g, "$1"));
+  if (typeof value !== "object" || value === null) throw new Error("the hint shows a record");
+  return Object.fromEntries(
+    Object.entries(value).map(([key, list]) => {
+      if (!Array.isArray(list) || !list.every((one) => typeof one === "string")) {
+        throw new Error("a list of paths");
+      }
+      return [key, list];
+    }),
+  );
+}
+
+const KEY = (one: Finding): string =>
+  `${one.location.file}:${String(one.location.start)}:${one.message}`;
+const OWNERS_RULE = "ownership/state-written-outside-owner";
+
+describe("ownership/state-written-outside-owner: the `owners` reading, written out", () => {
+  it("shows the declaring file and the writing file, as the option takes them, and is silent when written so", () => {
+    const findings = check(FLAGGED);
+    expect(findings[0]?.hint.split("\n").slice(-2)).toEqual([
+      "- or, if these files share it on purpose, list them under the rule's `owners` option:",
+      '    { owners: { "settings.ts": ["assign.ts"] } }',
+    ]);
+    for (const finding of findings) {
+      const owners = ownersShown(finding.hint);
+      const after = check(FLAGGED, { [OWNERS_RULE]: ["error", { owners }] });
+      expect(after.length).toBeLessThan(findings.length);
+      expect(after.map(KEY)).not.toContain(KEY(finding));
+    }
+  });
+
+  it("is written over lines when the paths are long, and is still silent", () => {
+    const dir = fixture("state-written-outside-owner/long-paths");
+    const [finding] = check(dir);
+    expect((finding?.hint ?? "").split("\n").slice(-4)).toEqual([
+      "- or, if these files share it on purpose, list them under the rule's `owners` option, as an entry:",
+      '    "src/features/account-settings/state/account-settings-store.ts": [',
+      '      "src/features/account-settings/components/account-settings-toolbar.ts",',
+      "    ],",
+    ]);
+    const owners = ownersShown(finding?.hint ?? "");
+    expect(check(dir, { [OWNERS_RULE]: ["error", { owners }] })).toEqual([]);
   });
 });

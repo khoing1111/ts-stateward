@@ -1,4 +1,5 @@
 import { definePlugin, lazyRule, moduleLoader } from "@stateward/core";
+import { guarantees } from "./latest-wins-guarantee.js";
 import { RULES } from "./rules.meta.js";
 
 /** Each rule's module, imported the first time the rule is on. */
@@ -66,5 +67,6 @@ export function react() {
         (module) => module.indexKeyOnReorderedList,
       ),
     },
+    editor: { guarantees },
   });
 }

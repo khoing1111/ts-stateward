@@ -198,7 +198,7 @@ export async function send(file: string, saved: string): Promise<void> {
 error[errors/finally-can-throw]: a throw in `finally` replaces the original error: `JSON.parse(…)` can throw
 ```
 
-Fix: give the cleanup its own `try` / `catch`, or move it out of the `finally`.
+Fix: give the cleanup its own `try` / `catch` inside the `finally`, so it still runs when the `try` fails (move it out of the `finally` only if it should run when the `try` succeeds).
 
 Core rule: error under `recommended` and `strict`. Group: `errors/catch`.
 

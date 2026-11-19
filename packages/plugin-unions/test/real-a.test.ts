@@ -27,15 +27,15 @@ describe("real-a: the shapes a real project has", () => {
     expect(
       found().map((finding) => `${path.basename(finding.location.file)}: ${finding.message}`),
     ).toEqual([
-      'computed.ts: `switch` on `getAlertMode()` does not handle "banner" and "sound"',
-      'helper.ts: `switch` on `step` does not handle "done" and "review"',
-      'hook.ts: `switch` on `selectedNode.type` does not handle "image" and "text"',
-      'keyword.ts: `switch` on `type` does not handle "date" and "number"',
-      'many.ts: `switch` on `name` does not handle "blur", "drag", "focus" and 3 more',
-      'many.ts: `switch` on `name` does not handle "blur", "drag", "focus" and 3 more',
-      'many.ts: `switch` on `name` does not handle "blur", "drag", "focus", "resize" and "scroll"',
-      'nullish.ts: `switch` on `name` does not handle undefined, null, "blur" and 5 more',
-      'objects.ts: `switch` on `shape.kind` does not handle "line"',
+      'computed.ts: the `default` of the `switch` on `getAlertMode()` takes "banner" and "sound", which no `case` names',
+      'helper.ts: the `default` of the `switch` on `step` takes "done" and "review", which no `case` names',
+      'hook.ts: the `default` of the `switch` on `selectedNode.type` takes "image" and "text", which no `case` names',
+      'keyword.ts: the `default` of the `switch` on `type` takes "date" and "number", which no `case` names',
+      'many.ts: the `default` of the `switch` on `name` takes "blur", "drag", "focus" and 3 more, which no `case` names',
+      'many.ts: the `default` of the `switch` on `name` takes "blur", "drag", "focus" and 3 more, which no `case` names',
+      'many.ts: the `default` of the `switch` on `name` takes "blur", "drag", "focus", "resize" and "scroll", which no `case` names',
+      'nullish.ts: the `default` of the `switch` on `name` takes undefined, null, "blur" and 5 more, which no `case` names',
+      'objects.ts: the `default` of the `switch` on `shape.kind` takes "line", which no `case` names',
     ]);
   });
 
@@ -72,6 +72,8 @@ describe("real-a: the shapes a real project has", () => {
       inFile(found(["error", { projectTypesOnly: false }]), "library.ts").map(
         (finding) => finding.message,
       ),
-    ).toEqual(['`switch` on `rule` does not handle "few", "many", "other", "two" and "zero"']);
+    ).toEqual([
+      'the `default` of the `switch` on `rule` takes "few", "many", "other", "two" and "zero", which no `case` names',
+    ]);
   });
 });

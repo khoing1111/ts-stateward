@@ -82,6 +82,8 @@ export type UseSummary = {
   handledWide: boolean;
   /** Some read with a wider key does not handle a missing entry. */
   unhandledWide: boolean;
+  /** The wide keys, as written, of reads that do not handle a missing entry (`status`), first found first. */
+  wideKeys: string[];
   /** The named unions reads look the variable up with, sorted by name and file. */
   keyTypes: KeyType[];
 };
@@ -120,6 +122,7 @@ function emptyUse(id: string): UseSummary {
     keys: [],
     handledWide: false,
     unhandledWide: false,
+    wideKeys: [],
     keyTypes: [],
   };
 }
@@ -189,6 +192,9 @@ function addUse(collector: Collector, id: string, use: Use): void {
       sum.selfKeyed ||= use.selfKeyed;
       if (use.keys === null && use.handled === true) sum.handledWide = true;
       else if (use.keys === null) sum.unhandledWide = true;
+      if (use.keys === null && use.handled !== true && use.key !== undefined) {
+        if (!sum.wideKeys.includes(use.key)) sum.wideKeys.push(use.key);
+      }
       if (use.keys === null) sum.unknownKey = true;
       else for (const key of use.keys) if (!sum.keys.includes(key)) sum.keys.push(key);
       return;

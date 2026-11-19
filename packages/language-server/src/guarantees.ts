@@ -52,8 +52,11 @@ function filesOf(proofs: readonly GuaranteeProof[]): Set<string> {
   for (const { stated, status } of proofs) {
     files.add(stated.location.file);
     for (const place of stated.covered) files.add(place.location.file);
+    if (status.kind === "unchecked") {
+      for (const one of status.places) files.add(one.location.file);
+    }
     if (status.kind !== "unproven") continue;
-    for (const error of status.errors) {
+    for (const error of [...status.errors, ...status.ignored.map(({ finding }) => finding)]) {
       files.add(error.location.file);
       for (const note of error.related) files.add(note.location.file);
     }
@@ -116,6 +119,14 @@ function errorsOf(proof: GuaranteeProof): readonly Problem[] {
   return proof.status.kind === "unproven" ? proof.status.errors : [];
 }
 
+function ignoredOf(proof: GuaranteeProof): readonly { finding: Problem; reason: string }[] {
+  return proof.status.kind === "unproven" ? proof.status.ignored : [];
+}
+
+function uncheckedOf(proof: GuaranteeProof): readonly { location: Location; reason: string }[] {
+  return proof.status.kind === "unchecked" ? proof.status.places : [];
+}
+
 /**
  * The hover on a marked declaration: "Guaranteed: <what>; proven for N readers", or the first
  * error and its path when it is not proven; one part per trait the declaration states
@@ -171,8 +182,11 @@ function lensTitle(proof: GuaranteeProof): string {
   switch (status.kind) {
     case "proven":
       return `${counted(count, stated.covers)} proven · show`;
-    case "unproven":
-      return `${String(status.errors.length)} not proven · ${counted(count, stated.covers)} · show`;
+    case "unproven": {
+      const hidden = status.ignored.length > 0 ? ` (${String(status.ignored.length)} ignored)` : "";
+      return `${String(status.errors.length + status.ignored.length)} not proven${hidden} · ${counted(count, stated.covers)} · show`;
+    }
+    case "unchecked":
     case "unused":
     case "off":
       return describeStatus(proof);
@@ -203,6 +217,14 @@ export function guaranteeLenses(view: ProofView, file: string, text: string): Co
       ...errorsOf(proof).map((error) =>
         place(index, error.location, `not proven: ${error.message}`),
       ),
+      ...ignoredOf(proof).map(({ finding, reason }) =>
+        place(
+          index,
+          finding.location,
+          `not proven, ignored${reason === "" ? "" : ` (${reason})`}: ${finding.message}`,
+        ),
+      ),
+      ...uncheckedOf(proof).map((one) => place(index, one.location, `not checked: ${one.reason}`)),
       ...stated.covered.map((covered) => place(index, covered.location, covered.name)),
     ];
     const argument: PlaceList = { title: `${stated.name}: ${describeStatus(proof)}`, places };

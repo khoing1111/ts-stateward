@@ -194,7 +194,7 @@ export function Todos({ initial }: { initial: Todo[] }) {
 ```
 
 ```text
-warning[react/index-key-on-reordered-list]: list keyed by index, but `todos` is filtered: a row's state can move to the wrong item
+warning[react/index-key-on-reordered-list]: list keyed by index, but `todos` is filtered: a row that keeps state can move it to another item
 ```
 
 Fix: key each row by something that belongs to the item and does not change.

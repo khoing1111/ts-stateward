@@ -28,7 +28,7 @@ error[react/effect-response-race]: `fetchUser(…)` takes an AbortSignal the eff
   |     ^^^^^^^^^^^^^^^^^
   = fix: create a controller in the effect, pass its signal to `fetchUser(…)`, and abort it in the cleanup:
         const controller = new AbortController();
-        fetchUser(…, { signal: controller.signal })
+        fetchUser(userId, { signal: controller.signal })
         return () => controller.abort();
   = note: state is set from the answer
   = docs: stateward explain react/effect-response-race
@@ -52,7 +52,9 @@ export function Profile({ userId }: { userId: string }) {
 }
 ```
 
-A flag that the cleanup sets, checked before each write, is proven too (the React docs' pattern): `let ignore = false;`, `if (!ignore) setName(…)`, `return () => { ignore = true; };`. It drops the late answer but lets the request run to the end.
+The abort rejects the request, so a `catch` of it runs on every change and on unmount: it ignores the abort first with `if (e instanceof DOMException && e.name === "AbortError") return;` (the quick fix writes that line when the `catch` is in the effect and its function returns nothing).
+
+A flag that the cleanup sets, checked before each write, is proven too (the React docs' pattern): `let ignore = false;`, `if (!ignore) setName(…)`, `return () => { ignore = true; };`. It drops the late answer but lets the request run to the end. Only a check after the last `await` before the write counts: `if (ignore) return;` before `await load()` runs when the request starts, not when it answers.
 
 ## Why it matters
 
@@ -60,7 +62,7 @@ The effect starts a request every time `userId` changes, and nothing stops the o
 
 ## What it does not catch
 
-A function whose parameters take an `AbortSignal`, directly or as `signal` in an options object (`fetch(url, { signal })`, axios's `signal`, your own `fetchUser(id, signal)`), says it can be cancelled. For every call to one in an effect whose answer sets state (after an `await`, in a `.then`, or through a function of the component that sets state), the rule proves that the call gets the signal of an `AbortController` the effect creates and aborts in its cleanup, or that every write checks a flag the cleanup sets. What it cannot prove is an error that names the missing step. A signal received by a function written in the effect (`async function load(signal)`) counts when every call of it passes the effect's signal. It is silent on:
+A function whose parameters take an `AbortSignal`, directly or as `signal` in an options object (`fetch(url, { signal })`, axios's `signal`, your own `fetchUser(id, signal)`), says it can be cancelled. For every call to one in an effect whose answer sets state (after an `await`, in a `.then`, or through a function of the component that sets state), the rule proves that the call gets the signal of an `AbortController` the effect creates and aborts in its cleanup on every path (an abort under an `if` is not proven), or that every write checks a flag the cleanup sets. A loader of the project is listed by `stateward guarantees` ("latest wins"), and each finding about a call to it stands against it. What it cannot prove is an error that names the missing step. A signal received by a function written in the effect (`async function load(signal)`) counts when every call of it passes the effect's signal. It is silent on:
 
 - an effect that runs once (an empty dependency list, or dependencies that keep their identity): no newer request can overtake it;
 - the calls of TanStack Query, SWR and RTK Query, which manage their own cancellation;

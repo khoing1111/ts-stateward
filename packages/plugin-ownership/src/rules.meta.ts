@@ -12,6 +12,7 @@ export const RULES = {
       defaultSeverity: "error",
       tier: "core",
       group: "owners",
+      proves: { traits: ["owned"] },
       options: {
         owners: {
           kind: "record",
@@ -49,6 +50,7 @@ export const RULES = {
       defaultSeverity: "error",
       tier: "core",
       group: "owners",
+      proves: { flows: { produced: ["opaque"] } },
       options: {
         owners: {
           kind: "record",
@@ -75,12 +77,13 @@ export const RULES = {
       defaultSeverity: "error",
       tier: "core",
       group: "owners",
+      proves: { traits: ["release"], returns: ["release"] },
       options: {
         ignore: {
           kind: "strings",
           default: [],
           description:
-            "Functions whose results are not checked, as the note names them (globs like `Observable.*`).",
+            "Functions whose results are not checked, as the note names them (globs like `Observable.*`); only for the facts stateward ships. A function the code states (a `Release` marker, a `Disposable` type, a `facts` line) is always checked: no setting silences a stated guarantee.",
         },
       },
     },

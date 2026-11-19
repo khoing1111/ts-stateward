@@ -22,7 +22,9 @@ error[errors/throws-doc-mismatch]: `@throws` of `loadUser` does not list `Syntax
   |
 4 | export function loadUser(text: string): { name: string } {
   |                 ^^^^^^^^
-  = fix: add it to the tag: `@throws {SyntaxError}`
+  = fix: one of
+      - catch it inside `loadUser`, if it escapes by mistake
+      - or add it to the tag, if callers are to handle it: `@throws {SyntaxError}`
   = note: example.ts:6: `JSON.parse(…)` can throw `SyntaxError`
   = docs: stateward explain errors/throws-doc-mismatch
 ```
@@ -49,10 +51,11 @@ The message links to the call that throws each missing class. There is no quick 
 
 - A listed class that comes from a call stateward cannot see into (a package, a callback, a dynamic call): it names the call. Remove the class from the tag if the function cannot throw it, or declare the package's errors under `facts` in the config (`facts: { "config-lib": { load: { throws: ["ConfigError"] } } }`).
 - A name in the tag that is not a class in scope: import the class, or use a name in scope.
+- A place it cannot follow in a function with a typed tag: a call through an alias (`const f = auth; f(text)`), a callback, a function with no body, an error made by a call (`throw makeError()`), a getter or setter that runs. It may throw a class the tag does not list, so it is listed as "not checked: the call `f(…)` cannot be followed" (the tag is never taken at its word). A tagged generator, and a `@throws` without a class, are "not checked" in `stateward guarantees`.
 
 ## What it does not catch
 
-It compares the tag with what the function can throw (its own `throw new X(…)`, the functions it calls, and the built-ins stateward knows) and reports a class in the tag that the function cannot throw (neither it nor a subclass), and a class it can throw that the tag does not cover. On a function that returns a promise, `@throws` means what the promise rejects with. It is silent on:
+It compares the tag with what the function can throw (its own `throw new X(…)`, an error kept in a `const` or built with `Object.assign(new X(), …)`, the functions it calls, also through `.call` and `.apply`, and the built-ins stateward knows) and reports a class in the tag that the function cannot throw (neither it nor a subclass), and a class it can throw that the tag does not cover. On a function that returns a promise, `@throws` means what the promise rejects with. It is silent on:
 
 - a function without `@throws`, or a tag without a type (`@throws when the id is empty`): that only says the function throws;
 - a class that a surrounding `try` may catch: only classes that surely escape are reported as missing;

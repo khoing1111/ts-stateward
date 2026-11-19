@@ -177,7 +177,10 @@ it cannot prove is an error, so state a guarantee only where the property holds.
     |
   4 |   cartStore.add(item);
     |   ^^^^^^^^^^^^^
-    = fix: add a function in `src/store.ts` that makes the change (e.g. `addCartStore(item)`), and call it instead
+    = fix: one of
+        - add a function in `src/store.ts` that makes the change (e.g. `addCartStore(item)`), and call it instead
+        - or, if these files share it on purpose, list them under the rule's `owners` option:
+              { owners: { "src/store.ts": ["src/a.ts"] } }
     = note: src/store.ts:6: `add` changes `this`
     = note: src/store.ts:13: `cartStore` is declared owned: only `src/store.ts` may change it
   ```

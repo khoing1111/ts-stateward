@@ -24,7 +24,11 @@ error[react-context/value-changed-by-reader]: `cart.items.push(…)` changes the
   |
 8 |   return <button onClick={() => cart.items.push(item)}>Add</button>;
   |                                 ^^^^^^^^^^^^^^^^^^^^^
-  = fix: call a function the `CartContext` Provider passes in the value to set its state: readers re-render only when the Provider passes a new value
+  = fix: one of
+      - add a function to the value that sets the Provider's state, and call it: readers re-render only when the Provider passes a new value
+      - or type it as a `ReadonlyArray` (`readonly T[]`), so TypeScript rejects the write
+      - or, if it is changed in place on purpose, list `CartContext` under the rule's `ignore` option:
+            { ignore: ["CartContext"] }
   = note: example.tsx:7: `useContext(CartContext)` reads the value
   = docs: stateward explain react-context/value-changed-by-reader
 ```

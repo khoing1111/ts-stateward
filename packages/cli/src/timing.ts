@@ -49,6 +49,7 @@ export function formatTiming(
     phaseLine("rules", ruleMs, total),
     phaseLine("  in type questions", run.typeMs, total, "the type checking the rules ask for"),
     phaseLine("fingerprints", run.fingerprintMs, total, "for the results cache"),
+    phaseLine("stated values", run.ledgerMs, total, "finding every use of each stated value"),
     phaseLine("other", run.otherMs, total, "syntax, imports, ignores, sorting"),
     ...(fixTrialsMs === undefined
       ? []

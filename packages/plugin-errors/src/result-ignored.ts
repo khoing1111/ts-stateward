@@ -1,7 +1,7 @@
 import ts from "@stateward/core/typescript";
 import { defineRule, matchesName, option } from "@stateward/core";
 import type { FileContext, OptionsOf } from "@stateward/core";
-import { example, resultShapeOf, shorten, type ResultShape } from "./result-type.js";
+import { example, freeName, resultShapeOf, shorten, type ResultShape } from "./result-type.js";
 
 const EXPLAIN = `# errors/result-ignored
 
@@ -31,7 +31,7 @@ export async function rename(name: string): Promise<Result<void>> {
 }
 \`\`\`
 
-The message shows how, with your names and your Result's shape. There is no quick fix.
+The message shows how, with your names and your Result's shape: the check, and \`return\` of it only where the function returns that Result. If the drop is on purpose, it says so in the rule's options: \`allowVoid\` for \`void save()\`, \`ignore\` for a function that may always be dropped. There is no quick fix.
 
 ## Why it matters
 
@@ -107,14 +107,14 @@ function isVoided(expression: ts.Expression): boolean {
 }
 
 /** The line of the example that checks the result, in the Result's own shape. */
-function checkLine(shape: ResultShape): string {
+function checkLine(shape: ResultShape, name: string, returnsIt: boolean): string {
   switch (shape) {
     case "ok":
-      return "if (!saved.ok) return saved;";
+      return returnsIt ? `if (!${name}.ok) return ${name};` : `if (!${name}.ok) { … }`;
     case "success":
-      return "if (!saved.success) return saved;";
+      return returnsIt ? `if (!${name}.success) return ${name};` : `if (!${name}.success) { … }`;
     case "isErr":
-      return "if (saved.isErr()) return saved;";
+      return returnsIt ? `if (${name}.isErr()) return ${name};` : `if (${name}.isErr()) { … }`;
     case "named":
       return "// handle its failure here, or return it";
     default: {
@@ -122,6 +122,32 @@ function checkLine(shape: ResultShape): string {
       return unreachable;
     }
   }
+}
+
+/** `Result<void, E>` of `Promise<Result<void, E>>`: the type of what the call gives once awaited. */
+function awaitedText(text: string): string {
+  const match = /^(?:Promise|PromiseLike)<(.*)>$/.exec(text.trim());
+  return (match?.[1] ?? text).trim();
+}
+
+/**
+ * Whether returning the checked Result is valid code here: the function declares the type the
+ * call gives (once awaited), so the failed branch of it is what the function returns.
+ */
+function returnsSameResult(
+  call: ts.CallExpression,
+  fn: ts.SignatureDeclaration | undefined,
+  ctx: FileContext<Settings>,
+): boolean {
+  if (fn?.type === undefined) return false;
+  return awaitedText(ctx.types.typeTextOf(fn.type)) === awaitedText(ctx.types.typeTextOf(call));
+}
+
+/** Whether `await` is valid where the statement is: in an async function, or at a module's top. */
+function canAwait(fn: ts.SignatureDeclaration | undefined): boolean {
+  if (fn === undefined) return true;
+  const modifiers = ts.canHaveModifiers(fn) ? ts.getModifiers(fn) : undefined;
+  return modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) === true;
 }
 
 function checkStatement(statement: ts.ExpressionStatement, ctx: FileContext<Settings>): void {
@@ -139,14 +165,34 @@ function checkStatement(statement: ts.ExpressionStatement, ctx: FileContext<Sett
     whole.length > CALL_MAX
       ? `${shorten(call.expression.getText(ctx.sourceFile), CALL_MAX)}(…)`
       : whole;
+  const fn = ts.findAncestor(statement.parent, ts.isFunctionLike);
+  const name = freeName(fn ?? ctx.sourceFile, ctx.sourceFile, [
+    "saved",
+    "result",
+    "outcome",
+    "checked",
+  ]);
+  const returnsIt = returnsSameResult(call, fn, ctx);
+  const needsAsync = promised && !canAwait(fn);
+  const handled = returnsIt
+    ? "check it, and pass it on"
+    : "check it, and handle its failure (report it, recover, or pass it on from a function that returns a Result)";
+  const ways = [
+    `- ${handled}${needsAsync ? "; `await` needs the function to be `async`" : ""}`,
+    example([
+      `const ${name} = ${promised ? "await " : ""}${callText};`,
+      checkLine(shape, name, returnsIt),
+    ]),
+    isVoided(statement.expression)
+      ? "- or, if dropping it is on purpose, set the rule's `allowVoid` option to `true`: a `void` drop is then stated"
+      : "- or, if dropping it is on purpose, write `void` before the call and set the rule's `allowVoid` option to `true`",
+    `- or, if \`${callee}\` may always be dropped, list it under the rule's \`ignore\` option`,
+  ];
   ctx.report({
     node: statement,
     about: statement,
     message: `the \`Result\` of \`${calleeText(call, ctx)}(…)\` is dropped: its error is never handled`,
-    hint: [
-      "check it, or pass it on:",
-      example([`const saved = ${promised ? "await " : ""}${callText};`, checkLine(shape)]),
-    ].join("\n"),
+    hint: ["one of", ...ways].join("\n"),
   });
 }
 

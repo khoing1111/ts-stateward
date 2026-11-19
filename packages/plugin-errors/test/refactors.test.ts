@@ -50,6 +50,42 @@ describe("errors: handle the known errors here", () => {
     );
   });
 
+  it("writes the lines it adds and the old body indented, as the file is written", () => {
+    const { text, actions } = onCatch("refactor-indent.ts", 0);
+    const fixed = applied(
+      text,
+      actions.flatMap((action) => action.edits),
+    );
+    expect(fixed).toContain(
+      [
+        "    try {",
+        "      risky(1);",
+        "    } catch (e) {",
+        "      if (e instanceof AuthError || e instanceof ParseError) {",
+        '        show("failed");',
+        '        show("again");',
+        "      } else {",
+        "        throw e;",
+        "      }",
+        "    }",
+      ].join("\n"),
+    );
+    // The old output left the body where it was, with the new lines at the left margin.
+    expect(fixed).not.toContain("\nif (e instanceof");
+    expect(fixed).not.toContain("\n} else {\nthrow e;");
+  });
+
+  it("keeps the lines of a text that spans lines, indenting only what it adds", () => {
+    const { text, actions } = onCatch("refactor-indent.ts", 1);
+    const fixed = applied(
+      text,
+      actions.flatMap((action) => action.edits),
+    );
+    expect(fixed).toContain("    show(`failed\n  twice`);\n");
+    expect(fixed).toContain("    if (e instanceof AuthError || e instanceof ParseError) {");
+    expect(fixed).toContain("    } else {\n      throw e;\n    }\n  }\n}");
+  });
+
   it("is offered nowhere else: not on a chain, a rethrow, an unknown try, or no variable", () => {
     for (const occurrence of [1, 2, 3, 4]) {
       expect(onCatch("refactor.ts", occurrence).actions).toEqual([]);

@@ -1,6 +1,16 @@
 import ts from "@stateward/core/typescript";
 import { neverRejectsFactOf, type FileContext } from "@stateward/core";
-import { functionOfDeclaration, pathOf, scanRunning, stripParentheses } from "./syntax.js";
+import {
+  functionOfDeclaration,
+  isFunctionBoundary,
+  pathOf,
+  scanRunning,
+  stripParentheses,
+  type DeclaredFunction,
+} from "./syntax.js";
+
+/** How many `const` names for a function are followed to it (`const p = post`). */
+const ALIAS_DEPTH = 3;
 
 /**
  * Packages whose requests reject when they fail (a network error, or an error status), without
@@ -73,6 +83,20 @@ export function cannotRun(statement: ts.ThrowStatement, ctx: FileContext): boole
  */
 export type CanReject = (expression: ts.Expression) => boolean;
 
+/** `CanReject` that also says whether a call throws at once (`throwsCall`), for a function that must not throw. */
+export type Rejections = CanReject & { readonly throwsCall: (call: ts.CallExpression) => boolean };
+
+/** `JSON.parse(…)`: the platform's call that throws on bad input; the project's functions are read, a package's is not. */
+export function isJsonParse(call: ts.CallExpression): boolean {
+  const callee = stripParentheses(call.expression);
+  return (
+    ts.isPropertyAccessExpression(callee) &&
+    ts.isIdentifier(callee.expression) &&
+    callee.expression.text === "JSON" &&
+    callee.name.text === "parse"
+  );
+}
+
 /**
  * `unknownRejects`: what this file cannot tell (a package with no facts, a function received as a
  * value, a promise held in a variable, a project function deeper than it follows) counts as able
@@ -82,7 +106,7 @@ export type CanReject = (expression: ts.Expression) => boolean;
 export function rejectionsOf(
   ctx: FileContext,
   options: { readonly unknownRejects?: boolean } = {},
-): CanReject {
+): Rejections {
   const unknown = options.unknownRejects === true;
   const memo = new Map<ts.Node, boolean>();
   // A function being read when it is reached again (recursion): what it does is not known yet, so
@@ -230,6 +254,14 @@ export function rejectionsOf(
     const callee = stripParentheses(call.expression);
     if (ts.isPropertyAccessExpression(callee)) {
       const method = callee.name.text;
+      // `Promise.reject(…)` always rejects.
+      if (
+        ts.isIdentifier(callee.expression) &&
+        callee.expression.text === "Promise" &&
+        method === "reject"
+      ) {
+        return true;
+      }
       // `Promise.allSettled(…)` settles with every outcome in its value.
       if (
         ts.isIdentifier(callee.expression) &&
@@ -245,9 +277,13 @@ export function rejectionsOf(
         ["all", "race", "any"].includes(method)
       ) {
         const [list] = call.arguments;
-        if (list === undefined) return false;
+        // `Promise.any` rejects when every promise does, so always for none.
+        if (list === undefined) return method === "any";
         // A list built elsewhere (`Promise.all(receipts)`): its promises are not followed.
         if (!ts.isArrayLiteralExpression(list)) return unknown;
+        if (method === "any") {
+          return list.elements.every((element) => expressionRejects(element));
+        }
         return list.elements.some((element) => expressionRejects(element));
       }
       // `p.catch(handle)` handles `p`'s failure, unless `handle` throws or rejects itself.
@@ -266,16 +302,118 @@ export function rejectionsOf(
     const symbol = ctx.types.symbolAt(name);
     const declared = symbol === undefined ? undefined : ctx.types.declarationOf(symbol);
     if (declared === undefined) return unknown;
-    if (!ctx.types.isOwnFile(declared.file)) return packageRejects(call, declared);
-    const fn = functionOfDeclaration(declared.node);
+    if (!ctx.types.isOwnFile(declared.file)) {
+      // `post.call(null)`, `post.apply(null, [])`: the function itself runs.
+      const target =
+        ts.isPropertyAccessExpression(callee) &&
+        (callee.name.text === "call" || callee.name.text === "apply")
+          ? ownFunctionOf(callee.expression)
+          : undefined;
+      if (target !== undefined) {
+        return target === "unknown" || target.body === undefined
+          ? unknown
+          : bodyRejects(target.body);
+      }
+      return packageRejects(call, declared);
+    }
+    const fn = followedFunction(declared.node, 0);
     if (fn?.body === undefined) return unknown;
     return bodyRejects(fn.body);
+  };
+
+  /**
+   * The function a declaration holds: a function, a method, one bound to a name, or another `const`
+   * name for one (`const p = post`), followed a few times.
+   */
+  const followedFunction = (node: ts.Node, depth: number): DeclaredFunction | undefined => {
+    const fn = functionOfDeclaration(node);
+    if (fn !== undefined || depth >= ALIAS_DEPTH) return fn;
+    if (
+      !ts.isVariableDeclaration(node) ||
+      node.initializer === undefined ||
+      !ts.isVariableDeclarationList(node.parent) ||
+      (node.parent.flags & ts.NodeFlags.Const) === 0
+    ) {
+      return undefined;
+    }
+    const value = stripParentheses(node.initializer);
+    const name = ts.isPropertyAccessExpression(value) ? value.name : value;
+    if (!ts.isIdentifier(name)) return undefined;
+    const symbol = ctx.types.symbolAt(name);
+    const declared = symbol === undefined ? undefined : ctx.types.declarationOf(symbol);
+    return declared === undefined || !ctx.types.isOwnFile(declared.file)
+      ? undefined
+      : followedFunction(declared.node, depth + 1);
+  };
+
+  /** The project's function an expression names (`post`, `api.save`); "unknown" when it names another. */
+  const ownFunctionOf = (expression: ts.Expression): DeclaredFunction | "unknown" | undefined => {
+    const target = stripParentheses(expression);
+    const name = ts.isPropertyAccessExpression(target) ? target.name : target;
+    if (!ts.isIdentifier(name)) return "unknown";
+    const symbol = ctx.types.symbolAt(name);
+    const declared = symbol === undefined ? undefined : ctx.types.declarationOf(symbol);
+    if (declared === undefined || !ctx.types.isOwnFile(declared.file)) return "unknown";
+    return followedFunction(declared.node, 0) ?? "unknown";
+  };
+
+  /** `Promise` as the platform declares it, not a name of the project. */
+  const isPlatformPromise = (expression: ts.Expression): boolean => {
+    if (!ts.isIdentifier(expression) || expression.text !== "Promise") return false;
+    const symbol = ctx.types.symbolAt(expression);
+    const declared = symbol === undefined ? undefined : ctx.types.declarationOf(symbol);
+    return declared !== undefined && !ctx.types.isOwnFile(declared.file);
+  };
+
+  /**
+   * Whether `new Promise(executor)` can reject: the executor calls its `reject`, or throws while it
+   * runs (a `throw`, `JSON.parse(…)`, a function of the project that throws). An executor passed
+   * by name, or a `reject` handed on to other code, is not followed.
+   */
+  const executorRejects = (executor: ts.Expression | undefined): boolean => {
+    if (executor === undefined) return false;
+    const fn = stripParentheses(executor);
+    if (!ts.isArrowFunction(fn) && !ts.isFunctionExpression(fn)) return unknown;
+    const reject = fn.parameters[1];
+    const rejectId =
+      reject !== undefined && ts.isIdentifier(reject.name)
+        ? ctx.types.symbolAt(reject.name)?.id
+        : undefined;
+    // Set from the walks below: `reject` called while the executor runs, or handed on.
+    const found = { certain: false, handedOn: false };
+    const uses = (node: ts.Node, nested: boolean): void => {
+      if (
+        rejectId !== undefined &&
+        ts.isIdentifier(node) &&
+        node !== reject?.name &&
+        ctx.types.symbolAt(node)?.id === rejectId
+      ) {
+        const called = ts.isCallExpression(node.parent) && node.parent.expression === node;
+        if (called && !nested) found.certain = true;
+        else found.handedOn = true;
+      }
+      ts.forEachChild(node, (child) => {
+        uses(child, nested || (child !== fn.body && isFunctionBoundary(child)));
+      });
+    };
+    uses(fn.body, false);
+    scanRunning(fn.body, (node, guarded) => {
+      if (found.certain || guarded) return;
+      if (ts.isThrowStatement(node)) found.certain = !cannotRun(node, ctx);
+      else if (ts.isCallExpression(node) && (isJsonParse(node) || throwsSync(node))) {
+        found.certain = true;
+      }
+    });
+    return found.certain || (found.handedOn && unknown);
   };
 
   const expressionRejects = (expression: ts.Expression): boolean => {
     const inner = stripParentheses(expression);
     if (ts.isAwaitExpression(inner)) return expressionRejects(inner.expression);
     if (ts.isCallExpression(inner)) return callRejects(inner);
+    if (ts.isNewExpression(inner) && isPlatformPromise(inner.expression)) {
+      return executorRejects(inner.arguments?.[0]);
+    }
     // `await (query ? a() : b())`, `await (cached ?? load())`: either side can be what is awaited.
     if (ts.isConditionalExpression(inner)) {
       return expressionRejects(inner.whenTrue) || expressionRejects(inner.whenFalse);
@@ -300,5 +438,7 @@ export function rejectionsOf(
     );
   };
 
-  return (expression) => expressionRejects(expression);
+  return Object.assign((expression: ts.Expression) => expressionRejects(expression), {
+    throwsCall: throwsSync,
+  });
 }

@@ -1,0 +1,5 @@
+{
+  "rules": {
+    "unions/non-exhaustive-switch": "info"
+  }
+}

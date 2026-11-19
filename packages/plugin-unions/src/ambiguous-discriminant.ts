@@ -1,5 +1,7 @@
 import ts from "@stateward/core/typescript";
+import { openUnionImport } from "./guarantees-file.js";
 import { defineRule, matchesName, option, type FileContext } from "@stateward/core";
+import { OPEN_UNION } from "./open-union.js";
 import { fitted } from "./text.js";
 
 const EXPLAIN = `# unions/ambiguous-discriminant
@@ -47,12 +49,30 @@ export function parseOtherKind(kind: string): OtherKind | undefined {
 
 The tag makes TypeScript narrow: after \`message.kind === "chat"\`, \`message.text\` is known. The brand keeps the guarantee that \`rawKind\` is never \`"chat"\`; \`ownership/brand-built-outside-owner\` makes \`parseOtherKind\` the only way to build one, so a cast such as \`"chat" as OtherKind\` elsewhere is a finding. That rule is in the ownership pack: add \`ownership()\` to \`plugins\` if the config does not load it.
 
-When the union is open on purpose (data from a server you do not control, read only by its common fields), allow it by name, with the reason in a comment:
+When the union is open on purpose (data from a server you do not control, new kinds arrive before this app knows them), state it with \`OpenUnion<…>\` around its members. The rule is then silent on it, and \`unions/non-exhaustive-switch\` asks every \`switch\` on its tag for a \`default\` that handles the kinds the union does not list. \`OpenUnion\` is a type of your own: add it once to \`src/guarantees.ts\` (no quick fix writes it):
 
-\`\`\`ts
-// Message mirrors the server's events; new kinds arrive before this app knows them.
-rules: { "unions/ambiguous-discriminant": ["warning", { ignore: ["Message"] }] }
+\`\`\`ts example-good file=guarantees.ts
+export type OpenUnion<T = unknown> = T & { readonly "__guarantee:open-union"?: true };
 \`\`\`
+
+\`\`\`ts example-good file=server-message.ts
+import type { OpenUnion } from "./guarantees.js";
+
+export type ServerMessage = OpenUnion<
+  { kind: "chat"; text: string } | { kind: string; payload: unknown }
+>;
+
+export function describe(message: ServerMessage): string {
+  switch (message.kind) {
+    case "chat":
+      return "a chat message";
+    default:
+      return "a kind this version does not know";
+  }
+}
+\`\`\`
+
+Allowing the union by name under \`ignore\` still works, but states nothing in the code.
 
 ## Why it matters
 
@@ -241,17 +261,29 @@ function freeTag(taken: readonly string[]): string {
   );
 }
 
+/** What states a union open: a type of the project's own, added once where its guarantees live. */
+const OPEN_UNION_LINE =
+  'export type OpenUnion<T = unknown> = T & { readonly "__guarantee:open-union"?: true };';
+
 /**
- * The two decisions (M22): a closed union whose catch-all member has its own tag, or an open
- * union on purpose, allowed by name.
+ * The two decisions (M22): a closed union whose catch-all member has its own tag, or a union that
+ * is open on purpose, stated `OpenUnion<…>` (the type says it, and every `switch` on its tag then
+ * needs a `default` for the kinds it does not list). `OpenUnion` is a project type: where it comes
+ * from is said, the way `unions/non-exhaustive-switch` says it.
  */
-function hint(alias: string, example: string): string {
+function hint(alias: string, property: string, example: string, importLine: string): string {
   return [
     "one of",
     "- give the catch-all member its own tag, and keep the original value in another field:",
     `    ${example}`,
-    "- or, when the union is open on purpose (data from a server you do not control), allow it:",
-    `    ignore: [${JSON.stringify(alias)}] in the rule's options`,
+    fitted(
+      (cut) =>
+        `- or, if other kinds may come on purpose, state \`${cut(alias)}\` open: wrap its members in \`OpenUnion\`, and every \`switch\` on its \`${cut(property)}\` then needs a \`default\``,
+    ),
+    `    ${importLine}`,
+    `    type ${alias} = OpenUnion<…>`,
+    "    // src/guarantees.ts, added once: no quick fix writes it",
+    `    ${OPEN_UNION_LINE}`,
   ].join("\n");
 }
 
@@ -288,9 +320,12 @@ const narrowedKey = (file: string, alias: string, property: string): string =>
 function candidatesOf(
   node: ts.TypeAliasDeclaration,
   ignore: readonly string[],
-  sourceFile: ts.SourceFile,
+  ctx: FileContext,
 ): Candidate[] {
+  const { sourceFile } = ctx;
   if (matchesName(node.name.text, ignore)) return [];
+  // A union stated open (`OpenUnion<…>`) is open on purpose: the statement is read from its type.
+  if (ctx.types.guaranteesOf(node.type).includes(OPEN_UNION)) return [];
   const union = stripTypeParentheses(node.type);
   if (!ts.isUnionTypeNode(union)) return [];
   const literals = union.types
@@ -328,7 +363,7 @@ function candidatesOf(
         start: weak.name.getStart(sourceFile),
         end: weak.name.end,
         message: headline(property, weak.base, node.name.text),
-        hint: hint(node.name.text, example),
+        hint: hint(node.name.text, property, example, openUnionImport(sourceFile)),
         memberOnly,
         toldApart: told,
       });
@@ -527,7 +562,7 @@ function summarize(ctx: FileContext<{ ignore: readonly string[] }>): Summary {
   };
   const visit = (node: ts.Node): void => {
     if (ts.isTypeAliasDeclaration(node)) {
-      candidates.push(...candidatesOf(node, ctx.options.ignore, ctx.sourceFile));
+      candidates.push(...candidatesOf(node, ctx.options.ignore, ctx));
     } else if (ts.isBinaryExpression(node) && COMPARISONS.has(node.operatorToken.kind)) {
       const regions = guardedBy(node);
       note(node.left, regions);

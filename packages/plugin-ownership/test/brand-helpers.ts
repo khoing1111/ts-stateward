@@ -48,3 +48,16 @@ export function shown(dir: string, findings: readonly Finding[]): Shown[] {
 export function says(file: string, message: string, hint: string): Shown {
   return { file, message, hint };
 }
+
+/**
+ * The fix of a brand built outside its owner: the way to build it, then the `owners` reading, with
+ * the option as it is written (the brand's name, the file from the project's folder).
+ */
+export function ways(first: string, brand: string, file: string): string {
+  return [
+    "one of",
+    `- ${first}`,
+    `- or, if this file checks the value itself, list it under the rule's \`owners\` option for \`${brand}\`:`,
+    `    { owners: { ${JSON.stringify(brand)}: [${JSON.stringify(file)}] } }`,
+  ].join("\n");
+}

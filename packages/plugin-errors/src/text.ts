@@ -43,3 +43,24 @@ export function codeList(names: readonly string[], cut: (text: string) => string
 export function withExample(line: string, example: readonly string[]): string {
   return [line, ...example.map((text) => `    ${text}`)].join("\n");
 }
+
+/** One way to fix a finding: what to do, in lowercase, and the code that does it when it can be shown. */
+export type Way = { readonly text: string; readonly example?: readonly string[] };
+
+/**
+ * A fix hint of several ways (`one of`, a `- ` line each, every one after the first starting with
+ * `or`), or the one way as a first line with its example.
+ */
+export function waysHint(ways: readonly Way[]): string {
+  const [only] = ways;
+  if (ways.length === 1 && only !== undefined) {
+    return only.example === undefined ? only.text : withExample(`${only.text}:`, only.example);
+  }
+  return [
+    "one of",
+    ...ways.flatMap((way, index) => [
+      `- ${index === 0 ? "" : "or "}${way.text}${way.example === undefined ? "" : ":"}`,
+      ...(way.example ?? []).map((line) => `    ${line}`),
+    ]),
+  ].join("\n");
+}

@@ -22,6 +22,8 @@ export type Machine = {
   unreadStarts: { file: string; use: Use }[];
   /** `@initial` names that are not states. */
   badInitial: string[];
+  /** Uses of `useReducer` that start in states the reducer's `@initial` tag does not list. */
+  unlistedStarts: { file: string; use: Use; tags: string[] }[];
   references: readonly { file: string; reference: Reference }[];
   /** Each state the starts reach, with the hop that first reached it (null for a start). */
   reached: Map<string, Hop | null>;
@@ -71,6 +73,7 @@ function build(
   const starts: Start[] = [];
   const unreadStarts: Machine["unreadStarts"] = [];
   const badInitial: string[] = [];
+  const unlistedStarts: Machine["unlistedStarts"] = [];
   const known = new Set(reducer.tags);
   if (reducer.initial !== null) {
     const names = reducer.initial.names.filter((name) => known.has(name));
@@ -81,9 +84,17 @@ function build(
   }
   let emptyStart = false;
   for (const { file: useFile, use } of uses) {
-    if (use.starts === null) unreadStarts.push({ file: useFile, use });
-    else {
+    // `@initial` on the reducer lists where it starts, so a start that cannot be read is covered.
+    if (use.starts === null) {
+      if (reducer.initial === null) unreadStarts.push({ file: useFile, use });
+    } else {
       emptyStart ||= use.starts.empty.length > 0;
+      // `@initial` states where the reducer starts: a `useReducer` start it does not list says otherwise.
+      if (reducer.initial !== null && reducer.initialTagged) {
+        const listed = reducer.initial.names;
+        const tags = use.starts.tags.filter((tag) => !listed.includes(tag));
+        if (tags.length > 0) unlistedStarts.push({ file: useFile, use, tags });
+      }
       if (use.starts.tags.length > 0 || use.starts.empty.length === 0) {
         starts.push({ file: useFile, at: use.at, tags: use.starts.tags, label: "starts" });
       }
@@ -128,6 +139,7 @@ function build(
     startsAny,
     unreadStarts,
     badInitial,
+    unlistedStarts,
     references,
     reached,
     out,

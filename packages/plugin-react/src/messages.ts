@@ -155,12 +155,18 @@ function adviceFor(
   }
   if (dependency.target.kind === "memo-prop" && /^on[A-Z0-9]/.test(dependency.target.prop)) {
     const named = refHook(stableHooks);
+    // `useEffectEvent` is not offered: React forbids passing its result to other components.
     return {
-      hint: fitted((cut) =>
+      hint: [
+        "one of",
+        fitted(
+          (cut) =>
+            `- wrap \`${cut.name(label)}\` in \`useCallback\` inside \`${cut.name(value.owner.name)}\` (${cut.path(`${value.owner.relative}:${String(value.at.line)}`)}), listing what it reads as dependencies (a state setter needs none)`,
+        ),
         named === undefined
-          ? "keep the latest handler in a ref (React's `useEffectEvent`, or your own hook)"
-          : `keep the latest handler in a ref with \`${cut.name(named)}\``,
-      ),
+          ? "- or keep the latest handler in a ref with your own hook, and name that hook in the rule's `stableHooks` option"
+          : fitted((cut) => `- or keep the latest handler in a ref with \`${cut.name(named)}\``),
+      ].join("\n"),
       fixes: [],
     };
   }

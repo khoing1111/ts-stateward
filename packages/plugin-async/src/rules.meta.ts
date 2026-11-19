@@ -13,12 +13,13 @@ export const RULES = {
       tier: "core",
       group: "failures",
       heuristic: true,
+      proves: { traits: ["pending"], holders: ["pending"], flows: { escaped: ["pending"] } },
       options: {
         ignore: {
           kind: "strings",
           default: [],
           description:
-            "State names (globs like *Busy) that are set again somewhere this rule cannot see.",
+            "State names (globs like *Busy) that are set again somewhere this rule cannot see. Not for a state stated `Pending`: it is always checked.",
         },
         severities: {
           kind: "severities",
@@ -68,6 +69,7 @@ export const RULES = {
         },
       },
       needsJsDoc: true,
+      proves: { tags: ["neverRejects"] },
     },
   },
 } as const satisfies Readonly<Record<string, RuleDeclaration>>;

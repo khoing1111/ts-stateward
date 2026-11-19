@@ -24,7 +24,10 @@ warning[react/state-copies-prop]: effect overwrites the draft `draft` with `name
   |
 6 |     setDraft(name);
   |     ^^^^^^^^^^^^^^
-  = fix: drop the effect and render `<NameEditor key={…}>` so the draft starts over when `name` changes
+  = fix: one of
+      - drop the effect and render `<NameEditor key={…}>` so the draft starts over when `name` changes
+      - or if the prop is meant to reset `draft` this way, list it under the rule's `ignore` option:
+            { ignore: ["draft"] }
   = note: example.tsx:4: `draft` starts as `name`
   = docs: stateward explain react/state-copies-prop
 ```
@@ -48,7 +51,7 @@ React then creates the editor anew when the `key` changes, with the new prop as 
 
 ## Why it matters
 
-`useState(name)` plus an effect that sets it from `name` keeps two copies of one value. They disagree for a render after every change of `name` (the effect runs after the screen shows the old copy), and what the user typed into `draft` is silently thrown away whenever the parent passes a new `name`, even the same text in a new render of a list.
+`useState(name)` plus an effect that sets it from `name` keeps two copies of one value. They disagree for a render after every change of `name` (the effect runs after the screen shows the old copy), and what the user typed into `draft` is silently thrown away whenever the parent passes a new `name`.
 
 ## What it does not catch
 
@@ -59,7 +62,7 @@ It looks, in one component or hook, for `useState(prop)` (also `useState(props.n
 - state copied from a context or from another hook's result;
 - a copy meant to differ from the prop: a debounce or throttle hook (the state is set from the prop inside a timer), or a previous value (the effect compares the copy with the prop, or counts the changes in another state).
 
-A draft the user edits (the setter is also called outside the effect, as above) is reported with only the `key` fix, since the state is needed. A copy the component also sets to a fixed value elsewhere (`setShouldBlock(false)` when the user proceeds) follows the prop except after that event: the message suggests a value derived from the prop and a state for that event, `const shouldBlock = isDirty && !<that state>`. The rule stays on with the React Compiler, which does not change what an effect sets.
+A draft the user edits (the setter is also called outside the effect, as above) is reported with only the `key` fix, since the state is needed. A copy the component also sets to a fixed value elsewhere (`setShouldBlock(false)` when the user proceeds) follows the prop except after that event: the message suggests a value derived from the prop and a new state that records the event, reset when the prop changes (it keeps the prop it was set for, so the derived value follows the prop again once that changes), a `key`, or the `ignore` option. The rule stays on with the React Compiler, which does not change what an effect sets.
 
 ## Turn it on or off
 

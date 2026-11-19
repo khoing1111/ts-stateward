@@ -41,7 +41,7 @@ export function title(folder: Folder): string {
 ```
 
 ```text
-error[unions/non-exhaustive-switch]: `switch` on `folder` does not handle "newsletters"
+error[unions/non-exhaustive-switch]: the `default` of the `switch` on `folder` takes "newsletters", which no `case` names
 ```
 
 Fix: give the case its own `case`.

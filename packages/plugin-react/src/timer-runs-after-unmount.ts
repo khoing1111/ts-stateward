@@ -13,7 +13,7 @@ import {
   type Effect,
 } from "./effects.js";
 import { globalCallName, isReactCall, unwrapped } from "./react.js";
-import { fitted } from "./text.js";
+import { fitted, waysHint } from "./text.js";
 
 const EXPLAIN = `# react/timer-runs-after-unmount
 
@@ -47,6 +47,8 @@ export function RailMenu({ onClose }: { onClose: () => void }) {
 \`\`\`
 
 The quick fix writes that effect after the ref's declaration (and imports \`useEffect\` when the file does not); it is tried on a copy of your code before it is offered.
+
+A \`cancelAnimationFrame\` needs a number, and a clear call needs more than \`null\`: when the ref's type can be \`undefined\` (for a frame) or \`null\`, the effect puts an \`if\` around the clear call so that it compiles. A timer that is meant to run after the component is gone is stated with \`// stateward-ignore react/timer-runs-after-unmount: <why>\` on the line above it.
 
 ## Why it matters
 
@@ -87,6 +89,57 @@ const CLEAR_OF: Readonly<Record<Kind, string>> = {
   interval: "clearInterval",
   frame: "cancelAnimationFrame",
 };
+
+/** Whether the ref's value can be `undefined` or `null`, from how `useRef` is written. */
+type Empty = { readonly undef: boolean; readonly nul: boolean };
+
+function emptyOf(call: ts.CallExpression, sourceFile: ts.SourceFile): Empty {
+  const [typeArgument] = call.typeArguments ?? [];
+  if (typeArgument !== undefined) {
+    const text = typeArgument.getText(sourceFile);
+    return { undef: /\bundefined\b/.test(text), nul: /\bnull\b/.test(text) };
+  }
+  const [initial] = call.arguments;
+  if (initial === undefined) return { undef: true, nul: false };
+  const value = unwrapped(initial);
+  return {
+    undef: ts.isIdentifier(value) && value.text === "undefined",
+    nul: value.kind === ts.SyntaxKind.NullKeyword,
+  };
+}
+
+/** The statement that clears the timer: guarded where the clear call does not take the ref's empty value. */
+function clearStatement(kind: Kind, name: string, empty: Empty): string {
+  const current = `${name}.current`;
+  const clear = `${CLEAR_OF[kind]}(${current});`;
+  // `cancelAnimationFrame` takes only a number; `clearTimeout` and `clearInterval` take `undefined`.
+  if (empty.nul) {
+    return `if (${current} !== null${empty.undef ? ` && ${current} !== undefined` : ""}) ${clear}`;
+  }
+  return kind === "frame" && empty.undef ? `if (${current} !== undefined) ${clear}` : clear;
+}
+
+/** The effect that clears each timer on unmount, as lines of code. */
+function effectLines(
+  hook: string,
+  name: string,
+  kinds: readonly Kind[],
+  empty: Empty,
+): readonly string[] {
+  const statements = kinds.map((kind) => clearStatement(kind, name, empty));
+  const [only] = statements;
+  if (only !== undefined && statements.length === 1 && only.startsWith("clear")) {
+    return [`${hook}(() => () => ${only.slice(0, -1)}, []);`];
+  }
+  return [`${hook}(() => () => {`, ...statements.map((one) => `  ${one}`), "}, []);"];
+}
+
+/** The reading for a timer that is meant to run after the component is gone. */
+function onPurposeWay(): { text: string } {
+  return {
+    text: "if it should still run after the component is gone, say so on the line above the timer with `// stateward-ignore react/timer-runs-after-unmount: <why>`",
+  };
+}
 
 /** `ref.current = setTimeout(…)`: where a timer is stored in a ref. */
 type Assignment = { call: ts.CallExpression; kind: Kind; inEffect: boolean };
@@ -287,7 +340,14 @@ function isRef(
 }
 
 /** What the unmount cleanups of a component do with a ref. */
-type Unmount = { cleared: Set<Kind>; handedOver: boolean; unreadable: boolean };
+type Unmount = {
+  cleared: Set<Kind>;
+  /** The function the cleanup hands the ref to, as written; undefined when it hands it to none. */
+  handedTo: string | undefined;
+  unreadable: boolean;
+  /** The effect hook as written (`useEffect`, `React.useEffect`) in the first effect that cannot be read. */
+  hook: string | undefined;
+};
 
 /** The calls a cleanup makes, following helpers declared in the component two levels deep. */
 function callsOf(
@@ -313,15 +373,24 @@ function callsOf(
 }
 
 function unmountOf(
+  sourceFile: ts.SourceFile,
   types: TypeQueries,
   ref: ts.VariableDeclaration,
   effects: readonly Effect[],
   owner: ts.SignatureDeclaration,
 ): Unmount {
-  const result: Unmount = { cleared: new Set(), handedOver: false, unreadable: false };
+  const result: Unmount = {
+    cleared: new Set(),
+    handedTo: undefined,
+    unreadable: false,
+    hook: undefined,
+  };
   for (const effect of effects) {
     const cleanups = cleanupsOf(types, effect);
-    if (cleanups.unreadable) result.unreadable = true;
+    if (cleanups.unreadable) {
+      result.unreadable = true;
+      result.hook ??= textOf(effect.call.expression, sourceFile);
+    }
     const seen = new Set<ts.Node>();
     const calls = [
       ...cleanups.functions.flatMap((fn) => callsOf(types, fn, owner, seen, 0)),
@@ -343,7 +412,8 @@ function unmountOf(
           (argument) => isRef(types, argument, ref) || readsCurrent(types, argument, ref),
         )
       ) {
-        result.handedOver = true;
+        result.handedTo ??= textOf(callee, sourceFile);
+        result.hook ??= textOf(effect.call.expression, sourceFile);
       }
     }
   }
@@ -390,7 +460,7 @@ function clearFix(
   ref: ts.VariableDeclaration,
   name: string,
   missing: readonly Kind[],
-): { fix: Fix; code: string } | undefined {
+): { fix: Fix; lines: readonly string[] } | undefined {
   const { sourceFile, types } = ctx;
   const statement = ref.parent.parent;
   if (!ts.isVariableStatement(statement) || !ts.isIdentifier(ref.name)) return undefined;
@@ -442,20 +512,12 @@ function clearFix(
   const indent = " ".repeat(
     sourceFile.getLineAndCharacterOfPosition(statement.getStart(sourceFile)).character,
   );
-  const clears = missing.map((kind) => `${CLEAR_OF[kind]}(${name}.current);`);
-  const [only] = clears;
-  const single = only !== undefined && clears.length === 1;
-  const code = single
-    ? `${hook}(() => () => ${only.slice(0, -1)}, [])`
-    : `${hook}(() => () => {\n${indent}  ${clears.join(`\n${indent}  `)}\n${indent}}, [])`;
+  const lines = effectLines(hook, name, missing, emptyOf(refCall, sourceFile));
   edits.push({
     location: { file: ctx.file, start: statement.end, end: statement.end },
-    newText: `\n${indent}${code};`,
+    newText: `\n${indent}${lines.join(`\n${indent}`)}`,
   });
-  return {
-    fix: { title: `Clear ${name} when the component unmounts`, edits },
-    code: single ? code : "",
-  };
+  return { fix: { title: `Clear ${name} when the component unmounts`, edits }, lines };
 }
 
 function checkRef(ctx: FileContext, ref: ts.VariableDeclaration, effects: readonly Effect[]): void {
@@ -466,7 +528,7 @@ function checkRef(ctx: FileContext, ref: ts.VariableDeclaration, effects: readon
   const mine = effects.filter((effect) => effect.owner === owner);
   const assigned = assignmentsOf(types, ref, owner, mine);
   if (assigned.length === 0) return;
-  const unmount = unmountOf(types, ref, mine, owner);
+  const unmount = unmountOf(ctx.sourceFile, types, ref, mine, owner);
   const kinds = [...new Set(assigned.map((each) => each.kind))];
   const missing = kinds.filter((kind) => !unmount.cleared.has(kind));
   if (missing.length === 0) return;
@@ -487,13 +549,29 @@ function checkRef(ctx: FileContext, ref: ts.VariableDeclaration, effects: readon
   const first = lasting.find((each) => each.inEffect && each.kind !== "frame") ?? lasting.at(0);
   if (first === undefined) return;
   const name = ref.name.text;
-  if (unmount.handedOver || unmount.unreadable) {
+  const refCall = ref.initializer === undefined ? undefined : unwrapped(ref.initializer);
+  const empty =
+    refCall !== undefined && ts.isCallExpression(refCall)
+      ? emptyOf(refCall, ctx.sourceFile)
+      : { undef: false, nul: false };
+  if (unmount.handedTo !== undefined || unmount.unreadable) {
+    const handedTo = unmount.handedTo;
     ctx.unknown({
       message: fitted(
         (cut) =>
-          `not checked: whether \`${cut.name(name)}\` is cleared on unmount: its cleanup is not in the component`,
+          `not checked: whether \`${cut.name(name)}\` is cleared on unmount: ${
+            unmount.unreadable || handedTo === undefined
+              ? "its cleanup is not written in the effect"
+              : `its cleanup hands it to \`${cut.name(handedTo)}\``
+          }`,
       ),
-      hint: "clear it in an effect cleanup written in the component (`clearTimeout(ref.current)`), so it can be checked",
+      hint: waysHint([
+        {
+          text: "clear it in a cleanup written in an effect itself, so it can be checked",
+          example: effectLines(unmount.hook ?? "useEffect", name, missing, empty),
+        },
+        onPurposeWay(),
+      ]),
       node: first.call,
     });
     return;
@@ -517,13 +595,18 @@ function checkRef(ctx: FileContext, ref: ts.VariableDeclaration, effects: readon
             : `\`${cut.name(component)}\``
         } unmounts`,
     ),
-    hint: fitted((cut) =>
+    hint: waysHint([
       fix === undefined
-        ? `clear it in an effect cleanup that runs on unmount: \`useEffect(() => () => ${CLEAR_OF[first.kind]}(${cut.name(name)}.current), [])\``
-        : fix.code === ""
-          ? "add an effect that clears each timer on unmount, after the ref's declaration (quick fix)"
-          : `add an effect that clears it on unmount: \`${fix.code}\` (quick fix)`,
-    ),
+        ? {
+            text: "clear it in an effect cleanup that runs on unmount",
+            example: effectLines("useEffect", name, missing, empty),
+          }
+        : {
+            text: "add an effect that clears it on unmount, after the ref's declaration (quick fix)",
+            example: fix.lines,
+          },
+      onPurposeWay(),
+    ]),
     node: first.call,
     about: first.call,
     ...(fix === undefined ? {} : { fixes: [fix.fix] }),

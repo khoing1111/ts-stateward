@@ -5,7 +5,7 @@ import { relation } from "../inference/solve.js";
 import type { Model } from "./boundaries.js";
 import type { Chain, Fallback, FallbackKind } from "./tree.js";
 
-import { codeList, fitted, withExample } from "../text.js";
+import { codeList, fitted, waysHint } from "../text.js";
 
 /**
  * Error boundary fallbacks, checked as catches (`errors/catch-misses-error`; they were
@@ -13,8 +13,11 @@ import { codeList, fitted, withExample } from "../text.js";
  * `instanceof` handles every class its boundary can catch, or has a branch for the rest.
  */
 
-/** What the fallback does with any other error, in the example: what it returns or does. */
-function restLine(kind: FallbackKind, variable: string): string {
+/**
+ * What the fallback does with any other error, as lines of code; undefined where the line depends
+ * on the boundary's own state, which is said in words.
+ */
+function restLine(kind: FallbackKind, variable: string): string | undefined {
   switch (kind) {
     case "FallbackComponent":
     case "fallbackRender":
@@ -22,7 +25,7 @@ function restLine(kind: FallbackKind, variable: string): string {
     case "onError":
       return `console.error(${variable});`;
     case "getDerivedStateFromError":
-      return `return { error: ${variable} };`;
+      return undefined;
     default: {
       const unreachable: never = kind;
       return unreachable;
@@ -30,17 +33,38 @@ function restLine(kind: FallbackKind, variable: string): string {
   }
 }
 
-function hint(fallback: Fallback, chain: Chain, handler: string, count: number): string {
-  const line = `add a branch for ${count === 1 ? "it" : "each"}, or end with one for any other error:`;
+/** The ways to handle the classes a fallback leaves out: a branch each, a branch for the rest, or the option. */
+function hint(fallback: Fallback, chain: Chain, handlers: readonly string[]): string {
+  const [handler = ""] = handlers;
+  const count = handlers.length;
   const rest = restLine(fallback.kind, chain.variable);
-  return chain.dispatch === "switch"
-    ? withExample(line, [
-        `case ${chain.variable} instanceof ${handler}:`,
-        "  …",
-        "default:",
-        `  ${rest}`,
-      ])
-    : withExample(line, [`if (${chain.variable} instanceof ${handler}) {`, "  …", "}", rest]);
+  const branch =
+    chain.dispatch === "switch"
+      ? [`case ${chain.variable} instanceof ${handler}:`, "  …"]
+      : [`if (${chain.variable} instanceof ${handler}) {`, "  …", "}"];
+  const other =
+    chain.dispatch === "switch"
+      ? ["default:", ...(rest === undefined ? [] : [`  ${rest}`])]
+      : [rest];
+  const ignored = `{ ignoreClasses: [${handlers.map((one) => JSON.stringify(one)).join(", ")}] }`;
+  return waysHint([
+    { text: `add a branch for ${count === 1 ? "it" : "each"}`, example: branch },
+    rest === undefined
+      ? {
+          text: "end with one for any other error, returning the state the boundary shows for a failure",
+        }
+      : {
+          text: "end with one for any other error",
+          example: other.filter((line) => line !== undefined),
+        },
+    {
+      text:
+        count === 1
+          ? `if \`${handler}\` needs no branch, list it under the rule's \`ignoreClasses\` option`
+          : "if they need no branch, list them under the rule's `ignoreClasses` option",
+      example: [ignored],
+    },
+  ]);
 }
 
 type Problem = {
@@ -96,7 +120,11 @@ export function checkFallbacks(
               cut,
             )}, which its boundary can catch`,
         ),
-        hint: hint(fallback, chain, catchName(first.id, classes), missing.length),
+        hint: hint(
+          fallback,
+          chain,
+          missing.map((one) => catchName(one.id, classes)),
+        ),
         location: { file, start: fallback.at[0], end: fallback.at[1] },
         related,
       });

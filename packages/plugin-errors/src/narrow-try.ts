@@ -5,6 +5,8 @@ import { summarizeOnce } from "./inference/project.js";
 import { REASON } from "./inference/summarize.js";
 import { analyse, collected, evaluate } from "./inference/solve.js";
 import type { Analysis } from "./inference/solve.js";
+import { catchName } from "./inference/format.js";
+import { isBuiltin } from "./inference/builtins.js";
 import { each, fieldsOf, isString, readStrings, spanOf } from "./inference/summary.js";
 import type { Effect, Span, ThrowsSummary } from "./inference/summary.js";
 import { throwsOf } from "./react/boundaries.js";
@@ -15,7 +17,7 @@ import {
   stripParentheses,
   testsCaught,
 } from "./syntax.js";
-import { fitted, oneLine, shorten } from "./text.js";
+import { codeList, fitted, oneLine, shorten } from "./text.js";
 
 /** The group the rule belongs to in the docs and in `stateward status`. */
 export const GROUP = "catch";
@@ -67,6 +69,8 @@ export async function submit(plan: string, close: () => void): Promise<void> {
 \`\`\`
 
 The quick fix moves the lines after the \`try\`. It is offered only when the move keeps what runs the same for every outcome but a bug: the \`catch\` ends with \`return\` or \`throw\`, there is no \`finally\`, and the moved lines use nothing declared in the \`try\`. Where they use the result, declare it before the \`try\` (\`let plan: Plan;\`), assign it inside, and return from the \`catch\`.
+
+The other reading keeps the line where it is and makes the \`catch\` pick its error: \`if (e instanceof RequestError) { … } else { throw e; }\`, with the classes the call throws (a \`TypeError\` is left out, since a bug throws it too). The rule then counts the \`catch\` as one that lets bugs through (see below), and the message shows this form with your names.
 
 ## Why it matters
 
@@ -143,6 +147,8 @@ type TryShape = {
   readonly at: Span;
   /** The `catch` tests the error or rethrows it: bugs already get through. */
   readonly passesBugsOn: boolean;
+  /** The name the `catch` gives the error (`catch (e)`), or null when it binds none. */
+  readonly variable: string | null;
   /** The `catch` block ends with `return` or `throw`. */
   readonly catchExits: boolean;
   readonly hasFinally: boolean;
@@ -449,6 +455,10 @@ function shapeOf(node: ts.TryStatement, sourceFile: ts.SourceFile): TryShape | u
   return {
     at: [node.getStart(sourceFile), node.getEnd()],
     passesBugsOn: passesBugsOn(clause),
+    variable:
+      clause.variableDeclaration !== undefined && ts.isIdentifier(clause.variableDeclaration.name)
+        ? clause.variableDeclaration.name.text
+        : null,
     catchExits: endsWithExit(clause.block),
     hasFinally: node.finallyBlock !== undefined,
     indent: indentationAt(node.getStart(sourceFile), text),
@@ -522,7 +532,18 @@ function readShape(value: Json): TryShape | undefined {
   ) {
     return undefined;
   }
-  return { at, passesBugsOn: passes, catchExits, hasFinally, indent, inner, lines, around };
+  const variable = isString(f.variable) ? f.variable : null;
+  return {
+    at,
+    passesBugsOn: passes,
+    variable,
+    catchExits,
+    hasFinally,
+    indent,
+    inner,
+    lines,
+    around,
+  };
 }
 
 function readTries(value: Json): TryShape[] | undefined {
@@ -549,6 +570,10 @@ type Spot = {
   readonly unknown: boolean;
   /** A call of a function of the project, or of a callback the function was given (`onClose()`). */
   readonly project: "function" | "callback" | null;
+  /** The names of the error classes it adds, as an `instanceof` test writes them. */
+  readonly classes: readonly string[];
+  /** Those of them that are the project's or a package's, so a file must import them. */
+  readonly imports: readonly string[];
 };
 
 function labelOf(effect: Effect): string {
@@ -589,6 +614,8 @@ function spotsOf(analysis: Analysis, file: string, effects: readonly Effect[], o
           packageOnly: false,
           unknown: false,
           project: null,
+          classes: [],
+          imports: [],
         });
         continue;
       }
@@ -608,6 +635,11 @@ function spotsOf(analysis: Analysis, file: string, effects: readonly Effect[], o
             : effect.k === "unknown" && effect.reason === REASON.callback
               ? "callback"
               : null,
+        classes: [...into.classes.keys()].map((id) => catchName(id, analysis.classes)).sort(),
+        imports: [...into.classes.keys()]
+          .filter((id) => !isBuiltin(id))
+          .map((id) => catchName(id, analysis.classes))
+          .sort(),
       });
       if (effect.k === "try") {
         visit(effect.body, effect.at);
@@ -661,6 +693,8 @@ function expectedIn(line: Line, spots: readonly Spot[]): Spot | undefined {
         packageOnly: false,
         unknown: true,
         project: null,
+        classes: [],
+        imports: [],
       }
     : undefined;
 }
@@ -721,15 +755,58 @@ function headline(line: string, expected: string): string {
   );
 }
 
-function hint(expected: string, fixable: boolean, count: number): string {
+function hint(expected: string, fixable: boolean, count: number, test: TestWay): string {
   const [lines, them] = count === 1 ? ["the line", "it"] : ["the lines", "them"];
   const why = `so a bug in ${them} is not handled like a failed \`${expected}\``;
-  if (fixable) return `move ${lines} after the \`try\`, ${why} (quick fix)`;
-  return `move ${lines} after the \`try\` and return from the \`catch\` (declare what ${count === 1 ? "it uses" : "they use"} before the \`try\`), ${why}`;
+  const binding = test.bound ? "" : `, binding it as \`catch (${test.variable})\``;
+  const imports =
+    test.imports.length === 0
+      ? ""
+      : ` (import ${codeList(test.imports, oneLine)} if the file does not)`;
+  const leftOut = test.leftOut ? ", leaving out `TypeError`, which a bug throws too" : "";
+  return [
+    "one of",
+    fixable
+      ? `- move ${lines} after the \`try\`, ${why} (quick fix)`
+      : `- move ${lines} after the \`try\` and return from the \`catch\` (declare what ${count === 1 ? "it uses" : "they use"} before the \`try\`), ${why}`,
+    test.classes.length === 0
+      ? `- or test in the \`catch\` that the error is what \`${expected}\` fails with, and rethrow the rest with \`throw ${test.variable};\`${binding}, ${why}`
+      : `- or test the error in the \`catch\` and rethrow the rest${imports}${binding}${leftOut}:`,
+    ...(test.classes.length === 0
+      ? []
+      : [
+          `    if (${test.classes.map((name) => `${test.variable} instanceof ${name}`).join(" || ")}) { … } else { throw ${test.variable}; }`,
+        ]),
+  ].join("\n");
 }
+
+/** How the `catch` can test the error: the variable it uses, and the classes the `try` is for. */
+type TestWay = {
+  readonly variable: string;
+  /** The `catch` already binds the error under that name. */
+  readonly bound: boolean;
+  readonly classes: readonly string[];
+  /** The classes of the test that need an import. */
+  readonly imports: readonly string[];
+  /** `TypeError` is not in the test: a bug in the moved lines throws it too. */
+  readonly leftOut: boolean;
+};
 
 /** A promise's own `resolve` and `reject` (excalidraw): they never throw. */
 const SETTLES = new Set(["resolve(…)", "reject(…)"]);
+
+/** The `instanceof` test the `catch` can make for the failure the `try` is for. */
+function testWay(shape: TryShape, expected: Spot): TestWay {
+  const kept = expected.classes.filter((name) => name !== "TypeError");
+  const many = kept.length > 3;
+  return {
+    variable: shape.variable ?? "error",
+    bound: shape.variable !== null,
+    classes: many ? [] : kept,
+    imports: many ? [] : expected.imports.filter((name) => kept.includes(name)),
+    leftOut: !many && kept.length < expected.classes.length,
+  };
+}
 
 function checkTry(
   shape: TryShape,
@@ -770,7 +847,7 @@ function checkTry(
   const fix = moveFix(shape, kept, moved, file);
   report({
     message: headline(first.text, target),
-    hint: hint(target, fix !== undefined, moved.length),
+    hint: hint(target, fix !== undefined, moved.length, testWay(shape, expected)),
     at: first.at,
     fixes: fix === undefined ? [] : [fix],
   });

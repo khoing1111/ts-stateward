@@ -17,8 +17,9 @@ import {
   stripParentheses,
   pathOf,
 } from "./syntax.js";
-import { fitted, oneLine, shorten, withExample } from "./text.js";
-import { cannotRun, NEVER_REJECTS, rejectionsOf, type CanReject } from "./rejects.js";
+import { fitted, withExample } from "./text.js";
+import { checkNeverRejects } from "./never-rejects.js";
+import { NEVER_REJECTS, rejectionsOf, type CanReject } from "./rejects.js";
 
 /** The group the rule belongs to in the docs and in `stateward status`. */
 export const GROUP = "failures";
@@ -93,7 +94,7 @@ It reads \`async\` functions written in place as a JSX prop named \`on\` plus a 
 Tell stateward which calls never reject, and it stops asking about them:
 
 - a package function: \`facts: { "my-client": { send: { rejects: [] } } }\` in the config;
-- your own function that catches and reports its failures: a JSDoc \`@neverRejects\` on the function, on a function type alias, or on the prop in its props type (\`/** Shows its own errors. @neverRejects */ handleSearch: (query: string) => Promise<void>;\`). stateward checks the tag where it can be sure: a tagged function with a \`throw\`, or a call known to reject (\`fetch\`, a package that rejects, a project function that does), outside a \`try\` with a \`catch\` is reported at that call (kind \`contradicted\`). A call it cannot see into is taken at the tag's word.
+- your own function that catches and reports its failures: a JSDoc \`@neverRejects\` on the function, on a function type alias, or on the prop in its props type (\`/** Shows its own errors. @neverRejects */ handleSearch: (query: string) => Promise<void>;\`). stateward proves the tag (\`stateward guarantees\` lists it). It reads the tagged function's body, and every function given to a tagged prop or name (\`onSearch={post}\`, \`{ onSearch: post }\`, \`api.save = post\`): a \`throw\`, a \`return Promise.reject(…)\`, a \`JSON.parse(…)\` or a project function that throws, a call known to reject (\`fetch\`, a package that rejects, a project function that does, through \`.call\`, \`.apply\` or a \`const\` alias too), or a \`new Promise\` whose executor rejects or throws, outside a \`try\` with a \`catch\`, is reported at that place (kind \`contradicted\`); a \`catch\` that rethrows is reported with "the \`catch\` rethrows: handle the error there instead". What it cannot see into (a package with no facts, a dynamic \`import()\`, a \`for await\`, a promise held in a variable, an executor passed by name) is "not checked" at its place, never taken at the tag's word. A call, an alias, an argument or an import of a tagged function only uses what its body proves. A value of a tagged function type, a tagged function with no body, and a function given through a spread of props are not checked.
 
 ## Turn it on or off
 
@@ -364,79 +365,6 @@ function neverRejects(expression: ts.Expression, ctx: FileContext): boolean {
   );
 }
 
-/** A function of this file whose JSDoc says `@neverRejects`, with the tag and the name shown. */
-type Tagged = { body: ts.ConciseBody; tag: ts.JSDocTag; name: string };
-
-function taggedFunctions(sourceFile: ts.SourceFile): Tagged[] {
-  const found: Tagged[] = [];
-  const tagOf = (node: ts.Node): ts.JSDocTag | undefined =>
-    ts.getJSDocTags(node).find((tag) => tag.tagName.text === NEVER_REJECTS);
-  const visit = (node: ts.Node): void => {
-    if (
-      (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) &&
-      node.body !== undefined &&
-      node.name !== undefined
-    ) {
-      const tag = tagOf(node);
-      if (tag !== undefined) {
-        found.push({ body: node.body, tag, name: node.name.getText(sourceFile) });
-      }
-    } else if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.initializer !== undefined
-    ) {
-      const value = stripParentheses(node.initializer);
-      if (ts.isArrowFunction(value) || ts.isFunctionExpression(value)) {
-        const tag = tagOf(node) ?? tagOf(value);
-        if (tag !== undefined) found.push({ body: value.body, tag, name: node.name.text });
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
-  return found;
-}
-
-/**
- * The first place in `fn` that certainly rejects with nothing inside the function to catch it: a
- * `throw`, or an awaited or returned call stateward knows rejects (`fetch`, a package or a project
- * function that does). What it cannot see into does not count.
- */
-function firstCertainRejection(
-  body: ts.ConciseBody,
-  certainlyRejects: CanReject,
-  ctx: FileContext,
-): ts.Node | undefined {
-  if (!ts.isBlock(body)) return certainlyRejects(body) ? body : undefined;
-  let found: ts.Node | undefined;
-  scanRunning(body, (node, guarded) => {
-    if (found !== undefined || guarded) return;
-    if (ts.isThrowStatement(node)) {
-      if (!cannotRun(node, ctx)) found = node;
-    } else if (ts.isAwaitExpression(node) && certainlyRejects(node.expression))
-      found = node.expression;
-    else if (
-      ts.isReturnStatement(node) &&
-      node.expression !== undefined &&
-      certainlyRejects(node.expression)
-    ) {
-      found = node.expression;
-    }
-  });
-  return found;
-}
-
-/** What the finding names: the call that rejects, or the `throw`. */
-function contradictionText(node: ts.Node, ctx: FileContext): string {
-  if (ts.isThrowStatement(node)) return "throw";
-  const inner = ts.isExpression(node) ? stripParentheses(node) : node;
-  if (ts.isCallExpression(inner)) {
-    return `${shorten(oneLine(inner.expression.getText(ctx.sourceFile)), CODE_MAX)}(…)`;
-  }
-  return shorten(oneLine(inner.getText(ctx.sourceFile)), CODE_MAX);
-}
-
 /** `save().catch(showError)`: a call that handles its own failure. */
 function catchesOwnFailure(expression: ts.Expression): boolean {
   const call = stripParentheses(expression);
@@ -495,57 +423,99 @@ function headline(handler: Handler): string {
   );
 }
 
-/** The developer's own code in an example is cut to this many characters. */
-const CODE_MAX = 50;
+/** The longest statement written out in an example. */
+const STATEMENT_MAX = 80;
 
-function code(node: ts.Node, ctx: FileContext): string {
-  return shorten(oneLine(node.getText(ctx.sourceFile)), CODE_MAX);
-}
-
-/** The example's first and last line: the handler written where it was, with its own names. */
-function frame(handler: Handler, ctx: FileContext): { first: string; last: string } {
-  switch (handler.role) {
-    case "handler":
-      return { first: `${oneLine(handler.name)}={async () => {`, last: "}}" };
-    case "listener":
-    case "callback": {
-      const [before, after] = aroundFunction(handler.call, handler.fn, ctx);
-      return {
-        first: `${code(handler.call.expression, ctx)}(${before}async () => {`,
-        last: `}${after});`,
-      };
-    }
-    default: {
-      const unreachable: never = handler;
-      return unreachable;
-    }
-  }
-}
-
-/** The call's other arguments, before and after the function: `"click", ` and `, 100`. */
-function aroundFunction(
-  call: ts.CallExpression,
-  fn: Handler["fn"],
+/**
+ * The handler's own statement that fails, written as it is, when wrapping just it in a `try`
+ * keeps the code working: a call, a `return` or a `for await` on one line. A statement that
+ * declares something (`const items = await load()`) is not: the code after it uses the name.
+ */
+function failingStatement(
+  failure: Failure,
+  handler: Handler,
   ctx: FileContext,
-): [string, string] {
-  const index = call.arguments.findIndex((argument) => stripParentheses(argument) === fn);
-  const texts = call.arguments.map((argument) => code(argument, ctx));
-  const before = texts.slice(0, index).map((text) => `${text}, `);
-  const after = texts.slice(index + 1).map((text) => `, ${text}`);
-  return [before.join(""), after.join("")];
+): string | undefined {
+  const statement = ts.findAncestor(failure.node, ts.isStatement);
+  if (!ts.isBlock(handler.fn.body) || statement === undefined || statement === handler.fn.body) {
+    return undefined;
+  }
+  if (statement.getStart() < handler.fn.body.getStart()) return undefined;
+  if (
+    !ts.isExpressionStatement(statement) &&
+    !ts.isReturnStatement(statement) &&
+    !ts.isForOfStatement(statement)
+  ) {
+    return undefined;
+  }
+  const text = statement.getText(ctx.sourceFile);
+  if (text.includes("\n") || text.length > STATEMENT_MAX) return undefined;
+  // A `return` inside a `try` is awaited there, so its failure reaches the `catch`.
+  return ts.isReturnStatement(statement) && statement.expression !== undefined
+    ? `return await ${statement.expression.getText(ctx.sourceFile)};`
+    : text;
+}
+
+/**
+ * Where the call that fails is declared, when the project can say it never rejects: a function of
+ * the project gets the `@neverRejects` tag, a package's gets a `facts` entry.
+ */
+function declaredAs(
+  failure: Failure,
+  ctx: FileContext,
+): { kind: "project"; name: string } | { kind: "package"; name: string; path: string } | undefined {
+  const call = stripParentheses(failure.code);
+  if (failure.kind !== "await" || !ts.isCallExpression(call)) return undefined;
+  const callee = stripParentheses(call.expression);
+  const name = ts.isPropertyAccessExpression(callee) ? callee.name : callee;
+  if (!ts.isIdentifier(name)) return undefined;
+  const symbol = ctx.types.symbolAt(name);
+  const declared = symbol && ctx.types.declarationOf(symbol);
+  if (declared === undefined) return undefined;
+  if (ctx.types.isOwnFile(declared.file)) return { kind: "project", name: name.text };
+  // The language's own declarations (`fetch`, `Promise.all`) belong to no package to give facts for.
+  const packageName = /(?:^|[\\/])lib\.[^\\/]*\.d\.ts$/.test(declared.file)
+    ? undefined
+    : ctx.types.packageOf(declared.file);
+  return packageName === undefined
+    ? undefined
+    : { kind: "package", name: packageName, path: pathOf(declared.node).join(".") };
 }
 
 function hint(handler: Handler, failure: Failure, ctx: FileContext): string {
-  const { first, last } = frame(handler, ctx);
-  const failing =
-    failure.kind === "await"
-      ? `await ${code(failure.code, ctx)};`
-      : `for await (const item of ${code(failure.code, ctx)}) { … }`;
-  return withExample(`catch inside the ${handler.role}, since nothing awaits it:`, [
-    first,
-    `  try { ${failing} } catch (e) { showError(e); }`,
-    last,
-  ]);
+  const statement = failingStatement(failure, handler, ctx);
+  const ways: { text: string; example: string[] }[] = [
+    statement === undefined
+      ? {
+          text: `catch inside the ${handler.role}, since nothing awaits it: wrap the statement that fails, and those that use its result, in a \`try\` with a \`catch\``,
+          example: [],
+        }
+      : {
+          text: `catch inside the ${handler.role}, since nothing awaits it: wrap the call that fails, and keep the other statements`,
+          example: [`try { ${statement} } catch (error) { … }`],
+        },
+  ];
+  const declared = declaredAs(failure, ctx);
+  if (declared?.kind === "project") {
+    ways.push({
+      text: `or, if \`${declared.name}\` shows or records its own failures, tag it with \`@${NEVER_REJECTS}\` in its JSDoc: stateward then proves the tag and trusts it at its callers`,
+      example: [],
+    });
+  } else if (declared?.kind === "package") {
+    ways.push({
+      text: `or, if \`${declared.path}\` of \`${declared.name}\` never rejects, state it in the config: \`facts: { "${declared.name}": { "${declared.path}": { rejects: [] } } }\``,
+      example: [],
+    });
+  }
+  if (handler.role === "handler") {
+    ways.push({
+      text: `or, if the component given \`${handler.name}\` awaits it itself, list the prop under the rule's \`ignoreProps\` option`,
+      example: [],
+    });
+  }
+  const [only, ...more] = ways;
+  if (only !== undefined && more.length === 0) return withExample(only.text, only.example);
+  return ["one of", ...ways.map((way) => withExample(`- ${way.text}`, way.example))].join("\n");
 }
 
 export const handlerRejectionLost = defineRule({
@@ -561,31 +531,14 @@ export const handlerRejectionLost = defineRule({
     explain: EXPLAIN,
     // `@neverRejects` is read from the project's JSDoc.
     needsJsDoc: true,
+    proves: { tags: [NEVER_REJECTS] },
   },
   check(ctx) {
     // The project's functions are followed into; what cannot be seen into can reject.
     const mayReject = rejectionsOf(ctx, { unknownRejects: true });
     // A function tagged `@neverRejects` that certainly can: only what is known to reject counts.
     const certainlyRejects = rejectionsOf(ctx);
-    for (const tagged of taggedFunctions(ctx.sourceFile)) {
-      const contradiction = firstCertainRejection(tagged.body, certainlyRejects, ctx);
-      if (contradiction === undefined) continue;
-      ctx.report({
-        node: contradiction,
-        message: fitted((cut) =>
-          ts.isThrowStatement(contradiction)
-            ? `\`${cut(tagged.name)}\` is tagged \`@${NEVER_REJECTS}\`, but it throws`
-            : `\`${cut(tagged.name)}\` is tagged \`@${NEVER_REJECTS}\`, but \`${cut(contradictionText(contradiction, ctx))}\` can reject`,
-        ),
-        hint: [
-          "one of",
-          "- catch the failure inside the function: `try { … } catch (error) { … }`",
-          `- or remove \`@${NEVER_REJECTS}\`, so its callers handle the failure`,
-        ].join("\n"),
-        findingKind: "contradicted",
-        related: [{ node: tagged.tag, message: `\`@${NEVER_REJECTS}\` is stated here` }],
-      });
-    }
+    checkNeverRejects(ctx, mayReject, certainlyRejects);
     const visit = (node: ts.Node): void => {
       const handler = handlerOf(node, ctx);
       if (handler !== undefined) {

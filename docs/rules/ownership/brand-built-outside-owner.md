@@ -32,7 +32,10 @@ error[ownership/brand-built-outside-owner]: `Positive` is built without its chec
   |
 4 |   return input.qty as Positive;
   |          ^^^^^^^^^^^^^^^^^^^^^
-  = fix: build it with `positive()` from `./values.ts`
+  = fix: one of
+      - build it with `positive()` from `./values.js`, and handle the `undefined` it returns
+      - or, if this file checks the value itself, list it under the rule's `owners` option for `Positive`:
+            { owners: { "Positive": ["cart.ts"] } }
   = docs: stateward explain ownership/brand-built-outside-owner
 ```
 
@@ -61,6 +64,8 @@ It reports a cast to a branded type outside the file that declares it (`x as Pos
 - A brand declared in a package, an interface, or written inline in the cast (`x as string & { __brand: "Id" }`): there is no owner file to name.
 - A brand whose file exports no check (`type SocketId = string & { _brand: "SocketId" }`, cast wherever an id arrives): it is a label, with no check to skip. A function made from nothing (`newSessionId(): SessionId`) or one that only takes the brand is not a check.
 - Arithmetic on brands: `a + b` is a plain `number`, not a brand.
+
+For a brand stated `Opaque`, every place a value of it is produced outside its module is listed and read: a value given to a place typed with it (an initializer, a default value, a returned value, also from an `async` function returning `Promise<OrderId>`, an argument, `=`, `??=`, `||=`, `&&=`, a property or element of a literal), a cast, a type predicate. A value built by the brand's check is fine; one built from anything else is an error. A value of a container given where a container of the brand is expected (`string[]` returned as `OrderId[]`, `Map<string, string>` as `Map<string, OrderId>`) is "not checked", as which element the check built cannot be followed: the guarantee reads "not checked", never "proven". Every other way a value of the brand is made, found by its type, is "not checked" at its place too: a generic call whose type arguments give the brand (`getJson<Order>(url)`), an overload's implementation, a cast to a type parameter that extends it, `.call`, `.apply`, `.bind`, `Reflect.apply`, a spread argument or JSX spread, a `for…of` target, `Object.defineProperty`, `Reflect.set`, `Object.assign`, a `Proxy`, a function given where one returning the brand is expected.
 
 ## Getting the best from it
 
